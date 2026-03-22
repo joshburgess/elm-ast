@@ -45,9 +45,11 @@ fn keywords() {
     assert_eq!(lex("let"), vec![Token::Let]);
     assert_eq!(lex("in"), vec![Token::In]);
     assert_eq!(lex("infix"), vec![Token::Infix]);
-    assert_eq!(lex("left"), vec![Token::Left]);
-    assert_eq!(lex("right"), vec![Token::Right]);
-    assert_eq!(lex("non"), vec![Token::Non]);
+    // `left`, `right`, `non` are NOT keywords — they are contextual
+    // identifiers only special inside `infix` declarations.
+    assert_eq!(lex("left"), vec![Token::LowerName("left".into())]);
+    assert_eq!(lex("right"), vec![Token::LowerName("right".into())]);
+    assert_eq!(lex("non"), vec![Token::LowerName("non".into())]);
 }
 
 #[test]
@@ -722,7 +724,7 @@ fn infix_declaration() {
         tokens,
         vec![
             Token::Infix,
-            Token::Left,
+            Token::LowerName("left".into()),
             Token::Literal(Literal::Int(6)),
             Token::LeftParen,
             Token::Operator("+".into()),

@@ -271,15 +271,15 @@ fn parse_infix_declaration(p: &mut Parser) -> ParseResult<InfixDef> {
     p.skip_whitespace();
     let dir_start = p.current_pos();
     let direction = match p.peek() {
-        Token::Left => {
+        Token::LowerName(name) if name == "left" => {
             p.advance();
             Spanned::new(p.span_from(dir_start), InfixDirection::Left)
         }
-        Token::Right => {
+        Token::LowerName(name) if name == "right" => {
             p.advance();
             Spanned::new(p.span_from(dir_start), InfixDirection::Right)
         }
-        Token::Non => {
+        Token::LowerName(name) if name == "non" => {
             p.advance();
             Spanned::new(p.span_from(dir_start), InfixDirection::Non)
         }
@@ -303,6 +303,10 @@ fn parse_infix_declaration(p: &mut Parser) -> ParseResult<InfixDef> {
         Token::Operator(op) => {
             p.advance();
             Spanned::new(p.span_from(op_start), op)
+        }
+        Token::Minus => {
+            p.advance();
+            Spanned::new(p.span_from(op_start), "-".into())
         }
         _ => return Err(p.error("expected operator in infix declaration")),
     };

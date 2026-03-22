@@ -38,12 +38,6 @@ pub enum Token {
     In,
     /// `infix`
     Infix,
-    /// `left`
-    Left,
-    /// `right`
-    Right,
-    /// `non`
-    Non,
 
     // ── Delimiters ───────────────────────────────────────────────────
     /// `(`
@@ -148,9 +142,9 @@ impl Token {
             "let" => Some(Token::Let),
             "in" => Some(Token::In),
             "infix" => Some(Token::Infix),
-            "left" => Some(Token::Left),
-            "right" => Some(Token::Right),
-            "non" => Some(Token::Non),
+            // Note: `left`, `right`, `non` are NOT keywords — they are only
+            // contextual in `infix` declarations and are valid identifiers
+            // everywhere else (e.g., `String.left`, `Dict` node fields).
             _ => None,
         }
     }
