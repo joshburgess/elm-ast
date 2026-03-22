@@ -437,14 +437,23 @@ fn parse_case_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
         if p.is_eof() {
             break;
         }
-        // Branches must start at or past the first branch's column.
         let col = p.current_column();
-        if col < branch_col && !p.in_paren_context() {
-            break;
-        }
-        // But if it's exactly at `case` column, it's a new declaration, not a branch.
-        if col < start.column + 1 && !branches.is_empty() && !p.in_paren_context() {
-            break;
+        if p.in_paren_context() {
+            // Inside parens, branches must be at the SAME column as the first
+            // branch. This allows the paren context to relax outer indentation
+            // while still correctly separating nested case expressions.
+            if !branches.is_empty() && col != branch_col {
+                break;
+            }
+        } else {
+            // Outside parens, branches must be at or past the first branch's column.
+            if col < branch_col {
+                break;
+            }
+            // A branch at or before the `case` keyword is a new declaration.
+            if col < start.column + 1 && !branches.is_empty() {
+                break;
+            }
         }
         // Stop if we see something that can't start a pattern.
         if !can_start_pattern(p.peek()) {

@@ -817,6 +817,7 @@ fn display_impl_for_type() {
 // ── Serde round-trip ─────────────────────────────────────────────────
 
 #[test]
+#[cfg(feature = "serde")]
 fn serde_json_round_trip() {
     let src = "\
 module Main exposing (..)
