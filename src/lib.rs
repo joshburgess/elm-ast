@@ -16,6 +16,9 @@ pub mod token;
 pub mod lexer;
 pub mod parse;
 pub mod print;
+pub mod visit;
+pub mod visit_mut;
+pub mod fold;
 
 // Re-export core types at the crate root for convenience.
 pub use span::{Position, Span};
