@@ -27,6 +27,14 @@ fn all_fixture_dirs() -> Vec<(&'static str, &'static str)> {
         ("elm/random", "test-fixtures/random/src"),
         ("rtfeldman/elm-css", "test-fixtures/elm-css/src"),
         ("mdgriffith/elm-ui", "test-fixtures/elm-ui/src"),
+        ("elm/svg", "test-fixtures/svg/src"),
+        ("elm/compiler", "test-fixtures/compiler/reactor/src"),
+        ("elm-explorations/test", "test-fixtures/test/src"),
+        ("elm-explorations/markdown", "test-fixtures/markdown/src"),
+        ("elm-community/list-extra", "test-fixtures/list-extra/src"),
+        ("elm-community/maybe-extra", "test-fixtures/maybe-extra/src"),
+        ("elm-community/string-extra", "test-fixtures/string-extra/src"),
+        ("NoRedInk/elm-json-decode-pipeline", "test-fixtures/elm-json-decode-pipeline/src"),
     ]
 }
 

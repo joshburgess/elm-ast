@@ -19,10 +19,18 @@ visit = []
 fold = []
 visit-mut = []
 serde = ["dep:serde"]
+wasm = ["dep:wasm-bindgen", "dep:serde_json", "parsing", "printing"]
 extra-traits = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 serde_json = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "parse_bench"
+harness = false

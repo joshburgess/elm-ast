@@ -30,6 +30,8 @@ pub mod visit;
 pub mod visit_mut;
 #[cfg(feature = "fold")]
 pub mod fold;
+#[cfg(feature = "wasm")]
+pub mod wasm;
 
 // ── Re-exports ──────────────────────────────────────────────────────
 pub use span::{Position, Span};

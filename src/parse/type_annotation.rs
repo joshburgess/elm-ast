@@ -50,8 +50,7 @@ fn parse_type_app(p: &mut Parser) -> ParseResult<Spanned<TypeAnnotation>> {
                     break;
                 }
                 // For indentation: args should be on the same line or indented past the type name.
-                if !p.in_paren_context()
-                    && p.current_column() <= name_span.start.column
+                if p.current_column() <= name_span.start.column
                     && p.current_pos().line != name_span.start.line
                 {
                     break;

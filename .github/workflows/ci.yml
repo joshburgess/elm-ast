@@ -55,3 +55,15 @@ jobs:
       - run: cargo build --no-default-features --features fold
       - run: cargo build --no-default-features --features serde
       - run: cargo build --all-features
+
+  wasm:
+    name: WASM build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --target wasm32-unknown-unknown --no-default-features --features wasm
+      - run: cargo build --target wasm32-unknown-unknown --no-default-features --features wasm,serde
