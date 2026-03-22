@@ -268,16 +268,18 @@ impl<'src> Lexer<'src> {
                 }
             }
 
-            // Pipe (could be `||` or `|>`)
+            // Pipe: standalone `|`, or operator starting with `|` (`||`, `|>`, `|=`, `|.`, etc.)
             b'|' => {
                 match self.peek_next() {
-                    Some(b'|') => {
+                    Some(b'.') => {
+                        // Special case: `|.` — the `.` is not normally an operator char
+                        // but `|.` is a valid Elm operator (used in elm/parser).
                         self.advance_n(2);
-                        Ok(self.make_span(start, Token::Operator("||".into())))
+                        Ok(self.make_span(start, Token::Operator("|.".into())))
                     }
-                    Some(b'>') => {
-                        self.advance_n(2);
-                        Ok(self.make_span(start, Token::Operator("|>".into())))
+                    Some(next) if is_operator_char(next) => {
+                        // Multi-char operator starting with `|`: `||`, `|>`, `|=`, etc.
+                        self.lex_operator(start)
                     }
                     _ => {
                         self.advance();

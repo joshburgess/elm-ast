@@ -761,8 +761,6 @@ impl Printer {
             }
 
             // Block expressions (multi-line) need parens in atomic position.
-            // We print them inline (single-line) when the sub-expressions
-            // are simple enough, otherwise use proper indentation.
             Expr::IfElse { .. }
             | Expr::CaseOf { .. }
             | Expr::LetIn { .. }
@@ -975,6 +973,7 @@ fn is_block_expr(expr: &Expr) -> bool {
             | Expr::Lambda { .. }
     )
 }
+
 
 /// Convenience function: print an `ElmModule` to a string with default config.
 pub fn print(module: &ElmModule) -> String {
