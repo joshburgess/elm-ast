@@ -256,7 +256,8 @@ fn parse_value_constructor(p: &mut Parser) -> ParseResult<Spanned<ValueConstruct
             break;
         }
         // Arguments must be on the same line or indented past the constructor name.
-        if p.current_column() <= name.span.start.column
+        if !p.in_paren_context()
+            && p.current_column() <= name.span.start.column
             && p.current_pos().line != name.span.start.line
         {
             break;

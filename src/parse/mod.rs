@@ -37,12 +37,26 @@ pub type ParseResult<T> = Result<T, ParseError>;
 pub struct Parser {
     tokens: Vec<Spanned<Token>>,
     pos: usize,
+    /// Nesting depth of parentheses/brackets/braces. When > 0,
+    /// indentation-sensitive layout rules are suspended (any column is valid).
+    /// This matches the elm/compiler behavior.
+    paren_depth: u32,
 }
 
 impl Parser {
     /// Create a parser from a token stream (as produced by the lexer).
     pub fn new(tokens: Vec<Spanned<Token>>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            paren_depth: 0,
+        }
+    }
+
+    /// Returns true if currently inside parens/brackets/braces.
+    /// When true, indentation-sensitive layout rules are suspended.
+    pub fn in_paren_context(&self) -> bool {
+        self.paren_depth > 0
     }
 
     // ── Position & peeking ───────────────────────────────────────────
@@ -80,8 +94,19 @@ impl Parser {
     // ── Advancing ────────────────────────────────────────────────────
 
     /// Advance past the current token and return it.
+    /// Automatically tracks paren/bracket/brace nesting depth.
     pub fn advance(&mut self) -> Spanned<Token> {
         let tok = self.tokens[self.pos.min(self.tokens.len() - 1)].clone();
+        // Track paren depth for indentation-context suspension.
+        match &tok.value {
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace => {
+                self.paren_depth += 1;
+            }
+            Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                self.paren_depth = self.paren_depth.saturating_sub(1);
+            }
+            _ => {}
+        }
         if self.pos < self.tokens.len() - 1 {
             self.pos += 1;
         }
@@ -211,15 +236,17 @@ impl Parser {
     // ── Indentation ──────────────────────────────────────────────────
 
     /// Check if the current token is indented past `min_col`.
+    /// When inside parens/brackets, indentation is always satisfied.
     pub fn is_indented_past(&mut self, min_col: u32) -> bool {
         self.skip_newlines();
-        !self.is_eof() && self.current_column() > min_col
+        !self.is_eof() && (self.in_paren_context() || self.current_column() > min_col)
     }
 
     /// Check if the current token is at or past `min_col`.
+    /// When inside parens/brackets, indentation is always satisfied.
     pub fn is_at_or_past(&mut self, min_col: u32) -> bool {
         self.skip_newlines();
-        !self.is_eof() && self.current_column() >= min_col
+        !self.is_eof() && (self.in_paren_context() || self.current_column() >= min_col)
     }
 
     // ── Collecting a doc comment ─────────────────────────────────────

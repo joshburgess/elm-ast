@@ -439,11 +439,11 @@ fn parse_case_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
         }
         // Branches must start at or past the first branch's column.
         let col = p.current_column();
-        if col < branch_col {
+        if col < branch_col && !p.in_paren_context() {
             break;
         }
         // But if it's exactly at `case` column, it's a new declaration, not a branch.
-        if col < start.column + 1 && !branches.is_empty() {
+        if col < start.column + 1 && !branches.is_empty() && !p.in_paren_context() {
             break;
         }
         // Stop if we see something that can't start a pattern.
@@ -491,10 +491,10 @@ fn parse_let_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
             break;
         }
         // Declarations must be at the same column as the first declaration.
-        if p.current_column() < decl_col {
+        if p.current_column() < decl_col && !p.in_paren_context() {
             break;
         }
-        if p.current_column() < let_col + 1 {
+        if p.current_column() < let_col + 1 && !p.in_paren_context() {
             break;
         }
 

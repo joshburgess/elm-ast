@@ -557,6 +557,13 @@ impl Printer {
     // ── Expressions ──────────────────────────────────────────────────
 
     pub fn write_expr(&mut self, expr: &Expr) {
+        self.write_expr_inner(expr);
+    }
+
+    /// Inner expression writer that handles all expression forms without
+    /// adding outer parentheses. `write_expr_atomic` delegates here
+    /// wrapped in parens for block/complex expressions.
+    fn write_expr_inner(&mut self, expr: &Expr) {
         match expr {
             Expr::OperatorApplication {
                 operator,
@@ -569,6 +576,24 @@ impl Printer {
                 self.write(operator);
                 self.write_char(' ');
                 self.write_expr_operand(&right.value, operator, false);
+            }
+            Expr::IfElse {
+                branches,
+                else_branch,
+            } => {
+                self.write_if_expr(branches, &else_branch.value);
+            }
+            Expr::CaseOf {
+                expr: subject,
+                branches,
+            } => {
+                self.write_case_expr(&subject.value, branches);
+            }
+            Expr::LetIn { declarations, body } => {
+                self.write_let_expr(declarations, &body.value);
+            }
+            Expr::Lambda { args, body } => {
+                self.write_lambda(args, &body.value);
             }
             _ => self.write_expr_app(expr),
         }
@@ -586,10 +611,10 @@ impl Printer {
                             || (!is_left && !is_right_assoc(parent_op))));
                 if needs_parens {
                     self.write_char('(');
-                    self.write_expr(expr);
+                    self.write_expr_inner(expr);
                     self.write_char(')');
                 } else {
-                    self.write_expr(expr);
+                    self.write_expr_inner(expr);
                 }
             }
             _ => self.write_expr_app(expr),
@@ -611,6 +636,21 @@ impl Printer {
                 self.write_expr_atomic(&inner.value);
             }
             _ => self.write_expr_atomic(expr),
+        }
+    }
+
+    /// Write an expression that appears inside a compound context (list, tuple,
+    /// record setter, etc.) where a block expression would break layout.
+    /// Block expressions get wrapped in parentheses.
+    /// Write an expression in a nested context (list, tuple, record setter)
+    /// where block expressions need parenthesization.
+    fn write_expr_nested(&mut self, expr: &Expr) {
+        if is_block_expr(expr) {
+            self.write_char('(');
+            self.write_expr_inner(expr);
+            self.write_char(')');
+        } else {
+            self.write_expr(expr);
         }
     }
 
@@ -645,7 +685,7 @@ impl Printer {
                     if i > 0 {
                         self.write(", ");
                     }
-                    self.write_expr(&elem.value);
+                    self.write_expr_nested(&elem.value);
                 }
                 self.write(" )");
             }
@@ -659,7 +699,7 @@ impl Printer {
                         if i > 0 {
                             self.write(", ");
                         }
-                        self.write_expr(&elem.value);
+                        self.write_expr_nested(&elem.value);
                     }
                     self.write(" ]");
                 }
@@ -710,32 +750,25 @@ impl Printer {
                 self.write("|]");
             }
 
-            Expr::IfElse {
-                branches,
-                else_branch,
-            } => {
-                self.write_if_expr(branches, &else_branch.value);
-            }
-
-            Expr::CaseOf { expr, branches } => {
-                self.write_case_expr(&expr.value, branches);
-            }
-
-            Expr::LetIn { declarations, body } => {
-                self.write_let_expr(declarations, &body.value);
-            }
-
-            Expr::Lambda { args, body } => {
-                self.write_lambda(args, &body.value);
-            }
-
-            // These need parens in atomic position.
+            // Non-block complex expressions just need simple parens.
             Expr::OperatorApplication { .. }
             | Expr::Application(_)
             | Expr::Negation(_)
             | Expr::BinOps { .. } => {
                 self.write_char('(');
-                self.write_expr(expr);
+                self.write_expr_inner(expr);
+                self.write_char(')');
+            }
+
+            // Block expressions (multi-line) need parens in atomic position.
+            // We print them inline (single-line) when the sub-expressions
+            // are simple enough, otherwise use proper indentation.
+            Expr::IfElse { .. }
+            | Expr::CaseOf { .. }
+            | Expr::LetIn { .. }
+            | Expr::Lambda { .. } => {
+                self.write_char('(');
+                self.write_expr_inner(expr);
                 self.write_char(')');
             }
         }
@@ -744,7 +777,7 @@ impl Printer {
     fn write_record_setter(&mut self, setter: &RecordSetter) {
         self.write(&setter.field.value);
         self.write(" = ");
-        self.write_expr(&setter.value.value);
+        self.write_expr_nested(&setter.value.value);
     }
 
     fn write_if_expr(
@@ -752,26 +785,42 @@ impl Printer {
         branches: &[(Spanned<Expr>, Spanned<Expr>)],
         else_branch: &Expr,
     ) {
-        for (i, (cond, body)) in branches.iter().enumerate() {
-            if i == 0 {
-                self.write("if ");
-            } else {
-                self.write("else if ");
-            }
+        // Use single-line form when all branches are simple non-block expressions.
+        let all_simple = branches
+            .iter()
+            .all(|(c, b)| !is_block_expr(&c.value) && !is_block_expr(&b.value))
+            && !is_block_expr(else_branch);
+
+        if all_simple && branches.len() == 1 {
+            let (cond, body) = &branches[0];
+            self.write("if ");
             self.write_expr(&cond.value);
-            self.write(" then");
+            self.write(" then ");
+            self.write_expr(&body.value);
+            self.write(" else ");
+            self.write_expr(else_branch);
+        } else {
+            for (i, (cond, body)) in branches.iter().enumerate() {
+                if i == 0 {
+                    self.write("if ");
+                } else {
+                    self.write("else if ");
+                }
+                self.write_expr(&cond.value);
+                self.write(" then");
+                self.indent();
+                self.newline_indent();
+                self.write_expr(&body.value);
+                self.dedent();
+                self.newline();
+                self.newline_indent();
+            }
+            self.write("else");
             self.indent();
             self.newline_indent();
-            self.write_expr(&body.value);
+            self.write_expr(else_branch);
             self.dedent();
-            self.newline();
-            self.newline_indent();
         }
-        self.write("else");
-        self.indent();
-        self.newline_indent();
-        self.write_expr(else_branch);
-        self.dedent();
     }
 
     fn write_case_expr(&mut self, subject: &Expr, branches: &[CaseBranch]) {
@@ -913,6 +962,18 @@ fn op_precedence(op: &str) -> u8 {
 
 fn is_right_assoc(op: &str) -> bool {
     matches!(op, "<|" | "||" | "&&" | "::" | "++" | "^" | ">>")
+}
+
+/// Returns true if the expression is a multi-line block that needs
+/// parenthesization when used as a function application argument.
+fn is_block_expr(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::IfElse { .. }
+            | Expr::CaseOf { .. }
+            | Expr::LetIn { .. }
+            | Expr::Lambda { .. }
+    )
 }
 
 /// Convenience function: print an `ElmModule` to a string with default config.

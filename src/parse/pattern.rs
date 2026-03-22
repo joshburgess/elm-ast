@@ -69,7 +69,8 @@ fn parse_app_pattern(p: &mut Parser) -> ParseResult<Spanned<Pattern>> {
                 break;
             }
             // Args must be indented past the constructor or on the same line.
-            if p.current_column() <= ctor_start.column
+            if !p.in_paren_context()
+                && p.current_column() <= ctor_start.column
                 && p.current_pos().line != ctor_start.line
             {
                 break;

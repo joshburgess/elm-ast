@@ -188,3 +188,45 @@ fn parse_elm_http() {
         eprintln!("elm/http parse pass rate: {pass_rate:.1}%");
     }
 }
+
+// ── Round-trip tests ─────────────────────────────────────────────────
+
+#[test]
+fn round_trip_all_packages() {
+    let dirs = [
+        ("elm/core", "test-fixtures/core/src"),
+        ("elm/html", "test-fixtures/html/src"),
+        ("elm/browser", "test-fixtures/browser/src"),
+        ("elm/json", "test-fixtures/json/src"),
+        ("elm/http", "test-fixtures/http/src"),
+    ];
+
+    let mut total = 0;
+    let mut passed = 0;
+    let mut failures = Vec::new();
+
+    for (pkg, dir) in &dirs {
+        let files = find_elm_files(dir);
+        for file in &files {
+            // Only round-trip files that parse successfully.
+            if try_parse_file(file).is_err() {
+                continue;
+            }
+            total += 1;
+            match try_round_trip_file(file) {
+                Ok(()) => passed += 1,
+                Err(msg) => failures.push(format!("[{pkg}] {msg}")),
+            }
+        }
+    }
+
+    eprintln!("\n=== Round-trip results ===");
+    eprintln!("{passed}/{total} files round-tripped successfully");
+    for f in &failures {
+        eprintln!("\n{f}");
+    }
+    if total > 0 {
+        let pass_rate = (passed as f64 / total as f64) * 100.0;
+        eprintln!("\nRound-trip pass rate: {pass_rate:.1}%");
+    }
+}
