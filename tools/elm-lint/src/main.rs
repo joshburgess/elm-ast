@@ -1,7 +1,7 @@
 #![allow(clippy::collapsible_if)]
 
-mod rule;
-mod rules;
+use elm_lint::rule;
+use elm_lint::rules;
 
 use std::collections::HashMap;
 use std::fs;

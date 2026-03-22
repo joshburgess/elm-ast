@@ -1,7 +1,7 @@
 #![allow(clippy::collapsible_if)]
 
-mod commands;
-mod project;
+use elm_refactor::commands;
+use elm_refactor::project;
 
 use std::time::Instant;
 
