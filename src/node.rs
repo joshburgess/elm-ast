@@ -6,6 +6,7 @@ use crate::span::Span;
 /// - `A.Located` in elm/compiler
 /// - `Node` in stil4m/elm-syntax
 /// - `Spanned` in many Rust parser crates
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Spanned<T> {
     pub span: Span,

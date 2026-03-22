@@ -2,6 +2,7 @@ use crate::node::Spanned;
 use crate::span::Span;
 
 /// An exposing list on a module declaration or import.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Exposing {
     /// `exposing (..)` — expose everything.
@@ -12,6 +13,7 @@ pub enum Exposing {
 }
 
 /// A single item in an explicit exposing list.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExposedItem {
     /// An exposed value or function: `foo`

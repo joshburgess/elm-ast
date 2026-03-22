@@ -6,6 +6,7 @@ use crate::pattern::Pattern;
 use crate::type_annotation::TypeAnnotation;
 
 /// A top-level declaration in an Elm module.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Declaration {
     /// A function or value definition.
@@ -62,6 +63,7 @@ pub enum Declaration {
 }
 
 /// A type alias definition.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeAlias {
     /// Optional documentation comment.
@@ -78,6 +80,7 @@ pub struct TypeAlias {
 }
 
 /// A custom type (ADT / tagged union) definition.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomType {
     /// Optional documentation comment.
@@ -96,6 +99,7 @@ pub struct CustomType {
 /// A value constructor in a custom type definition.
 ///
 /// `Just a` → `ValueConstructor { name: "Just", args: [a] }`
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValueConstructor {
     pub name: Spanned<Ident>,
@@ -105,6 +109,7 @@ pub struct ValueConstructor {
 /// An infix operator definition.
 ///
 /// `infix left 6 (+) = add`
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InfixDef {
     pub direction: Spanned<InfixDirection>,

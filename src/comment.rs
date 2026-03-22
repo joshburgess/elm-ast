@@ -1,4 +1,5 @@
 /// A comment in Elm source code.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Comment {
     /// A single-line comment: `-- this is a comment`

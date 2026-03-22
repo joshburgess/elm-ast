@@ -813,3 +813,20 @@ fn display_impl_for_type() {
     );
     assert_eq!(format!("{}", ty.value), "Int -> String");
 }
+
+// ── Serde round-trip ─────────────────────────────────────────────────
+
+#[test]
+fn serde_json_round_trip() {
+    let src = "\
+module Main exposing (..)
+
+add : Int -> Int -> Int
+add x y = x + y
+";
+    let m = parse_ok(src);
+    let json = serde_json::to_string(&m).expect("serialize");
+    let m2: elm_ast_rs::ElmModule = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(m.declarations.len(), m2.declarations.len());
+    assert_eq!(m.imports.len(), m2.imports.len());
+}

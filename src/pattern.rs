@@ -6,6 +6,7 @@ use crate::node::Spanned;
 ///
 /// Patterns appear in function arguments, case branches, let destructuring, and
 /// lambda arguments.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
     /// Wildcard pattern: `_`

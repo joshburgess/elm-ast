@@ -1,4 +1,5 @@
 /// A position in source code (byte offset + line/column).
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Position {
     /// Byte offset from the start of the source.
@@ -12,6 +13,7 @@ pub struct Position {
 /// A span in source code, defined by a start and end position.
 ///
 /// Spans are half-open: they include the start position and exclude the end.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Span {
     pub start: Position,

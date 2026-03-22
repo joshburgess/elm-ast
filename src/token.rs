@@ -1,6 +1,7 @@
 use crate::literal::Literal;
 
 /// A token produced by the Elm lexer.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token {
     // ── Keywords ─────────────────────────────────────────────────────

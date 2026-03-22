@@ -3,6 +3,7 @@ use crate::ident::ModuleName;
 use crate::node::Spanned;
 
 /// The module header declaration at the top of an Elm file.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ModuleHeader {
     /// `module Foo.Bar exposing (..)`

@@ -1,4 +1,5 @@
 /// The associativity of an infix operator.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InfixDirection {
     Left,
@@ -12,6 +13,7 @@ pub type Precedence = u8;
 /// An infix operator declaration.
 ///
 /// Corresponds to: `infix left 6 (+) = add`
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InfixDeclaration {
     /// The operator symbol, e.g. `+`

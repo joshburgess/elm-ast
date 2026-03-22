@@ -1,4 +1,5 @@
 /// Literal values in Elm source code.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Literal {
     /// A character literal: `'a'`

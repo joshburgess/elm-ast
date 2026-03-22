@@ -8,6 +8,7 @@ use crate::type_annotation::TypeAnnotation;
 /// An expression in Elm source code.
 ///
 /// This covers every expression form in Elm 0.19.1.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     /// Unit expression: `()`
@@ -136,6 +137,7 @@ impl Eq for Expr {}
 /// A field setter in a record expression or record update.
 ///
 /// `name = expr`
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordSetter {
     pub field: Spanned<Ident>,
@@ -145,6 +147,7 @@ pub struct RecordSetter {
 /// A branch in a case-of expression.
 ///
 /// `pattern -> expr`
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaseBranch {
     pub pattern: Spanned<Pattern>,
@@ -152,6 +155,7 @@ pub struct CaseBranch {
 }
 
 /// A declaration within a let-in block.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LetDeclaration {
     /// A function definition within a let block.
@@ -179,6 +183,7 @@ pub enum LetDeclaration {
 }
 
 /// A function definition (used in both top-level declarations and let blocks).
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Function {
     /// Optional documentation comment.
@@ -192,6 +197,7 @@ pub struct Function {
 }
 
 /// A type signature: `name : type`
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Signature {
     pub name: Spanned<Ident>,
@@ -199,6 +205,7 @@ pub struct Signature {
 }
 
 /// The implementation part of a function definition: `name args = body`
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FunctionImplementation {
     pub name: Spanned<Ident>,

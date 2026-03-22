@@ -10,6 +10,7 @@ use crate::token::Token;
 /// Corresponds to:
 /// - `Module` in `AST/Source.hs`
 /// - `File` in `Elm.Syntax.File`
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ElmModule {
     /// The module header declaration.

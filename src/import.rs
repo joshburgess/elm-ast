@@ -8,6 +8,7 @@ use crate::node::Spanned;
 /// - `import Html`
 /// - `import Html exposing (div, text)`
 /// - `import Json.Decode as Decode exposing (Decoder)`
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Import {
     /// The module being imported: `Html.Attributes`

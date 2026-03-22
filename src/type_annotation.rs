@@ -5,6 +5,7 @@ use crate::node::Spanned;
 ///
 /// Represents the syntax of types as written by the programmer, before any
 /// resolution or canonicalization.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TypeAnnotation {
     /// A type variable: `a`, `msg`, `comparable`
@@ -47,6 +48,7 @@ pub enum TypeAnnotation {
 }
 
 /// A single field in a record type: `name : String`
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordField {
     pub name: Spanned<Ident>,

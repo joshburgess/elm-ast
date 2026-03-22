@@ -6,6 +6,9 @@ description = "A syn-quality Rust library for parsing and constructing Elm 0.19.
 license = "MIT OR Apache-2.0"
 keywords = ["elm", "ast", "parser", "syntax"]
 categories = ["parsing", "development-tools"]
+repository = "https://github.com/joshburgess/elm-ast-rs"
+documentation = "https://docs.rs/elm-ast-rs"
+readme = "README.md"
 
 [features]
 default = ["full"]
@@ -15,8 +18,11 @@ printing = []
 visit = []
 fold = []
 visit-mut = []
+serde = ["dep:serde"]
 extra-traits = []
 
 [dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
+serde_json = "1"
