@@ -204,6 +204,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "elm-search"
+version = "0.1.0"
+dependencies = [
+ "elm-ast-rs",
+]
+
+[[package]]
 name = "elm-unused"
 version = "0.1.0"
 dependencies = [
