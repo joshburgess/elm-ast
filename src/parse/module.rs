@@ -7,7 +7,7 @@ use crate::node::Spanned;
 use crate::token::Token;
 
 use super::declaration::parse_declaration;
-use super::{ParseResult, Parser};
+use super::{ParseError, ParseResult, Parser};
 
 /// Parse a complete Elm module (file).
 pub fn parse_module(p: &mut Parser) -> ParseResult<ElmModule> {
@@ -300,4 +300,63 @@ fn collect_comments(p: &mut Parser, comments: &mut Vec<Spanned<Comment>>) {
             _ => break,
         }
     }
+}
+
+/// Parse a module with error recovery.
+///
+/// If the module header or imports fail, returns `(None, errors)`.
+/// If declarations fail, skips to the next declaration and continues,
+/// returning the partial AST with all collected errors.
+pub fn parse_module_recovering(p: &mut Parser) -> (Option<ElmModule>, Vec<ParseError>) {
+    let mut comments = Vec::new();
+    let mut errors = Vec::new();
+
+    collect_comments(p, &mut comments);
+
+    let header = match parse_module_header(p) {
+        Ok(h) => h,
+        Err(e) => return (None, vec![e]),
+    };
+
+    let mut imports = Vec::new();
+    loop {
+        collect_comments(p, &mut comments);
+        p.skip_whitespace();
+        if !matches!(p.peek(), Token::Import) {
+            break;
+        }
+        match parse_import(p) {
+            Ok(imp) => imports.push(imp),
+            Err(e) => {
+                errors.push(e);
+                p.skip_to_next_declaration();
+            }
+        }
+    }
+
+    let mut declarations = Vec::new();
+    loop {
+        collect_comments(p, &mut comments);
+        p.skip_whitespace();
+        if p.is_eof() {
+            break;
+        }
+        match parse_declaration(p) {
+            Ok(decl) => declarations.push(decl),
+            Err(e) => {
+                errors.push(e);
+                p.skip_to_next_declaration();
+            }
+        }
+    }
+
+    (
+        Some(ElmModule {
+            header,
+            imports,
+            declarations,
+            comments,
+        }),
+        errors,
+    )
 }

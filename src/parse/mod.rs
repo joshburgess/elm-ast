@@ -294,6 +294,36 @@ impl Parser {
     pub fn spanned_from<T>(&self, start: Position, value: T) -> Spanned<T> {
         Spanned::new(self.span_from(start), value)
     }
+
+    /// Skip tokens until we reach the start of a new top-level declaration
+    /// or end of file. Used for error recovery.
+    ///
+    /// A new declaration starts with a token at column 1 that could begin
+    /// a declaration: lowercase name, `type`, `port`, `infix`, or doc comment.
+    pub fn skip_to_next_declaration(&mut self) {
+        loop {
+            self.skip_whitespace();
+            if self.is_eof() {
+                break;
+            }
+            let col = self.current_column();
+            let tok = self.peek();
+            // A token at column 1 that can start a declaration.
+            if col == 1
+                && matches!(
+                    tok,
+                    Token::LowerName(_)
+                        | Token::Type
+                        | Token::Port
+                        | Token::Infix
+                        | Token::DocComment(_)
+                )
+            {
+                break;
+            }
+            self.advance();
+        }
+    }
 }
 
 /// Produce a human-readable description of a token for error messages.
@@ -347,7 +377,9 @@ fn describe(tok: &Token) -> String {
 
 /// Parse an Elm source string into an `ElmModule`.
 ///
-/// This is the main entry point for parsing.
+/// Returns `Err` if the module header or imports fail to parse.
+/// For declaration-level errors, use [`parse_recovering`] instead to
+/// get a partial AST along with the errors.
 pub fn parse(source: &str) -> Result<crate::file::ElmModule, Vec<ParseError>> {
     let lexer = crate::lexer::Lexer::new(source);
     let (tokens, lex_errors) = lexer.tokenize();
@@ -364,4 +396,30 @@ pub fn parse(source: &str) -> Result<crate::file::ElmModule, Vec<ParseError>> {
 
     let mut parser = Parser::new(tokens);
     module::parse_module(&mut parser).map_err(|e| vec![e])
+}
+
+/// Parse an Elm source string with error recovery.
+///
+/// Unlike [`parse`], this always returns a (possibly partial) AST along
+/// with any errors encountered. Declarations that fail to parse are skipped,
+/// and parsing continues with the next declaration.
+pub fn parse_recovering(source: &str) -> (Option<crate::file::ElmModule>, Vec<ParseError>) {
+    let lexer = crate::lexer::Lexer::new(source);
+    let (tokens, lex_errors) = lexer.tokenize();
+
+    if !lex_errors.is_empty() {
+        return (
+            None,
+            lex_errors
+                .into_iter()
+                .map(|e| ParseError {
+                    message: e.message,
+                    span: e.span,
+                })
+                .collect(),
+        );
+    }
+
+    let mut parser = Parser::new(tokens);
+    module::parse_module_recovering(&mut parser)
 }

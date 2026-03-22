@@ -1,7 +1,9 @@
+use elm_ast_rs::builder;
 use elm_ast_rs::declaration::Declaration;
 use elm_ast_rs::expr::Expr;
+use elm_ast_rs::file::{associate_comments, extract_comments};
 use elm_ast_rs::literal::Literal;
-use elm_ast_rs::parse;
+use elm_ast_rs::{parse, parse_recovering, Lexer};
 use elm_ast_rs::pattern::Pattern;
 use elm_ast_rs::type_annotation::TypeAnnotation;
 
@@ -68,7 +70,7 @@ module Main exposing (..)
 
 x = 1 + 2 * 3 - 4 / 5 + 6
 ";
-    let m = parse_ok(src);
+    let _m = parse_ok(src);
     round_trip(src);
 }
 
@@ -621,4 +623,193 @@ run config msg =
     assert!(matches!(&m.declarations[2].value, Declaration::PortDeclaration(_)));
     assert!(matches!(&m.declarations[3].value, Declaration::FunctionDeclaration(_)));
     round_trip(src);
+}
+
+// ── Error recovery ───────────────────────────────────────────────────
+
+#[test]
+fn error_recovery_skips_bad_declaration() {
+    let src = "\
+module Main exposing (..)
+
+good1 = 1
+
+bad = @#$%
+
+good2 = 2
+";
+    // parse should fail
+    assert!(parse(src).is_err());
+
+    // parse_recovering should return partial AST with the good declarations
+    let (module, errors) = parse_recovering(src);
+    let m = module.expect("should return partial AST");
+    assert!(!errors.is_empty(), "should have errors");
+    // Should have recovered at least one good declaration
+    assert!(
+        m.declarations.len() >= 1,
+        "should have at least 1 declaration, got {}",
+        m.declarations.len()
+    );
+}
+
+#[test]
+fn error_recovery_preserves_good_declarations() {
+    let src = "\
+module Main exposing (..)
+
+add x y = x + y
+
+broken = {{{
+
+sub x y = x - y
+";
+    let (module, errors) = parse_recovering(src);
+    let m = module.expect("should return partial AST");
+    assert!(!errors.is_empty());
+
+    // Should have parsed at least `add` and `sub`
+    let names: Vec<&str> = m
+        .declarations
+        .iter()
+        .filter_map(|d| match &d.value {
+            Declaration::FunctionDeclaration(f) => Some(f.declaration.value.name.value.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(names.contains(&"add"), "should have 'add', got {names:?}");
+    assert!(names.contains(&"sub"), "should have 'sub', got {names:?}");
+}
+
+#[test]
+fn error_recovery_bad_module_header() {
+    let src = "not a module header at all";
+    let (module, errors) = parse_recovering(src);
+    assert!(module.is_none());
+    assert!(!errors.is_empty());
+}
+
+// ── Comment attachment ───────────────────────────────────────────────
+
+#[test]
+fn leading_comments_via_token_extraction() {
+    let src = "\
+module Main exposing (..)
+
+-- This is a helper function
+add x y = x + y
+
+-- Subtracts two numbers
+sub x y = x - y
+";
+    let m = parse_ok(src);
+    assert_eq!(m.declarations.len(), 2);
+
+    // Extract comments from the token stream (complete coverage).
+    let (tokens, _) = Lexer::new(src).tokenize();
+    let all_comments = extract_comments(&tokens);
+    let associated = associate_comments(&m, &all_comments);
+
+    assert_eq!(associated.len(), 2);
+    assert_eq!(associated[0].len(), 1);
+    assert!(matches!(
+        &associated[0][0].value,
+        elm_ast_rs::comment::Comment::Line(text) if text.contains("helper")
+    ));
+    assert_eq!(associated[1].len(), 1);
+    assert!(matches!(
+        &associated[1][0].value,
+        elm_ast_rs::comment::Comment::Line(text) if text.contains("Subtracts")
+    ));
+}
+
+#[test]
+fn multiple_leading_comments() {
+    let src = "\
+module Main exposing (..)
+
+-- Comment 1
+-- Comment 2
+add x y = x + y
+";
+    let m = parse_ok(src);
+    let (tokens, _) = Lexer::new(src).tokenize();
+    let all_comments = extract_comments(&tokens);
+    let associated = associate_comments(&m, &all_comments);
+
+    assert_eq!(associated[0].len(), 2);
+}
+
+#[test]
+fn no_leading_comments() {
+    let src = "\
+module Main exposing (..)
+
+add x y = x + y
+";
+    let m = parse_ok(src);
+    let (tokens, _) = Lexer::new(src).tokenize();
+    let all_comments = extract_comments(&tokens);
+    let associated = associate_comments(&m, &all_comments);
+
+    assert!(associated[0].is_empty());
+}
+
+// ── Builder API ──────────────────────────────────────────────────────
+
+#[test]
+fn builder_constructs_valid_module() {
+    let m = builder::module(
+        vec!["Main"],
+        vec![
+            builder::func("add", vec![builder::pvar("x"), builder::pvar("y")],
+                builder::binop("+", builder::var("x"), builder::var("y"))),
+            builder::custom_type(
+                "Msg",
+                Vec::<String>::new(),
+                vec![
+                    ("Increment", vec![]),
+                    ("SetValue", vec![builder::tname("Int", vec![])]),
+                ],
+            ),
+        ],
+    );
+
+    // Should be printable and re-parseable.
+    let output = format!("{m}");
+    assert!(output.contains("add x y"));
+    assert!(output.contains("x + y"));
+    assert!(output.contains("type Msg"));
+
+    let reparsed = parse(&output).unwrap_or_else(|e| {
+        eprintln!("--- output ---\n{output}\n---");
+        panic!("failed to reparse builder output: {e:?}");
+    });
+    assert_eq!(reparsed.declarations.len(), 2);
+}
+
+#[test]
+fn builder_expressions() {
+    let expr = builder::if_else(
+        builder::var("x"),
+        builder::int(1),
+        builder::int(0),
+    );
+    let output = format!("{}", expr.value);
+    assert!(output.contains("if x then 1 else 0"));
+}
+
+#[test]
+fn display_impl_for_pattern() {
+    let pat = builder::pctor("Just", vec![builder::pvar("x")]);
+    assert_eq!(format!("{}", pat.value), "Just x");
+}
+
+#[test]
+fn display_impl_for_type() {
+    let ty = builder::tfunc(
+        builder::tname("Int", vec![]),
+        builder::tname("String", vec![]),
+    );
+    assert_eq!(format!("{}", ty.value), "Int -> String");
 }

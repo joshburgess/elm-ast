@@ -9,7 +9,7 @@ categories = ["parsing", "development-tools"]
 
 [features]
 default = ["full"]
-full = []
+full = ["parsing", "printing", "visit", "visit-mut", "fold"]
 parsing = []
 printing = []
 visit = []
