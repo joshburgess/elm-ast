@@ -183,6 +183,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "elm-unused"
+version = "0.1.0"
+dependencies = [
+ "elm-ast-rs",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
