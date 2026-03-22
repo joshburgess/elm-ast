@@ -15,6 +15,7 @@ pub mod file;
 pub mod token;
 pub mod lexer;
 pub mod parse;
+pub mod print;
 
 // Re-export core types at the crate root for convenience.
 pub use span::{Position, Span};
@@ -23,3 +24,4 @@ pub use file::ElmModule;
 pub use token::Token;
 pub use lexer::Lexer;
 pub use parse::parse;
+pub use print::print;
