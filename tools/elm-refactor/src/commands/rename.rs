@@ -27,7 +27,7 @@ pub fn rename(project: &mut Project, module: &str, from: &str, to: &str) -> usiz
             // Update the exposing list.
             changes += rename_in_exposing(&mut file.module, from, to);
         } else {
-            // In other modules, rename qualified references and import exposings.
+            // In other modules, rename qualified references.
             let mut renamer = QualifiedRenamer {
                 module_name: module.to_string(),
                 from: from.to_string(),
@@ -36,6 +36,25 @@ pub fn rename(project: &mut Project, module: &str, from: &str, to: &str) -> usiz
             };
             renamer.visit_module_mut(&mut file.module);
             changes += renamer.changes;
+
+            // Check if this module imports the name via exposing.
+            let imports_exposed = file.module.imports.iter().any(|imp| {
+                imp.value.module_name.value.join(".") == module
+                    && imp.value.exposing.as_ref().is_some_and(|exp| {
+                        import_exposes_name(&exp.value, from)
+                    })
+            });
+
+            // If the name was exposed, also rename unqualified references.
+            if imports_exposed {
+                let mut local_renamer = LocalRenamer {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                    changes: 0,
+                };
+                local_renamer.visit_module_mut(&mut file.module);
+                changes += local_renamer.changes;
+            }
 
             // Update import exposing lists.
             for imp in &mut file.module.imports {
@@ -94,6 +113,16 @@ fn rename_in_exposing(module: &mut elm_ast_rs::file::ElmModule, from: &str, to: 
     };
 
     rename_in_import_exposing(&mut exposing.value, from, to)
+}
+
+fn import_exposes_name(exposing: &Exposing, name: &str) -> bool {
+    match exposing {
+        Exposing::All(_) => true,
+        Exposing::Explicit(items) => items.iter().any(|item| match &item.value {
+            ExposedItem::Function(n) => n == name,
+            _ => false,
+        }),
+    }
 }
 
 fn rename_in_import_exposing(exposing: &mut Exposing, from: &str, to: &str) -> usize {

@@ -1,14 +1,48 @@
 # elm-ast-rs
 
-A `syn`-quality Rust library for parsing and constructing Elm 0.19.1 ASTs.
+A `syn`-quality Rust library for parsing and constructing Elm 0.19.1 ASTs, plus a suite of developer tools built on top.
 
 ## Overview
 
 `elm-ast-rs` provides a complete, strongly-typed representation of Elm source code as a Rust AST, along with a parser, printer, and visitor/fold traits for traversal and transformation. It is modeled after Rust's [`syn`](https://github.com/dtolnay/syn) crate, with a formatting approach inspired by [`elm-format`](https://github.com/avh4/elm-format).
 
-**Tested against 93 real-world `.elm` files from 15 packages** (including `elm/core`, `elm/browser`, `rtfeldman/elm-css`, `mdgriffith/elm-ui`) with 100% parse, round-trip, and printer idempotency rates.
+**Tested against 149 real-world `.elm` files from 23 packages** (including `elm/core`, `elm/browser`, `rtfeldman/elm-css`, `mdgriffith/elm-ui`, `elm-explorations/test`) with 100% parse, round-trip, and printer idempotency rates.
 
-## Quick start
+## Tool suite
+
+Built on `elm-ast-rs`, five standalone CLI tools for Elm development:
+
+| Tool | Description | Speed |
+|---|---|---|
+| [**`elm-unused`**](tools/elm-unused/) | Project-wide dead code detection | 10ms / 26 files |
+| [**`elm-lint`**](tools/elm-lint/) | 14 built-in lint rules | 7ms / 26 files |
+| [**`elm-deps`**](tools/elm-deps/) | Dependency graphs, cycle detection, coupling metrics | 18ms / 13 files |
+| [**`elm-refactor`**](tools/elm-refactor/) | Cross-file rename, sort/qualify imports | 7ms / 18 files |
+| [**`elm-search`**](tools/elm-search/) | Semantic AST-aware code search (10 query types) | 3ms / 18 files |
+
+### Quick examples
+
+```bash
+# Find dead code
+cargo run -p elm-unused -- src
+
+# Lint with all 14 rules
+cargo run -p elm-lint -- src
+
+# Visualize module dependencies
+cargo run -p elm-deps -- --mermaid src
+
+# Rename a function across all files
+cargo run -p elm-refactor -- rename Main.oldName oldName newName src
+
+# Find all functions returning Maybe
+cargo run -p elm-search -- --dir src returns Maybe
+
+# Find unused function arguments
+cargo run -p elm-search -- --dir src unused-args
+```
+
+## Library quick start
 
 ```rust
 use elm_ast_rs::{parse, print};
@@ -48,19 +82,13 @@ elm-ast-rs = "0.1"
 | `visit-mut` | `VisitMut` trait for in-place AST mutation |
 | `fold` | `Fold` trait for owned AST transformation |
 | `serde` | `Serialize`/`Deserialize` on all AST types |
+| `wasm` | WASM bindings via `wasm-bindgen` |
 
 ### Minimal dependency (AST types only)
 
 ```toml
 [dependencies]
 elm-ast-rs = { version = "0.1", default-features = false }
-```
-
-### With serde
-
-```toml
-[dependencies]
-elm-ast-rs = { version = "0.1", features = ["serde"] }
 ```
 
 ## AST types
@@ -128,7 +156,7 @@ counter.visit_module(&module);
 println!("{} function calls", counter.0);
 ```
 
-Three traversal traits are available:
+Three traversal traits:
 - **`Visit`** -- immutable traversal (`&` references)
 - **`VisitMut`** -- in-place mutation (`&mut` references)
 - **`Fold`** -- owned transformation (takes ownership, returns new tree)
@@ -153,32 +181,12 @@ println!("{m}"); // prints valid Elm
 
 ## Serde
 
-With the `serde` feature enabled, all AST types support JSON serialization:
+With the `serde` feature, all AST types support JSON serialization:
 
 ```rust
 let module = elm_ast_rs::parse(source).unwrap();
 let json = serde_json::to_string_pretty(&module).unwrap();
 let module2: elm_ast_rs::ElmModule = serde_json::from_str(&json).unwrap();
-```
-
-## Comment handling
-
-Comments are extracted from the token stream and can be associated with declarations:
-
-```rust
-use elm_ast_rs::{Lexer, parse};
-use elm_ast_rs::file::{extract_comments, associate_comments};
-
-let module = parse(source).unwrap();
-let (tokens, _) = Lexer::new(source).tokenize();
-let all_comments = extract_comments(&tokens);
-let per_decl = associate_comments(&module, &all_comments);
-
-for (i, comments) in per_decl.iter().enumerate() {
-    for c in comments {
-        println!("decl {i}: {c}");
-    }
-}
 ```
 
 ## Architecture
@@ -189,7 +197,25 @@ The design follows `syn`'s proven patterns:
 - **`Box<T>`** for recursive sub-expressions
 - **Feature-gated modules** for compile-time control
 
-The printer uses an approach inspired by `elm-format`: eagerly detect whether sub-expressions are multi-line, then switch containers (lists, tuples, applications) to vertical layout when any child is multi-line.
+The printer uses an approach inspired by [`elm-format`](https://github.com/avh4/elm-format): eagerly detect whether sub-expressions are multi-line, then switch containers to vertical layout when any child is multi-line.
+
+## Test coverage
+
+263 tests across the workspace:
+
+| Suite | Tests |
+|---|---|
+| Lexer | 59 |
+| Parser | 44 |
+| Printer | 42 |
+| Visitors | 14 |
+| Edge cases + serde + builders + comments | 43 |
+| Integration (149 real files, 23 packages) | 3 |
+| elm-unused | 5 |
+| elm-lint | 23 |
+| elm-deps | 8 |
+| elm-refactor | 6 |
+| elm-search | 15 |
 
 ## License
 
