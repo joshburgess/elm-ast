@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tools/elm-unused"]
+members = [".", "tools/elm-unused", "tools/elm-lint"]
 
 [package]
 name = "elm-ast-rs"
