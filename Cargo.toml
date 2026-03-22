@@ -1,0 +1,22 @@
+[package]
+name = "elm-ast-rs"
+version = "0.1.0"
+edition = "2024"
+description = "A syn-quality Rust library for parsing and constructing Elm 0.19.1 ASTs"
+license = "MIT OR Apache-2.0"
+keywords = ["elm", "ast", "parser", "syntax"]
+categories = ["parsing", "development-tools"]
+
+[features]
+default = ["full"]
+full = []
+parsing = []
+printing = []
+visit = []
+fold = []
+visit-mut = []
+extra-traits = []
+
+[dependencies]
+
+[dev-dependencies]

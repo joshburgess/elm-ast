@@ -1,0 +1,344 @@
+use crate::declaration::{CustomType, Declaration, InfixDef, TypeAlias, ValueConstructor};
+use crate::expr::{Function, FunctionImplementation, Signature};
+use crate::node::Spanned;
+use crate::operator::InfixDirection;
+use crate::token::Token;
+
+use super::expr::parse_expr;
+use super::pattern::parse_pattern;
+use super::type_annotation::parse_type;
+use super::{ParseResult, Parser};
+
+/// Parse a top-level declaration.
+pub fn parse_declaration(p: &mut Parser) -> ParseResult<Spanned<Declaration>> {
+    let start = p.current_pos();
+
+    // Collect an optional doc comment.
+    let doc = p.try_doc_comment();
+
+    p.skip_whitespace();
+
+    match p.peek().clone() {
+        // `type` — could be `type alias ...` or `type Foo = ...`
+        Token::Type => {
+            p.advance();
+            p.skip_whitespace();
+
+            if matches!(p.peek(), Token::Alias) {
+                p.advance();
+                let alias = parse_type_alias(p, doc)?;
+                Ok(p.spanned_from(start, Declaration::AliasDeclaration(alias)))
+            } else {
+                let custom = parse_custom_type(p, doc)?;
+                Ok(p.spanned_from(start, Declaration::CustomTypeDeclaration(custom)))
+            }
+        }
+
+        // `port` — port declaration
+        Token::Port => {
+            p.advance();
+            p.skip_whitespace();
+
+            // `port module` is handled at module level, not here.
+            // This is `port name : Type`
+            let sig = parse_signature(p)?;
+            Ok(p.spanned_from(start, Declaration::PortDeclaration(sig.value)))
+        }
+
+        // `infix` — infix declaration
+        Token::Infix => {
+            p.advance();
+            let infix = parse_infix_declaration(p)?;
+            Ok(p.spanned_from(start, Declaration::InfixDeclaration(infix)))
+        }
+
+        // Lowercase name — function definition or type signature + definition
+        Token::LowerName(_) => {
+            // Check if next token is `:` (type signature).
+            let next = p.peek_nth_past_whitespace(1);
+            if matches!(next, Token::Colon) {
+                let func = parse_function_with_signature(p, doc)?;
+                Ok(p.spanned_from(start, Declaration::FunctionDeclaration(Box::new(func))))
+            } else {
+                let func = parse_function_no_signature(p, doc)?;
+                Ok(p.spanned_from(start, Declaration::FunctionDeclaration(Box::new(func))))
+            }
+        }
+
+        // Pattern destructuring at the top level (rare)
+        _ if can_start_pattern(p.peek()) => {
+            let pattern = parse_pattern(p)?;
+            p.expect(&Token::Equals)?;
+            let body = parse_expr(p)?;
+            Ok(p.spanned_from(
+                start,
+                Declaration::Destructuring {
+                    pattern,
+                    body,
+                },
+            ))
+        }
+
+        _ => Err(p.error(format!(
+            "expected declaration, found {}",
+            super::describe(p.peek())
+        ))),
+    }
+}
+
+fn parse_signature(p: &mut Parser) -> ParseResult<Spanned<Signature>> {
+    let start = p.current_pos();
+    let name = p.expect_lower_name()?;
+    p.expect(&Token::Colon)?;
+    let type_annotation = parse_type(p)?;
+    Ok(p.spanned_from(
+        start,
+        Signature {
+            name,
+            type_annotation,
+        },
+    ))
+}
+
+fn parse_function_with_signature(
+    p: &mut Parser,
+    doc: Option<Spanned<String>>,
+) -> ParseResult<Function> {
+    let sig = parse_signature(p)?;
+
+    // Now parse the function implementation on the next line.
+    p.skip_whitespace();
+
+    let impl_start = p.current_pos();
+    let name = p.expect_lower_name()?;
+
+    let mut args = Vec::new();
+    loop {
+        p.skip_whitespace();
+        if matches!(p.peek(), Token::Equals) {
+            break;
+        }
+        if !can_start_pattern(p.peek()) {
+            break;
+        }
+        args.push(parse_pattern(p)?);
+    }
+
+    p.expect(&Token::Equals)?;
+    let body = parse_expr(p)?;
+
+    let implementation = FunctionImplementation { name, args, body };
+
+    Ok(Function {
+        documentation: doc,
+        signature: Some(sig),
+        declaration: p.spanned_from(impl_start, implementation),
+    })
+}
+
+fn parse_function_no_signature(
+    p: &mut Parser,
+    doc: Option<Spanned<String>>,
+) -> ParseResult<Function> {
+    let start = p.current_pos();
+    let name = p.expect_lower_name()?;
+
+    let mut args = Vec::new();
+    loop {
+        p.skip_whitespace();
+        if matches!(p.peek(), Token::Equals) {
+            break;
+        }
+        if !can_start_pattern(p.peek()) {
+            break;
+        }
+        args.push(parse_pattern(p)?);
+    }
+
+    p.expect(&Token::Equals)?;
+    let body = parse_expr(p)?;
+
+    let implementation = FunctionImplementation { name, args, body };
+
+    Ok(Function {
+        documentation: doc,
+        signature: None,
+        declaration: p.spanned_from(start, implementation),
+    })
+}
+
+fn parse_type_alias(
+    p: &mut Parser,
+    doc: Option<Spanned<String>>,
+) -> ParseResult<TypeAlias> {
+    let name = p.expect_upper_name()?;
+
+    // Parse generic type parameters.
+    let mut generics = Vec::new();
+    loop {
+        p.skip_whitespace();
+        if matches!(p.peek(), Token::Equals) {
+            break;
+        }
+        match p.peek().clone() {
+            Token::LowerName(var) => {
+                let tok = p.advance();
+                generics.push(Spanned::new(tok.span, var));
+            }
+            _ => break,
+        }
+    }
+
+    p.expect(&Token::Equals)?;
+    let type_annotation = parse_type(p)?;
+
+    Ok(TypeAlias {
+        documentation: doc,
+        name,
+        generics,
+        type_annotation,
+    })
+}
+
+fn parse_custom_type(
+    p: &mut Parser,
+    doc: Option<Spanned<String>>,
+) -> ParseResult<CustomType> {
+    let name = p.expect_upper_name()?;
+
+    // Parse generic type parameters.
+    let mut generics = Vec::new();
+    loop {
+        p.skip_whitespace();
+        if matches!(p.peek(), Token::Equals) {
+            break;
+        }
+        match p.peek().clone() {
+            Token::LowerName(var) => {
+                let tok = p.advance();
+                generics.push(Spanned::new(tok.span, var));
+            }
+            _ => break,
+        }
+    }
+
+    p.expect(&Token::Equals)?;
+
+    // Parse constructors separated by `|`.
+    let mut constructors = Vec::new();
+    constructors.push(parse_value_constructor(p)?);
+
+    while p.eat(&Token::Pipe) {
+        constructors.push(parse_value_constructor(p)?);
+    }
+
+    Ok(CustomType {
+        documentation: doc,
+        name,
+        generics,
+        constructors,
+    })
+}
+
+fn parse_value_constructor(p: &mut Parser) -> ParseResult<Spanned<ValueConstructor>> {
+    let start = p.current_pos();
+    let name = p.expect_upper_name()?;
+
+    // Parse constructor argument types (atomic types only).
+    let mut args = Vec::new();
+    loop {
+        p.skip_whitespace();
+        if !can_start_atomic_type(p.peek()) {
+            break;
+        }
+        // Stop at `|` (next constructor) or tokens that end the type def.
+        if matches!(p.peek(), Token::Pipe) {
+            break;
+        }
+        // Arguments must be on the same line or indented past the constructor name.
+        if p.current_column() <= name.span.start.column
+            && p.current_pos().line != name.span.start.line
+        {
+            break;
+        }
+        args.push(super::type_annotation::parse_type_atomic_public(p)?);
+    }
+
+    Ok(p.spanned_from(start, ValueConstructor { name, args }))
+}
+
+fn parse_infix_declaration(p: &mut Parser) -> ParseResult<InfixDef> {
+    p.skip_whitespace();
+    let dir_start = p.current_pos();
+    let direction = match p.peek() {
+        Token::Left => {
+            p.advance();
+            Spanned::new(p.span_from(dir_start), InfixDirection::Left)
+        }
+        Token::Right => {
+            p.advance();
+            Spanned::new(p.span_from(dir_start), InfixDirection::Right)
+        }
+        Token::Non => {
+            p.advance();
+            Spanned::new(p.span_from(dir_start), InfixDirection::Non)
+        }
+        _ => return Err(p.error("expected `left`, `right`, or `non` in infix declaration")),
+    };
+
+    p.skip_whitespace();
+    let prec_start = p.current_pos();
+    let precedence = match p.peek().clone() {
+        Token::Literal(crate::literal::Literal::Int(n)) => {
+            p.advance();
+            Spanned::new(p.span_from(prec_start), n as u8)
+        }
+        _ => return Err(p.error("expected precedence number in infix declaration")),
+    };
+
+    p.expect(&Token::LeftParen)?;
+    p.skip_whitespace();
+    let op_start = p.current_pos();
+    let operator = match p.peek().clone() {
+        Token::Operator(op) => {
+            p.advance();
+            Spanned::new(p.span_from(op_start), op)
+        }
+        _ => return Err(p.error("expected operator in infix declaration")),
+    };
+    p.expect(&Token::RightParen)?;
+
+    p.expect(&Token::Equals)?;
+    let function = p.expect_lower_name()?;
+
+    Ok(InfixDef {
+        direction,
+        precedence,
+        operator,
+        function,
+    })
+}
+
+fn can_start_pattern(tok: &Token) -> bool {
+    matches!(
+        tok,
+        Token::Underscore
+            | Token::LowerName(_)
+            | Token::UpperName(_)
+            | Token::Literal(_)
+            | Token::Minus
+            | Token::LeftParen
+            | Token::LeftBrace
+            | Token::LeftBracket
+    )
+}
+
+fn can_start_atomic_type(tok: &Token) -> bool {
+    matches!(
+        tok,
+        Token::LowerName(_)
+            | Token::UpperName(_)
+            | Token::LeftParen
+            | Token::LeftBrace
+    )
+}
