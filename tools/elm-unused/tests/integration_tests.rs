@@ -141,3 +141,119 @@ fn analyze_no_crash_on_all_fixtures() {
         findings.len()
     );
 }
+
+/// Analysis should find real unused code across packages.
+/// Individual packages analyzed in isolation will have "unused imports" for
+/// external dependencies they import (since those modules aren't in the
+/// analysis set). This validates that findings are produced and categorized.
+#[test]
+fn analyze_finds_findings_per_package() {
+    use elm_unused::analyze::FindingKind;
+
+    // Analyze elm/core in isolation — should find findings.
+    let mut modules = HashMap::new();
+    for file in find_elm_files("../../test-fixtures/core/src") {
+        let source = match fs::read_to_string(&file) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let module = match parse(&source) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let info = collect_module_info(&module);
+        let mod_name = info.module_name.join(".");
+        modules.insert(mod_name, info);
+    }
+
+    let findings = elm_unused::analyze::analyze(&modules);
+
+    // elm/core should have some findings when analyzed in isolation.
+    assert!(
+        !findings.is_empty(),
+        "elm/core should produce findings when analyzed in isolation"
+    );
+
+    // Verify findings have all the expected fields populated.
+    for f in &findings {
+        assert!(!f.module_name.is_empty(), "finding should have a module name");
+        assert!(!f.name.is_empty(), "finding should have a name");
+    }
+
+    // Verify multiple finding kinds are represented across all fixtures.
+    let mut modules = HashMap::new();
+    for dir in all_fixture_dirs() {
+        for file in find_elm_files(dir) {
+            let source = match fs::read_to_string(&file) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let module = match parse(&source) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let info = collect_module_info(&module);
+            let mod_name = info.module_name.join(".");
+            modules.insert(mod_name, info);
+        }
+    }
+
+    let findings = elm_unused::analyze::analyze(&modules);
+
+    // With 291 files from 50 packages, we should see at least unused imports
+    // (since not all packages are present as dependencies).
+    let has_unused_import = findings.iter().any(|f| f.kind == FindingKind::UnusedImport);
+    assert!(
+        has_unused_import,
+        "should find unused imports across the full corpus"
+    );
+
+    // Count findings by kind label.
+    let mut kind_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for f in &findings {
+        *kind_counts.entry(f.kind.label()).or_default() += 1;
+    }
+
+    eprintln!("Finding kinds found: {}", kind_counts.len());
+    for (kind, count) in &kind_counts {
+        eprintln!("  {}: {}", kind, count);
+    }
+}
+
+/// collect_module_info should extract definitions and references correctly.
+#[test]
+fn collect_extracts_definitions_and_references() {
+    // elm/core's List module should have well-known definitions.
+    let source = fs::read_to_string("../../test-fixtures/core/src/List.elm")
+        .expect("List.elm should exist");
+    let module = parse(&source).expect("List.elm should parse");
+    let info = collect_module_info(&module);
+
+    assert_eq!(info.module_name, vec!["List"]);
+
+    // List module defines well-known functions.
+    assert!(
+        info.defined_values.contains("map"),
+        "List should define 'map'"
+    );
+    assert!(
+        info.defined_values.contains("filter"),
+        "List should define 'filter'"
+    );
+    assert!(
+        info.defined_values.contains("foldl"),
+        "List should define 'foldl'"
+    );
+
+    // Should have imports.
+    assert!(
+        !info.imports.is_empty(),
+        "List module should have imports"
+    );
+
+    // Should have used values (references to other functions).
+    assert!(
+        !info.used_values.is_empty(),
+        "List module should reference other values"
+    );
+}

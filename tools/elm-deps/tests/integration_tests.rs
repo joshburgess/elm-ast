@@ -82,11 +82,8 @@ fn all_fixture_dirs() -> Vec<&'static str> {
     ]
 }
 
-/// build_graph and find_cycles should not panic on real-world module graphs.
-#[test]
-fn graph_no_crash_on_all_fixtures() {
-    let mut modules: Vec<(String, Vec<String>)> = Vec::new();
-
+fn parse_all_modules() -> Vec<(String, Vec<String>)> {
+    let mut modules = Vec::new();
     for dir in all_fixture_dirs() {
         for file in find_elm_files(dir) {
             let source = match fs::read_to_string(&file) {
@@ -111,10 +108,15 @@ fn graph_no_crash_on_all_fixtures() {
             modules.push((mod_name, imports));
         }
     }
+    modules
+}
 
+/// build_graph and find_cycles should not panic on real-world module graphs.
+#[test]
+fn graph_no_crash_on_all_fixtures() {
+    let modules = parse_all_modules();
     assert!(!modules.is_empty(), "no modules found in fixtures");
 
-    // Should not panic.
     let (graph, _project_modules) = build_graph(&modules);
     let cycles = find_cycles(&graph);
 
@@ -124,4 +126,96 @@ fn graph_no_crash_on_all_fixtures() {
         graph.values().map(|v| v.len()).sum::<usize>(),
         cycles.len()
     );
+}
+
+/// build_graph should correctly identify internal vs external dependencies.
+#[test]
+fn graph_filters_external_deps() {
+    let modules = parse_all_modules();
+    let (graph, project_modules) = build_graph(&modules);
+
+    // All graph keys should be project modules.
+    for key in graph.keys() {
+        assert!(
+            project_modules.contains(*key),
+            "graph key '{key}' should be a project module"
+        );
+    }
+
+    // All graph edges should point to project modules only.
+    for (module, deps) in &graph {
+        for dep in deps {
+            assert!(
+                project_modules.contains(*dep),
+                "'{module}' -> '{dep}': dependency should be a project module"
+            );
+        }
+    }
+
+    // Graph should have internal edges (modules importing each other).
+    let total_edges: usize = graph.values().map(|v| v.len()).sum();
+    assert!(
+        total_edges > 0,
+        "graph should have internal edges between project modules"
+    );
+
+    eprintln!(
+        "{} modules, {} internal edges (external deps filtered out)",
+        graph.len(),
+        total_edges
+    );
+}
+
+/// Known dependency relationships in elm/core should be present.
+#[test]
+fn graph_elm_core_known_deps() {
+    // Parse just elm/core.
+    let mut modules = Vec::new();
+    for file in find_elm_files("../../test-fixtures/core/src") {
+        let source = match fs::read_to_string(&file) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let module = match parse(&source) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let mod_name = match &module.header.value {
+            ModuleHeader::Normal { name, .. }
+            | ModuleHeader::Port { name, .. }
+            | ModuleHeader::Effect { name, .. } => name.value.join("."),
+        };
+        let imports: Vec<String> = module
+            .imports
+            .iter()
+            .map(|imp| imp.value.module_name.value.join("."))
+            .collect();
+        modules.push((mod_name, imports));
+    }
+
+    let (graph, project_modules) = build_graph(&modules);
+
+    // elm/core should have well-known modules.
+    assert!(project_modules.contains("List"), "should contain List");
+    assert!(project_modules.contains("Maybe"), "should contain Maybe");
+    assert!(project_modules.contains("String"), "should contain String");
+    assert!(project_modules.contains("Dict"), "should contain Dict");
+
+    // Dict imports List (for toList, fromList, etc.)
+    if let Some(deps) = graph.get("Dict") {
+        assert!(
+            deps.contains(&"List"),
+            "Dict should depend on List, got: {:?}",
+            deps
+        );
+    }
+
+    // Leaf modules: Basics should have no internal deps (it's the foundation).
+    if let Some(deps) = graph.get("Basics") {
+        assert!(
+            deps.is_empty(),
+            "Basics should have no internal deps, got: {:?}",
+            deps
+        );
+    }
 }

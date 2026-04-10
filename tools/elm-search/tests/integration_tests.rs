@@ -100,27 +100,37 @@ fn search_fixtures(query_str: &str) -> usize {
     total
 }
 
-/// All query types should run without panicking on real files.
+/// Every query type should find at least one result across the full corpus.
+/// This proves all 10 search capabilities work on real code, not just synthetic snippets.
 #[test]
-fn all_queries_no_crash() {
+fn every_query_type_finds_results() {
     let queries = [
-        "returns Maybe",
-        "type Int",
-        "case-on Just",
-        "update .name",
-        "calls Dict",
-        "unused-args",
-        "lambda 2",
-        "uses map",
-        "def get",
-        "expr case",
+        ("returns Maybe", "functions returning Maybe"),
+        ("type Int", "functions using Int in their signature"),
+        ("case-on Just", "case expressions matching Just"),
+        ("update .props", "record updates touching .props"),
+        ("calls Dict", "qualified calls to Dict"),
+        ("unused-args", "functions with unused arguments"),
+        ("lambda 2", "lambdas with 2+ arguments"),
+        ("uses map", "functions using 'map'"),
+        ("def get", "top-level definitions matching 'get'"),
+        ("expr case", "case expressions"),
     ];
 
-    for q in &queries {
-        let count = search_fixtures(q);
-        // Just verify no panic. Some may have 0 results.
-        let _ = count;
+    let mut missing = Vec::new();
+    for (query, description) in &queries {
+        let count = search_fixtures(query);
+        if count == 0 {
+            missing.push(format!("{query} ({description})"));
+        }
+        eprintln!("  {query}: {count} matches");
     }
+
+    assert!(
+        missing.is_empty(),
+        "these query types found 0 results across 291 real files:\n  {}",
+        missing.join("\n  ")
+    );
 }
 
 #[test]
