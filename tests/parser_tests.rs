@@ -1019,16 +1019,14 @@ module Main exposing (..)
 ";
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
-        Declaration::Destructuring { pattern, .. } => {
-            match &pattern.value {
-                Pattern::Record(fields) => {
-                    assert_eq!(fields.len(), 2);
-                    assert_eq!(v(&fields[0]), "name");
-                    assert_eq!(v(&fields[1]), "age");
-                }
-                _ => panic!("expected Record pattern"),
+        Declaration::Destructuring { pattern, .. } => match &pattern.value {
+            Pattern::Record(fields) => {
+                assert_eq!(fields.len(), 2);
+                assert_eq!(v(&fields[0]), "name");
+                assert_eq!(v(&fields[1]), "age");
             }
-        }
+            _ => panic!("expected Record pattern"),
+        },
         _ => panic!("expected Destructuring"),
     }
 }
@@ -1108,9 +1106,11 @@ fn glsl_lexer_token() {
     let lexer = elm_ast::Lexer::new("[glsl| some shader code |]");
     let (tokens, errors) = lexer.tokenize();
     assert!(errors.is_empty(), "unexpected lex errors: {errors:?}");
-    assert!(tokens
-        .iter()
-        .any(|t| matches!(&t.value, elm_ast::Token::Glsl(_))));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(&t.value, elm_ast::Token::Glsl(_)))
+    );
 }
 
 // ── Error cases ──────────────────────────────────────────────────────
@@ -1287,6 +1287,862 @@ z = 3
     assert!(
         module.declarations.len() >= 2,
         "should recover at least 2 declarations, got {}",
+        module.declarations.len()
+    );
+}
+
+// ── Parenthesized expressions ────────────────────────────────────────
+
+#[test]
+fn parenthesized_expression() {
+    let src = "\
+module Main exposing (..)
+
+x = (42)
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => {
+            assert!(matches!(
+                &func.declaration.value.body.value,
+                Expr::Parenthesized(inner) if matches!(&inner.value, Expr::Literal(Literal::Int(42)))
+            ));
+        }
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn nested_parenthesized_expression() {
+    let src = "\
+module Main exposing (..)
+
+x = ((1 + 2))
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => {
+            assert!(matches!(
+                &func.declaration.value.body.value,
+                Expr::Parenthesized(_)
+            ));
+        }
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn parens_override_precedence() {
+    // (1 + 2) * 3  should parse as  (1 + 2) * 3, not 1 + (2 * 3)
+    let src = "\
+module Main exposing (..)
+
+x = (1 + 2) * 3
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::OperatorApplication { operator, left, .. } => {
+                assert_eq!(operator, "*");
+                assert!(matches!(&left.value, Expr::Parenthesized(_)));
+            }
+            other => panic!("expected OperatorApplication, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+// ── Application edge cases ───────────────────────────────────────────
+
+#[test]
+fn single_arg_application() {
+    let src = "\
+module Main exposing (..)
+
+x = negate 5
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::Application(args) => assert_eq!(args.len(), 2),
+            other => panic!("expected Application, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn many_arg_application() {
+    let src = "\
+module Main exposing (..)
+
+x = f a b c d e
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::Application(args) => assert_eq!(args.len(), 6),
+            other => panic!("expected Application, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn application_with_complex_args() {
+    let src = "\
+module Main exposing (..)
+
+x = f (a + b) [1, 2] { name = \"hi\" }
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::Application(args) => {
+                assert_eq!(args.len(), 4);
+                assert!(matches!(&args[1].value, Expr::Parenthesized(_)));
+                assert!(matches!(&args[2].value, Expr::List(_)));
+                assert!(matches!(&args[3].value, Expr::Record(_)));
+            }
+            other => panic!("expected Application, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+// ── Tuple edge cases ─────────────────────────────────────────────────
+
+#[test]
+fn three_element_tuple() {
+    let src = "\
+module Main exposing (..)
+
+x = ( 1, \"hello\", True )
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::Tuple(elems) => assert_eq!(elems.len(), 3),
+            other => panic!("expected Tuple, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn nested_tuples() {
+    let src = "\
+module Main exposing (..)
+
+x = ( (1, 2), (3, 4) )
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::Tuple(elems) => {
+                assert_eq!(elems.len(), 2);
+                assert!(matches!(&elems[0].value, Expr::Tuple(_)));
+                assert!(matches!(&elems[1].value, Expr::Tuple(_)));
+            }
+            other => panic!("expected Tuple, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+// ── Prefix operators ─────────────────────────────────────────────────
+
+#[test]
+fn prefix_operators_all() {
+    for op in &[
+        "+", "-", "*", "/", "//", "++", "::", "&&", "||", "==", "/=", "<", ">", "<=", ">=", "^",
+        "|>", "<|", ">>", "<<",
+    ] {
+        let src = format!("module Main exposing (..)\n\nx = ({op})");
+        let m = parse_ok(&src);
+        match v(&m.declarations[0]) {
+            Declaration::FunctionDeclaration(func) => {
+                assert!(
+                    matches!(&func.declaration.value.body.value, Expr::PrefixOperator(o) if o == op),
+                    "failed for operator {op}"
+                );
+            }
+            _ => panic!("expected FunctionDeclaration for {op}"),
+        }
+    }
+}
+
+// ── Record access ────────────────────────────────────────────────────
+
+#[test]
+fn record_access_function() {
+    let src = "\
+module Main exposing (..)
+
+x = .name
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => {
+            assert!(matches!(
+                &func.declaration.value.body.value,
+                Expr::RecordAccessFunction(n) if n == "name"
+            ));
+        }
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn record_access_chain() {
+    let src = "\
+module Main exposing (..)
+
+x = model.user.name
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::RecordAccess { record, field } => {
+                assert_eq!(&field.value, "name");
+                assert!(
+                    matches!(&record.value, Expr::RecordAccess { field, .. } if field.value == "user")
+                );
+            }
+            other => panic!("expected RecordAccess, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn record_access_on_function_result() {
+    let src = "\
+module Main exposing (..)
+
+x = (getModel ()).name
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => {
+            assert!(matches!(
+                &func.declaration.value.body.value,
+                Expr::RecordAccess { .. }
+            ));
+        }
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+// ── Operator precedence and associativity ────────────────────────────
+
+#[test]
+fn boolean_operator_precedence() {
+    // a || b && c  should parse as  a || (b && c) because && binds tighter
+    let src = "\
+module Main exposing (..)
+
+x = a || b && c
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::OperatorApplication {
+                operator, right, ..
+            } => {
+                assert_eq!(operator, "||");
+                assert!(
+                    matches!(&right.value, Expr::OperatorApplication { operator, .. } if operator == "&&")
+                );
+            }
+            other => panic!("expected OperatorApplication, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn right_associative_cons() {
+    // 1 :: 2 :: []  should parse as  1 :: (2 :: [])
+    let src = "\
+module Main exposing (..)
+
+x = 1 :: 2 :: []
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::OperatorApplication {
+                operator,
+                left,
+                right,
+                ..
+            } => {
+                assert_eq!(operator, "::");
+                assert!(matches!(&left.value, Expr::Literal(Literal::Int(1))));
+                assert!(
+                    matches!(&right.value, Expr::OperatorApplication { operator, .. } if operator == "::")
+                );
+            }
+            other => panic!("expected OperatorApplication, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn right_associative_pipe_left() {
+    // f <| g <| x  should parse as  f <| (g <| x)
+    let src = "\
+module Main exposing (..)
+
+x = f <| g <| h
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::OperatorApplication {
+                operator, right, ..
+            } => {
+                assert_eq!(operator, "<|");
+                assert!(
+                    matches!(&right.value, Expr::OperatorApplication { operator, .. } if operator == "<|")
+                );
+            }
+            other => panic!("expected OperatorApplication, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn append_with_arithmetic() {
+    // a ++ b ++ c  is right-assoc: a ++ (b ++ c)
+    let src = "\
+module Main exposing (..)
+
+x = a ++ b ++ c
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::OperatorApplication {
+                operator, right, ..
+            } => {
+                assert_eq!(operator, "++");
+                assert!(
+                    matches!(&right.value, Expr::OperatorApplication { operator, .. } if operator == "++")
+                );
+            }
+            other => panic!("expected OperatorApplication, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn mixed_arithmetic_and_comparison() {
+    // a + b == c * d  should be  (a + b) == (c * d)
+    let src = "\
+module Main exposing (..)
+
+x = a + b == c * d
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::OperatorApplication {
+                operator,
+                left,
+                right,
+                ..
+            } => {
+                assert_eq!(operator, "==");
+                assert!(
+                    matches!(&left.value, Expr::OperatorApplication { operator, .. } if operator == "+")
+                );
+                assert!(
+                    matches!(&right.value, Expr::OperatorApplication { operator, .. } if operator == "*")
+                );
+            }
+            other => panic!("expected OperatorApplication, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+// ── Qualified values ─────────────────────────────────────────────────
+
+#[test]
+fn deeply_qualified_value() {
+    let src = "\
+module Main exposing (..)
+
+x = A.B.C.func
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::FunctionOrValue { module_name, name } => {
+                assert_eq!(module_name, &vec!["A", "B", "C"]);
+                assert_eq!(name, "func");
+            }
+            other => panic!("expected FunctionOrValue, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+// ── Pattern edge cases ───────────────────────────────────────────────
+
+#[test]
+fn string_literal_pattern() {
+    let src = "\
+module Main exposing (..)
+
+x s =
+    case s of
+        \"hello\" -> 1
+        _ -> 0
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::CaseOf { branches, .. } => {
+                assert!(matches!(
+                    &branches[0].pattern.value,
+                    Pattern::Literal(Literal::String(s)) if s == "hello"
+                ));
+            }
+            other => panic!("expected CaseOf, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn char_literal_pattern() {
+    let src = "\
+module Main exposing (..)
+
+x c =
+    case c of
+        'a' -> 1
+        _ -> 0
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::CaseOf { branches, .. } => {
+                assert!(matches!(
+                    &branches[0].pattern.value,
+                    Pattern::Literal(Literal::Char('a'))
+                ));
+            }
+            other => panic!("expected CaseOf, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn list_pattern() {
+    let src = "\
+module Main exposing (..)
+
+x xs =
+    case xs of
+        [ a, b, c ] -> a
+        _ -> 0
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::CaseOf { branches, .. } => {
+                assert!(
+                    matches!(&branches[0].pattern.value, Pattern::List(elems) if elems.len() == 3)
+                );
+            }
+            other => panic!("expected CaseOf, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn as_pattern() {
+    let src = "\
+module Main exposing (..)
+
+x y =
+    case y of
+        (Just v) as original -> original
+        _ -> Nothing
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::CaseOf { branches, .. } => {
+                assert!(matches!(&branches[0].pattern.value, Pattern::As { .. }));
+            }
+            other => panic!("expected CaseOf, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn hex_pattern() {
+    let src = "\
+module Main exposing (..)
+
+x n =
+    case n of
+        0xFF -> True
+        _ -> False
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::CaseOf { branches, .. } => {
+                assert!(matches!(&branches[0].pattern.value, Pattern::Hex(255)));
+            }
+            other => panic!("expected CaseOf, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn cons_pattern() {
+    let src = "\
+module Main exposing (..)
+
+x xs =
+    case xs of
+        head :: tail -> head
+        [] -> 0
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::CaseOf { branches, .. } => {
+                assert!(matches!(&branches[0].pattern.value, Pattern::Cons { .. }));
+            }
+            other => panic!("expected CaseOf, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn unit_pattern() {
+    let src = "\
+module Main exposing (..)
+
+x y =
+    case y of
+        () -> True
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::CaseOf { branches, .. } => {
+                assert!(matches!(&branches[0].pattern.value, Pattern::Unit));
+            }
+            other => panic!("expected CaseOf, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+// ── Type annotation edge cases ───────────────────────────────────────
+
+#[test]
+fn generic_type_variable() {
+    let src = "\
+module Main exposing (..)
+
+identity : a -> a
+identity x = x
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => {
+            let sig = func.signature.as_ref().unwrap();
+            match &sig.value.type_annotation.value {
+                TypeAnnotation::FunctionType { from, to } => {
+                    assert!(matches!(&from.value, TypeAnnotation::GenericType(n) if n == "a"));
+                    assert!(matches!(&to.value, TypeAnnotation::GenericType(n) if n == "a"));
+                }
+                other => panic!("expected FunctionType, got {other:?}"),
+            }
+        }
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn unit_type() {
+    let src = "\
+module Main exposing (..)
+
+x : ()
+x = ()
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => {
+            let sig = func.signature.as_ref().unwrap();
+            assert!(matches!(
+                &sig.value.type_annotation.value,
+                TypeAnnotation::Unit
+            ));
+        }
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn three_element_tuple_type() {
+    let src = "\
+module Main exposing (..)
+
+x : ( Int, String, Bool )
+x = ( 1, \"hi\", True )
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => {
+            let sig = func.signature.as_ref().unwrap();
+            assert!(matches!(
+                &sig.value.type_annotation.value,
+                TypeAnnotation::Tupled(elems) if elems.len() == 3
+            ));
+        }
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn generic_record_type_in_function_signature() {
+    let src = "\
+module Main exposing (..)
+
+getName : { a | name : String } -> String
+getName r = r.name
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => {
+            let sig = func.signature.as_ref().unwrap();
+            match &sig.value.type_annotation.value {
+                TypeAnnotation::FunctionType { from, .. } => {
+                    assert!(matches!(
+                        &from.value,
+                        TypeAnnotation::GenericRecord { base, fields }
+                        if base.value == "a" && fields.len() == 1
+                    ));
+                }
+                other => panic!("expected FunctionType, got {other:?}"),
+            }
+        }
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+// ── Case edge cases ──────────────────────────────────────────────────
+
+#[test]
+fn single_branch_case() {
+    let src = "\
+module Main exposing (..)
+
+x y =
+    case y of
+        _ -> 42
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::CaseOf { branches, .. } => assert_eq!(branches.len(), 1),
+            other => panic!("expected CaseOf, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn many_branch_case() {
+    let mut src = String::from("module Main exposing (..)\n\nx n =\n    case n of\n");
+    for i in 0..15 {
+        src.push_str(&format!("        {} -> {}\n", i, i * 10));
+    }
+    src.push_str("        _ -> -1\n");
+    let m = parse_ok(&src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::CaseOf { branches, .. } => assert_eq!(branches.len(), 16),
+            other => panic!("expected CaseOf, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+// ── Let expression edge cases ────────────────────────────────────────
+
+#[test]
+fn let_with_type_signature() {
+    let src = "\
+module Main exposing (..)
+
+x =
+    let
+        add : Int -> Int -> Int
+        add a b = a + b
+    in
+    add 1 2
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::LetIn { declarations, .. } => {
+                assert_eq!(declarations.len(), 1);
+            }
+            other => panic!("expected LetIn, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn let_destructuring() {
+    let src = "\
+module Main exposing (..)
+
+x =
+    let
+        ( a, b ) = (1, 2)
+    in
+    a + b
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::LetIn { declarations, .. } => {
+                assert!(matches!(
+                    &declarations[0].value,
+                    elm_ast::expr::LetDeclaration::Destructuring { .. }
+                ));
+            }
+            other => panic!("expected LetIn, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn let_multiple_declarations() {
+    let src = "\
+module Main exposing (..)
+
+x =
+    let
+        a = 1
+        b = 2
+        c = 3
+        d = 4
+    in
+    a + b + c + d
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::LetIn { declarations, .. } => assert_eq!(declarations.len(), 4),
+            other => panic!("expected LetIn, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+// ── Lambda edge cases ────────────────────────────────────────────────
+
+#[test]
+fn single_arg_lambda() {
+    let src = "\
+module Main exposing (..)
+
+x = \\a -> a
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::Lambda { args, .. } => assert_eq!(args.len(), 1),
+            other => panic!("expected Lambda, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn multi_arg_lambda() {
+    let src = "\
+module Main exposing (..)
+
+x = \\a b c d -> a + b + c + d
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::Lambda { args, .. } => assert_eq!(args.len(), 4),
+            other => panic!("expected Lambda, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+// ── Error recovery edge cases ────────────────────────────────────────
+
+#[test]
+fn error_recovery_multiple_bad_declarations() {
+    let src = "\
+module Main exposing (..)
+
+a = 1
+
+b = if then
+
+c = case of
+
+d = 4
+";
+    let (maybe_module, errors) = elm_ast::parse_recovering(src);
+    assert!(errors.len() >= 2);
+    let module = maybe_module.expect("should have partial module");
+    assert!(
+        module.declarations.len() >= 2,
+        "should recover at least a and d, got {}",
+        module.declarations.len()
+    );
+}
+
+#[test]
+fn error_recovery_bad_first_declaration() {
+    let src = "\
+module Main exposing (..)
+
+a = if then
+
+b = 2
+
+c = 3
+";
+    let (maybe_module, errors) = elm_ast::parse_recovering(src);
+    assert!(!errors.is_empty());
+    let module = maybe_module.expect("should have partial module");
+    assert!(
+        module.declarations.len() >= 2,
+        "should recover b and c, got {}",
         module.declarations.len()
     );
 }

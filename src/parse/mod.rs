@@ -35,6 +35,13 @@ pub type ParseResult<T> = Result<T, ParseError>;
 /// The parser follows elm/compiler's approach to indentation: it tracks
 /// indentation context using token column positions rather than virtual
 /// INDENT/DEDENT tokens.
+/// Maximum expression nesting depth. Limits the size of the continuation
+/// stack in the iterative (CPS/trampoline) expression parser to prevent
+/// pathological input from consuming unbounded heap memory. Real Elm files
+/// rarely exceed 10–15 levels. Set high because the iterative parser has
+/// no stack-overflow risk — this is purely a resource-usage guard.
+pub(crate) const MAX_EXPR_DEPTH: usize = 256;
+
 pub struct Parser {
     tokens: Vec<Spanned<Token>>,
     pos: usize,
@@ -42,6 +49,12 @@ pub struct Parser {
     /// indentation-sensitive layout rules are suspended (any column is valid).
     /// This matches the elm/compiler behavior.
     paren_depth: u32,
+    /// When set, `application_loop` uses this column instead of the function's
+    /// column for continuation checks. Set by list/record parsers (to the
+    /// opening bracket's column) so that function arguments at any column past
+    /// the bracket are collected. Cleared by case/let parsers before parsing
+    /// branch/declaration bodies so that normal column checking resumes.
+    pub(crate) app_context_col: Option<u32>,
     /// Comments collected as a side-channel during parsing.
     /// `skip_whitespace` saves comments here instead of silently discarding them,
     /// so that `parse_module` can include them in the final AST.
@@ -55,12 +68,19 @@ impl Parser {
             tokens,
             pos: 0,
             paren_depth: 0,
+            app_context_col: None,
             collected_comments: Vec::new(),
         }
     }
 
     /// Drain all comments collected so far by `skip_whitespace`.
     pub fn drain_comments(&mut self) -> Vec<Spanned<Comment>> {
+        std::mem::take(&mut self.collected_comments)
+    }
+
+    /// Take all comments collected since the last take,
+    /// returning them for attachment to an AST node.
+    pub fn take_pending_comments(&mut self) -> Vec<Spanned<Comment>> {
         std::mem::take(&mut self.collected_comments)
     }
 

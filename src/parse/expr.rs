@@ -3,28 +3,112 @@ use crate::expr::{
 };
 use crate::node::Spanned;
 use crate::operator::InfixDirection;
+use crate::span::{Position, Span};
 use crate::token::Token;
 
 use super::pattern::parse_pattern;
 use super::type_annotation::parse_type;
 use super::{ParseResult, Parser};
 
-/// Parse an expression.
-///
-/// This is the top-level expression parser. It handles binary operators
-/// with Pratt parsing.
-pub fn parse_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
-    parse_binary_expr(p, 0)
+// ── CPS types ────────────────────────────────────────────────────────
+
+/// A boxed continuation: given the parser and a completed sub-expression,
+/// produce the next step.
+type Cont = Box<dyn FnOnce(&mut Parser, Spanned<Expr>) -> ParseResult<Step>>;
+
+/// A step in the CPS trampoline. Either we have a finished expression,
+/// or we need a sub-expression and have a continuation to resume with.
+enum Step {
+    Done(Spanned<Expr>),
+    NeedExpr(Cont),
 }
 
-/// Pratt parser for binary operators.
-///
-/// Elm's operators have precedences 0–9. We use the standard Pratt technique
-/// where `min_bp` is the minimum binding power (precedence) for this call.
-fn parse_binary_expr(p: &mut Parser, min_bp: u8) -> ParseResult<Spanned<Expr>> {
-    let start = p.current_pos();
-    let mut left = parse_unary_expr(p)?;
+// ── Helper structs ───────────────────────────────────────────────────
 
+struct PendingOp {
+    left: Spanned<Expr>,
+    op: String,
+    assoc: InfixDirection,
+    right_bp: u8,
+}
+
+struct IfBranch {
+    start: Position,
+    condition: Spanned<Expr>,
+    then_branch: Spanned<Expr>,
+}
+
+enum RecordContext {
+    Plain,
+    Update(Spanned<String>),
+}
+
+// ── Trampoline ───────────────────────────────────────────────────────
+
+/// Parse an expression.
+///
+/// Uses a CPS (continuation-passing style) trampoline to eliminate all
+/// recursion. Every compound expression (if, case, let, lambda, paren,
+/// list, record) that would normally call `parse_expr` recursively
+/// instead returns a `Step::NeedExpr(continuation)`. The trampoline
+/// pushes the continuation onto a heap-allocated stack and loops back
+/// to parse the sub-expression from scratch. When a sub-expression
+/// completes, the trampoline pops and invokes the continuation.
+///
+/// This guarantees O(1) call-stack depth regardless of expression
+/// nesting. The continuation stack size is bounded by `MAX_EXPR_DEPTH`.
+pub fn parse_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
+    let mut stack: Vec<Cont> = Vec::new();
+
+    'outer: loop {
+        let step = parse_binary_expr_cps(p)?;
+        let mut current = step;
+
+        loop {
+            match current {
+                Step::NeedExpr(cont) => {
+                    if stack.len() >= super::MAX_EXPR_DEPTH {
+                        return Err(p.error(format!(
+                            "expression nesting too deep (limit: {})",
+                            super::MAX_EXPR_DEPTH
+                        )));
+                    }
+                    stack.push(cont);
+                    continue 'outer;
+                }
+                Step::Done(expr) => match stack.pop() {
+                    None => return Ok(expr),
+                    Some(cont) => {
+                        current = cont(p, expr)?;
+                    }
+                },
+            }
+        }
+    }
+}
+
+// ── Binary operator chain (iterative Pratt parser) ───────────────────
+
+/// Start parsing a binary expression. Returns `Step::Done` if the full
+/// expression was parsed without encountering a compound sub-expression,
+/// or `Step::NeedExpr` if a compound form needs a sub-expression first.
+fn parse_binary_expr_cps(p: &mut Parser) -> ParseResult<Step> {
+    let step = parse_unary_expr_cps(p)?;
+    match step {
+        Step::Done(left) => binary_loop(p, Vec::new(), left),
+        Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
+            let step = cont(p, sub_expr)?;
+            binary_after_operand(p, step, Vec::new())
+        }))),
+    }
+}
+
+/// Continue the Pratt loop with a completed operand.
+fn binary_loop(
+    p: &mut Parser,
+    mut pending: Vec<PendingOp>,
+    mut left: Spanned<Expr>,
+) -> ParseResult<Step> {
     loop {
         p.skip_whitespace();
 
@@ -34,25 +118,74 @@ fn parse_binary_expr(p: &mut Parser, min_bp: u8) -> ParseResult<Spanned<Expr>> {
         };
 
         let (left_bp, right_bp) = binding_power(prec, &assoc);
-        if left_bp < min_bp {
-            break;
+
+        // Fold pending operators whose right operand is now complete.
+        while let Some(top) = pending.last() {
+            if top.right_bp > left_bp {
+                let top = pending.pop().unwrap();
+                let start = top.left.span.start;
+                let expr = Expr::OperatorApplication {
+                    operator: top.op,
+                    direction: top.assoc,
+                    left: Box::new(top.left),
+                    right: Box::new(left),
+                };
+                left = p.spanned_from(start, expr);
+            } else {
+                break;
+            }
         }
 
         p.advance(); // consume the operator token
 
-        let right = parse_binary_expr(p, right_bp)?;
+        pending.push(PendingOp {
+            left,
+            op,
+            assoc,
+            right_bp,
+        });
 
+        let step = parse_unary_expr_cps(p)?;
+        match step {
+            Step::Done(expr) => {
+                left = expr;
+            }
+            Step::NeedExpr(cont) => {
+                return Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
+                    let step = cont(p, sub_expr)?;
+                    binary_after_operand(p, step, pending)
+                })));
+            }
+        }
+    }
+
+    // Fold all remaining pending operators.
+    while let Some(top) = pending.pop() {
+        let start = top.left.span.start;
         let expr = Expr::OperatorApplication {
-            operator: op,
-            direction: assoc,
-            left: Box::new(left),
-            right: Box::new(right),
+            operator: top.op,
+            direction: top.assoc,
+            left: Box::new(top.left),
+            right: Box::new(left),
         };
         left = p.spanned_from(start, expr);
     }
 
-    Ok(left)
+    Ok(Step::Done(left))
 }
+
+/// Wrapper: when a compound form produces its operand, resume the binary loop.
+fn binary_after_operand(p: &mut Parser, step: Step, pending: Vec<PendingOp>) -> ParseResult<Step> {
+    match step {
+        Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
+            let step = cont(p, sub_expr)?;
+            binary_after_operand(p, step, pending)
+        }))),
+        Step::Done(left) => binary_loop(p, pending, left),
+    }
+}
+
+// ── Operator helpers (unchanged) ─────────────────────────────────────
 
 /// Extract operator info from current token if it's a binary operator.
 /// Returns (operator_name, precedence, associativity).
@@ -63,7 +196,6 @@ fn extract_operator(p: &Parser) -> Option<(String, u8, InfixDirection)> {
             Some((op.clone(), prec, assoc))
         }
         Token::Minus => Some(("-".into(), 6, InfixDirection::Left)),
-        // `|>` and `<|` are stored as Operator, so they're covered above.
         _ => None,
     }
 }
@@ -104,87 +236,191 @@ fn operator_info(op: &str) -> (u8, InfixDirection) {
 
 /// Convert (precedence, associativity) to (left_bp, right_bp) for Pratt parsing.
 fn binding_power(prec: u8, assoc: &InfixDirection) -> (u8, u8) {
-    // Pratt binding power: multiply by 2 to leave room for left/right distinction.
     let base = prec * 2;
     match assoc {
         InfixDirection::Left => (base, base + 1),
         InfixDirection::Right => (base, base),
-        InfixDirection::Non => (base, base + 1), // treat as left for parsing, reject double use later
+        InfixDirection::Non => (base, base + 1),
     }
 }
 
+// ── Unary expression ─────────────────────────────────────────────────
+
 /// Parse a unary expression (prefix negation or function application).
-fn parse_unary_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
+fn parse_unary_expr_cps(p: &mut Parser) -> ParseResult<Step> {
     p.skip_whitespace();
     let start = p.current_pos();
 
-    // Prefix negation: `-expr`
     if matches!(p.peek(), Token::Minus) {
-        // Check if this is prefix negation (no space before the operand, or at start).
-        // For now, treat `-` followed by an expression as negation in prefix position.
         let minus_span = p.peek_span();
         p.advance();
 
-        // If the next token is immediately adjacent (no whitespace gap), it's negation.
-        // Otherwise, it's the binary minus operator handled in parse_binary_expr.
-        // Since we already consumed it here in unary position, parse it as negation.
-        let operand = parse_application(p)?;
-        let expr = Expr::Negation(Box::new(operand));
-        return Ok(Spanned::new(minus_span.merge(p.span_from(start)), expr));
+        let step = parse_application_cps(p)?;
+        match step {
+            Step::Done(operand) => {
+                let expr = Expr::Negation(Box::new(operand));
+                Ok(Step::Done(Spanned::new(
+                    minus_span.merge(p.span_from(start)),
+                    expr,
+                )))
+            }
+            Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
+                let step = cont(p, sub_expr)?;
+                unary_wrap_negation(p, step, start, minus_span)
+            }))),
+        }
+    } else {
+        parse_application_cps(p)
     }
-
-    parse_application(p)
 }
 
+/// Wrapper: when a compound form inside negation produces its operand, apply negation.
+fn unary_wrap_negation(
+    p: &mut Parser,
+    step: Step,
+    start: Position,
+    minus_span: Span,
+) -> ParseResult<Step> {
+    match step {
+        Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
+            let step = cont(p, sub_expr)?;
+            unary_wrap_negation(p, step, start, minus_span)
+        }))),
+        Step::Done(operand) => {
+            let expr = Expr::Negation(Box::new(operand));
+            Ok(Step::Done(Spanned::new(
+                minus_span.merge(p.span_from(start)),
+                expr,
+            )))
+        }
+    }
+}
+
+// ── Application ──────────────────────────────────────────────────────
+
 /// Parse function application: `f x y z`
-///
-/// In Elm, juxtaposition is function application. `f a b` = `((f a) b)`.
-/// The function and all arguments must be atomic expressions.
-fn parse_application(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
+fn parse_application_cps(p: &mut Parser) -> ParseResult<Step> {
     let start = p.current_pos();
-    let first = parse_atomic_expr(p)?;
-    let first_line = first.span.start.line;
+    // Consume app_context_col (set by list/record parsers) so that nested
+    // expression parsing doesn't inherit it. The value is threaded through
+    // the CPS continuations for this application only.
+    let ctx_col = p.app_context_col.take();
+    let first_step = parse_atomic_expr_cps(p)?;
 
-    let mut args = vec![first];
+    match first_step {
+        Step::Done(first) => {
+            let first_line = first.span.start.line;
+            application_loop(p, start, first_line, vec![first], ctx_col)
+        }
+        Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
+            let step = cont(p, sub_expr)?;
+            app_after_first_atom(p, step, start, ctx_col)
+        }))),
+    }
+}
 
+/// Wrapper: when the first atom of an application comes from a compound form.
+fn app_after_first_atom(
+    p: &mut Parser,
+    step: Step,
+    start: Position,
+    ctx_col: Option<u32>,
+) -> ParseResult<Step> {
+    match step {
+        Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
+            let step = cont(p, sub_expr)?;
+            app_after_first_atom(p, step, start, ctx_col)
+        }))),
+        Step::Done(first) => {
+            let first_line = first.span.start.line;
+            application_loop(p, start, first_line, vec![first], ctx_col)
+        }
+    }
+}
+
+/// Iterative application loop: collect arguments.
+fn application_loop(
+    p: &mut Parser,
+    start: Position,
+    first_line: u32,
+    mut args: Vec<Spanned<Expr>>,
+    ctx_col: Option<u32>,
+) -> ParseResult<Step> {
     loop {
         p.skip_whitespace();
         if !can_start_atomic_expr(p.peek()) {
             break;
         }
-        // Application arguments should be on the same line or indented past the function.
         let arg_col = p.current_column();
         let arg_line = p.current_pos().line;
-        if arg_line != first_line && arg_col <= start.column {
+        // When ctx_col is set (inside list/record), use the bracket's
+        // column as the reference — arguments past the bracket are valid.
+        // Otherwise, require args to be strictly more indented than the
+        // function to avoid consuming sibling declarations or case branches.
+        let ref_col = ctx_col.unwrap_or(start.column);
+        if arg_line != first_line && arg_col <= ref_col {
             break;
         }
-        args.push(parse_atomic_expr(p)?);
+        let step = parse_atomic_expr_cps(p)?;
+        match step {
+            Step::Done(arg) => args.push(arg),
+            Step::NeedExpr(cont) => {
+                return Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
+                    let step = cont(p, sub_expr)?;
+                    app_after_arg(p, step, start, first_line, args, ctx_col)
+                })));
+            }
+        }
     }
 
     if args.len() == 1 {
-        Ok(args.into_iter().next().unwrap())
+        Ok(Step::Done(args.into_iter().next().unwrap()))
     } else {
-        let expr = Expr::Application(args);
-        Ok(p.spanned_from(start, expr))
+        Ok(Step::Done(p.spanned_from(start, Expr::Application(args))))
     }
 }
 
-/// Parse an atomic expression (the highest-precedence, non-recursive forms).
-fn parse_atomic_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
+/// Wrapper: when an application argument comes from a compound form.
+fn app_after_arg(
+    p: &mut Parser,
+    step: Step,
+    start: Position,
+    first_line: u32,
+    args: Vec<Spanned<Expr>>,
+    ctx_col: Option<u32>,
+) -> ParseResult<Step> {
+    match step {
+        Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
+            let step = cont(p, sub_expr)?;
+            app_after_arg(p, step, start, first_line, args, ctx_col)
+        }))),
+        Step::Done(arg) => {
+            let mut args = args;
+            args.push(arg);
+            application_loop(p, start, first_line, args, ctx_col)
+        }
+    }
+}
+
+// ── Atomic expressions ───────────────────────────────────────────────
+
+/// Parse an atomic expression. Returns `Step::Done` for simple forms,
+/// `Step::NeedExpr` for compound forms that need sub-expressions.
+fn parse_atomic_expr_cps(p: &mut Parser) -> ParseResult<Step> {
     p.skip_whitespace();
     let start = p.current_pos();
 
-    match p.peek().clone() {
+    let step = match p.peek().clone() {
         // ── Literals ─────────────────────────────────────────────
         Token::Literal(lit) => {
             p.advance();
-            Ok(p.spanned_from(start, Expr::Literal(lit)))
+            Step::Done(p.spanned_from(start, Expr::Literal(lit)))
         }
 
         // ── Lowercase name (value reference) ─────────────────────
         Token::LowerName(name) => {
             p.advance();
-            Ok(p.spanned_from(
+            Step::Done(p.spanned_from(
                 start,
                 Expr::FunctionOrValue {
                     module_name: Vec::new(),
@@ -196,149 +432,75 @@ fn parse_atomic_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
         // ── Uppercase name (constructor or qualified ref) ────────
         Token::UpperName(_) => {
             let (module_name, name) = parse_qualified_value(p)?;
-            Ok(p.spanned_from(start, Expr::FunctionOrValue { module_name, name }))
+            Step::Done(p.spanned_from(start, Expr::FunctionOrValue { module_name, name }))
         }
 
-        // ── Prefix operator: `(+)`, `(::)` ──────────────────────
-        // ── Unit: `()` ───────────────────────────────────────────
-        // ── Tuple: `(a, b)` ──────────────────────────────────────
-        // ── Parenthesized: `(expr)` ──────────────────────────────
-        Token::LeftParen => {
-            p.advance(); // consume `(`
-            p.skip_whitespace();
-
-            // Unit: `()`
-            if matches!(p.peek(), Token::RightParen) {
-                p.advance();
-                return Ok(p.spanned_from(start, Expr::Unit));
-            }
-
-            // Prefix operator: `(+)`, `(::)`, `(-)`
-            match p.peek().clone() {
-                Token::Operator(op) => {
-                    p.advance();
-                    p.skip_whitespace();
-                    if matches!(p.peek(), Token::RightParen) {
-                        p.advance();
-                        return Ok(p.spanned_from(start, Expr::PrefixOperator(op)));
-                    }
-                    // Not a prefix op, backtrack isn't possible easily.
-                    // This shouldn't happen in valid Elm.
-                    return Err(p.error("expected `)` after operator in prefix expression"));
-                }
-                Token::Minus => {
-                    p.advance();
-                    p.skip_whitespace();
-                    if matches!(p.peek(), Token::RightParen) {
-                        p.advance();
-                        return Ok(p.spanned_from(start, Expr::PrefixOperator("-".into())));
-                    }
-                    // It was negation inside parens: `(-expr)`
-                    // We need to parse the rest as a negated expression.
-                    let operand = parse_expr(p)?;
-                    let neg = Expr::Negation(Box::new(operand));
-                    let neg_spanned = p.spanned_from(start, neg);
-                    p.skip_whitespace();
-
-                    return match p.peek() {
-                        Token::RightParen => {
-                            p.advance();
-                            Ok(p.spanned_from(start, Expr::Parenthesized(Box::new(neg_spanned))))
-                        }
-                        Token::Comma => {
-                            let mut elements = vec![neg_spanned];
-                            while p.eat(&Token::Comma) {
-                                elements.push(parse_expr(p)?);
-                            }
-                            p.expect(&Token::RightParen)?;
-                            Ok(p.spanned_from(start, Expr::Tuple(elements)))
-                        }
-                        _ => Err(p.error("expected `)` or `,`")),
-                    };
-                }
-                _ => {}
-            }
-
-            // Regular parenthesized expression or tuple.
-            let first = parse_expr(p)?;
-            p.skip_whitespace();
-
-            match p.peek() {
-                Token::Comma => {
-                    let mut elements = vec![first];
-                    while p.eat(&Token::Comma) {
-                        elements.push(parse_expr(p)?);
-                    }
-                    p.expect(&Token::RightParen)?;
-                    Ok(p.spanned_from(start, Expr::Tuple(elements)))
-                }
-                Token::RightParen => {
-                    p.advance();
-                    Ok(p.spanned_from(start, Expr::Parenthesized(Box::new(first))))
-                }
-                _ => Err(p.error("expected `,` or `)` in expression")),
-            }
-        }
+        // ── Paren / tuple / prefix op / unit ─────────────────────
+        Token::LeftParen => parse_paren_cps(p, start)?,
 
         // ── Record or record update ──────────────────────────────
-        Token::LeftBrace => parse_record_expr(p),
+        Token::LeftBrace => parse_record_expr_cps(p)?,
 
         // ── List ─────────────────────────────────────────────────
-        Token::LeftBracket => {
-            p.advance(); // consume `[`
-            p.skip_whitespace();
-
-            // Check for GLSL in case lexer didn't catch it.
-            if matches!(p.peek(), Token::RightBracket) {
-                p.advance();
-                return Ok(p.spanned_from(start, Expr::List(Vec::new())));
-            }
-
-            let mut elements = Vec::new();
-            elements.push(parse_expr(p)?);
-            while p.eat(&Token::Comma) {
-                elements.push(parse_expr(p)?);
-            }
-            p.expect(&Token::RightBracket)?;
-            Ok(p.spanned_from(start, Expr::List(elements)))
-        }
+        Token::LeftBracket => parse_list_cps(p, start)?,
 
         // ── GLSL block ──────────────────────────────────────────
         Token::Glsl(src) => {
             p.advance();
-            Ok(p.spanned_from(start, Expr::GLSLExpression(src)))
+            Step::Done(p.spanned_from(start, Expr::GLSLExpression(src)))
         }
 
         // ── If-then-else ─────────────────────────────────────────
-        Token::If => parse_if_expr(p),
+        Token::If => parse_if_expr_cps(p)?,
 
         // ── Case-of ──────────────────────────────────────────────
-        Token::Case => parse_case_expr(p),
+        Token::Case => parse_case_expr_cps(p)?,
 
         // ── Let-in ───────────────────────────────────────────────
-        Token::Let => parse_let_expr(p),
+        Token::Let => parse_let_expr_cps(p)?,
 
         // ── Lambda ───────────────────────────────────────────────
-        Token::Backslash => parse_lambda_expr(p),
+        Token::Backslash => parse_lambda_expr_cps(p)?,
 
         // ── Record access function: `.name` ──────────────────────
         Token::Dot => {
-            p.advance(); // consume `.`
+            p.advance();
             match p.peek().clone() {
                 Token::LowerName(name) => {
                     p.advance();
-                    Ok(p.spanned_from(start, Expr::RecordAccessFunction(name)))
+                    Step::Done(p.spanned_from(start, Expr::RecordAccessFunction(name)))
                 }
-                _ => Err(p.error("expected field name after `.`")),
+                _ => return Err(p.error("expected field name after `.`")),
             }
         }
 
-        _ => Err(p.error(format!(
-            "expected expression, found {}",
-            super::describe(p.peek())
-        ))),
+        _ => {
+            return Err(p.error(format!(
+                "expected expression, found {}",
+                super::describe(p.peek())
+            )));
+        }
+    };
+
+    // Apply record access chain (.field) to the result.
+    Ok(match step {
+        Step::Done(expr) => Step::Done(parse_record_access_chain(p, expr)?),
+        Step::NeedExpr(cont) => Step::NeedExpr(Box::new(move |p, sub_expr| {
+            let inner = cont(p, sub_expr)?;
+            apply_record_access(p, inner)
+        })),
+    })
+}
+
+/// Wrapper: apply record access chain when a compound form eventually produces Done.
+fn apply_record_access(p: &mut Parser, step: Step) -> ParseResult<Step> {
+    match step {
+        Step::Done(expr) => Ok(Step::Done(parse_record_access_chain(p, expr)?)),
+        Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
+            let inner = cont(p, sub_expr)?;
+            apply_record_access(p, inner)
+        }))),
     }
-    .and_then(|expr| parse_record_access_chain(p, expr))
 }
 
 /// After parsing an atomic expression, check for `.field` access chains.
@@ -348,7 +510,6 @@ fn parse_record_access_chain(
 ) -> ParseResult<Spanned<Expr>> {
     // Don't skip whitespace — `.field` must be immediately adjacent.
     while matches!(p.peek(), Token::Dot) {
-        // Check that the dot is immediately adjacent (same line, no gap).
         let dot_end = p.peek_span().start;
         let expr_end = expr.span.end;
         if dot_end.offset != expr_end.offset {
@@ -378,177 +539,314 @@ fn parse_record_access_chain(
     Ok(expr)
 }
 
-// ── Compound expressions ─────────────────────────────────────────────
+// ── If-then-else (CPS) ──────────────────────────────────────────────
 
-fn parse_if_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
+fn parse_if_expr_cps(p: &mut Parser) -> ParseResult<Step> {
     let start = p.current_pos();
     p.expect(&Token::If)?;
-
-    let mut branches = Vec::new();
-    let condition = parse_expr(p)?;
-    p.expect(&Token::Then)?;
-    let then_branch = parse_expr(p)?;
-    branches.push((condition, then_branch));
-
-    p.expect(&Token::Else)?;
-
-    // Chained if-else:  `else if ... then ... else ...`
-    p.skip_whitespace();
-    let else_branch = if matches!(p.peek(), Token::If) {
-        // Recurse: the `else if` becomes a nested if-else expression.
-        // But we flatten into branches for our AST.
-        parse_if_expr(p)?
-    } else {
-        parse_expr(p)?
-    };
-
-    Ok(p.spanned_from(
-        start,
-        Expr::IfElse {
-            branches,
-            else_branch: Box::new(else_branch),
-        },
-    ))
+    // Need condition
+    Ok(Step::NeedExpr(Box::new(move |p, condition| {
+        if_after_condition(p, start, Vec::new(), condition)
+    })))
 }
 
-fn parse_case_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
+fn if_after_condition(
+    p: &mut Parser,
+    start: Position,
+    chain: Vec<IfBranch>,
+    condition: Spanned<Expr>,
+) -> ParseResult<Step> {
+    p.expect(&Token::Then)?;
+    // Need then-branch
+    Ok(Step::NeedExpr(Box::new(move |p, then_branch| {
+        if_after_then(p, start, chain, condition, then_branch)
+    })))
+}
+
+fn if_after_then(
+    p: &mut Parser,
+    start: Position,
+    mut chain: Vec<IfBranch>,
+    condition: Spanned<Expr>,
+    then_branch: Spanned<Expr>,
+) -> ParseResult<Step> {
+    chain.push(IfBranch {
+        start,
+        condition,
+        then_branch,
+    });
+    p.expect(&Token::Else)?;
+    p.skip_whitespace();
+
+    if matches!(p.peek(), Token::If) {
+        // Chained if-else: parse next condition
+        let next_start = p.current_pos();
+        p.expect(&Token::If)?;
+        Ok(Step::NeedExpr(Box::new(move |p, condition| {
+            if_after_condition(p, next_start, chain, condition)
+        })))
+    } else {
+        // Final else branch
+        Ok(Step::NeedExpr(Box::new(move |p, else_branch| {
+            // Fold from right to left to build nested IfElse structure.
+            let mut result = else_branch;
+            for branch in chain.into_iter().rev() {
+                result = p.spanned_from(
+                    branch.start,
+                    Expr::IfElse {
+                        branches: vec![(branch.condition, branch.then_branch)],
+                        else_branch: Box::new(result),
+                    },
+                );
+            }
+            Ok(Step::Done(result))
+        })))
+    }
+}
+
+// ── Case-of (CPS) ───────────────────────────────────────────────────
+
+fn parse_case_expr_cps(p: &mut Parser) -> ParseResult<Step> {
     let start = p.current_pos();
     p.expect(&Token::Case)?;
-    let subject = parse_expr(p)?;
-    p.expect(&Token::Of)?;
+    // Need subject
+    Ok(Step::NeedExpr(Box::new(move |p, subject| {
+        case_after_subject(p, start, subject)
+    })))
+}
 
-    // Parse branches. Each branch: `pattern -> expr`
-    // Branches must be at the same indentation level, indented past `case`.
+fn case_after_subject(
+    p: &mut Parser,
+    start: Position,
+    subject: Spanned<Expr>,
+) -> ParseResult<Step> {
+    p.expect(&Token::Of)?;
     p.skip_whitespace();
     let branch_col = p.current_column();
 
-    let mut branches = Vec::new();
-    loop {
-        p.skip_whitespace();
-        if p.is_eof() {
-            break;
-        }
-        let col = p.current_column();
-        if p.in_paren_context() {
-            // Inside parens, branches must be at the SAME column as the first
-            // branch. This allows the paren context to relax outer indentation
-            // while still correctly separating nested case expressions.
-            if !branches.is_empty() && col != branch_col {
-                break;
-            }
-        } else {
-            // Outside parens, branches must be at or past the first branch's column.
-            if col < branch_col {
-                break;
-            }
-            // A branch at or before the `case` keyword is a new declaration.
-            if col < start.column + 1 && !branches.is_empty() {
-                break;
-            }
-        }
-        // Stop if we see something that can't start a pattern.
-        if !can_start_pattern(p.peek()) {
-            break;
-        }
-
-        let pat = parse_pattern(p)?;
-        p.expect(&Token::Arrow)?;
-        let body = parse_expr(p)?;
-        branches.push(CaseBranch { pattern: pat, body });
-    }
-
-    if branches.is_empty() {
-        return Err(p.error("expected at least one case branch"));
-    }
-
-    Ok(p.spanned_from(
-        start,
-        Expr::CaseOf {
-            expr: Box::new(subject),
-            branches,
-        },
-    ))
+    case_next_branch(p, start, subject, Vec::new(), branch_col)
 }
 
-fn parse_let_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
+fn case_next_branch(
+    p: &mut Parser,
+    start: Position,
+    subject: Spanned<Expr>,
+    branches: Vec<CaseBranch>,
+    branch_col: u32,
+) -> ParseResult<Step> {
+    p.skip_whitespace();
+
+    // Check if we should parse another branch.
+    if !case_should_continue(p, &branches, branch_col, start) {
+        if branches.is_empty() {
+            return Err(p.error("expected at least one case branch"));
+        }
+        return Ok(Step::Done(p.spanned_from(
+            start,
+            Expr::CaseOf {
+                expr: Box::new(subject),
+                branches,
+            },
+        )));
+    }
+
+    // Attach comments to the branch pattern.
+    let branch_comments = p.take_pending_comments();
+    let mut pat = parse_pattern(p)?;
+    if !branch_comments.is_empty() {
+        pat.comments = branch_comments;
+    }
+    p.expect(&Token::Arrow)?;
+
+    // Clear the application context column so that the branch body uses
+    // normal column checking (prevents over-consuming the next branch pattern).
+    p.app_context_col = None;
+
+    // Need branch body
+    Ok(Step::NeedExpr(Box::new(move |p, body| {
+        let mut branches = branches;
+        branches.push(CaseBranch { pattern: pat, body });
+        case_next_branch(p, start, subject, branches, branch_col)
+    })))
+}
+
+fn case_should_continue(
+    p: &mut Parser,
+    branches: &[CaseBranch],
+    branch_col: u32,
+    start: Position,
+) -> bool {
+    if p.is_eof() {
+        return false;
+    }
+    let col = p.current_column();
+    if p.in_paren_context() {
+        if !branches.is_empty() && col != branch_col {
+            return false;
+        }
+    } else {
+        if col < branch_col {
+            return false;
+        }
+        if col < start.column + 1 && !branches.is_empty() {
+            return false;
+        }
+    }
+    can_start_pattern(p.peek())
+}
+
+// ── Let-in (CPS) ────────────────────────────────────────────────────
+
+fn parse_let_expr_cps(p: &mut Parser) -> ParseResult<Step> {
     let start = p.current_pos();
     p.expect(&Token::Let)?;
 
-    // Parse let declarations.
-    // Each declaration must be indented past the `let` keyword.
     let let_col = start.column;
-    let mut declarations = Vec::new();
-
     p.skip_whitespace();
     let decl_col = p.current_column();
 
-    loop {
-        p.skip_whitespace();
-        if p.is_eof() || matches!(p.peek(), Token::In) {
-            break;
-        }
-        // Declarations must be at the same column as the first declaration.
-        if p.current_column() < decl_col && !p.in_paren_context() {
-            break;
-        }
-        if p.current_column() < let_col + 1 && !p.in_paren_context() {
-            break;
-        }
-
-        let decl_start = p.current_pos();
-        let decl = parse_let_declaration(p, decl_col)?;
-        declarations.push(p.spanned_from(decl_start, decl));
-    }
-
-    p.expect(&Token::In)?;
-    let body = parse_expr(p)?;
-
-    Ok(p.spanned_from(
-        start,
-        Expr::LetIn {
-            declarations,
-            body: Box::new(body),
-        },
-    ))
+    let_next_decl(p, start, let_col, decl_col, Vec::new())
 }
 
-/// Parse a single let declaration (function def or destructuring).
-fn parse_let_declaration(p: &mut Parser, _decl_col: u32) -> ParseResult<LetDeclaration> {
+fn let_next_decl(
+    p: &mut Parser,
+    start: Position,
+    let_col: u32,
+    decl_col: u32,
+    declarations: Vec<Spanned<LetDeclaration>>,
+) -> ParseResult<Step> {
     p.skip_whitespace();
 
-    // Try to determine if this is a function definition or a destructuring.
-    // A function def starts with: `name patterns... = expr` or `name : Type`
-    // A destructuring starts with a pattern followed by `=`
+    // Check if we're done with declarations.
+    if p.is_eof()
+        || matches!(p.peek(), Token::In)
+        || (!p.in_paren_context() && p.current_column() < decl_col)
+        || (!p.in_paren_context() && p.current_column() < let_col + 1)
+    {
+        p.expect(&Token::In)?;
+        // Clear app_context_col for the `in` body.
+        p.app_context_col = None;
+        // Need body
+        return Ok(Step::NeedExpr(Box::new(move |p, body| {
+            Ok(Step::Done(p.spanned_from(
+                start,
+                Expr::LetIn {
+                    declarations,
+                    body: Box::new(body),
+                },
+            )))
+        })));
+    }
+
+    // Attach comments before this let declaration.
+    let let_decl_comments = p.take_pending_comments();
+    let decl_start = p.current_pos();
 
     match p.peek().clone() {
         Token::LowerName(_) => {
-            // Could be a function def: `name args... = expr`
-            // Or a type signature: `name : Type`
-            // Or a destructuring: `name = expr` (which is just a zero-arg function)
-
-            // Check if next meaningful token is `:` (type signature)
             let next = p.peek_nth_past_whitespace(1);
             if matches!(next, Token::Colon) {
-                // This is a type signature. Parse it, then parse the function body.
+                // Type signature followed by function implementation.
                 let sig = parse_signature(p)?;
                 p.skip_whitespace();
-                // Now parse the actual function implementation.
-                let impl_decl = parse_let_function_impl(p, Some(sig))?;
-                return Ok(impl_decl);
-            }
+                let impl_start = p.current_pos();
+                let name = p.expect_lower_name()?;
 
-            // Otherwise it's a function implementation (possibly zero-arg).
-            parse_let_function_impl(p, None)
+                let mut args = Vec::new();
+                loop {
+                    p.skip_whitespace();
+                    if matches!(p.peek(), Token::Equals) {
+                        break;
+                    }
+                    if !can_start_pattern(p.peek()) {
+                        break;
+                    }
+                    args.push(parse_pattern(p)?);
+                }
+                p.expect(&Token::Equals)?;
+
+                // Clear app_context_col for the function body.
+                p.app_context_col = None;
+
+                // Need function body
+                Ok(Step::NeedExpr(Box::new(move |p, body| {
+                    let implementation = FunctionImplementation { name, args, body };
+                    let func = Function {
+                        documentation: None,
+                        signature: Some(sig),
+                        declaration: p.spanned_from(impl_start, implementation),
+                    };
+                    let decl = LetDeclaration::Function(Box::new(func));
+                    let mut spanned_decl = p.spanned_from(decl_start, decl);
+                    if !let_decl_comments.is_empty() {
+                        spanned_decl.comments = let_decl_comments;
+                    }
+                    let mut declarations = declarations;
+                    declarations.push(spanned_decl);
+                    let_next_decl(p, start, let_col, decl_col, declarations)
+                })))
+            } else {
+                // Function implementation (no signature).
+                let impl_start = p.current_pos();
+                let name = p.expect_lower_name()?;
+
+                let mut args = Vec::new();
+                loop {
+                    p.skip_whitespace();
+                    if matches!(p.peek(), Token::Equals) {
+                        break;
+                    }
+                    if !can_start_pattern(p.peek()) {
+                        break;
+                    }
+                    args.push(parse_pattern(p)?);
+                }
+                p.expect(&Token::Equals)?;
+
+                // Clear app_context_col for the function body.
+                p.app_context_col = None;
+
+                // Need function body
+                Ok(Step::NeedExpr(Box::new(move |p, body| {
+                    let implementation = FunctionImplementation { name, args, body };
+                    let func = Function {
+                        documentation: None,
+                        signature: None,
+                        declaration: p.spanned_from(impl_start, implementation),
+                    };
+                    let decl = LetDeclaration::Function(Box::new(func));
+                    let mut spanned_decl = p.spanned_from(decl_start, decl);
+                    if !let_decl_comments.is_empty() {
+                        spanned_decl.comments = let_decl_comments;
+                    }
+                    let mut declarations = declarations;
+                    declarations.push(spanned_decl);
+                    let_next_decl(p, start, let_col, decl_col, declarations)
+                })))
+            }
         }
         _ => {
             // Destructuring pattern.
             let pattern = parse_pattern(p)?;
             p.expect(&Token::Equals)?;
-            let body = parse_expr(p)?;
-            Ok(LetDeclaration::Destructuring {
-                pattern: Box::new(pattern),
-                body: Box::new(body),
-            })
+
+            // Clear app_context_col for the destructuring body.
+            p.app_context_col = None;
+
+            // Need destructuring body
+            Ok(Step::NeedExpr(Box::new(move |p, body| {
+                let decl = LetDeclaration::Destructuring {
+                    pattern: Box::new(pattern),
+                    body: Box::new(body),
+                };
+                let mut spanned_decl = p.spanned_from(decl_start, decl);
+                if !let_decl_comments.is_empty() {
+                    spanned_decl.comments = let_decl_comments;
+                }
+                let mut declarations = declarations;
+                declarations.push(spanned_decl);
+                let_next_decl(p, start, let_col, decl_col, declarations)
+            })))
         }
     }
 }
@@ -567,44 +865,12 @@ fn parse_signature(p: &mut Parser) -> ParseResult<Spanned<Signature>> {
     ))
 }
 
-fn parse_let_function_impl(
-    p: &mut Parser,
-    signature: Option<Spanned<Signature>>,
-) -> ParseResult<LetDeclaration> {
-    let start = p.current_pos();
-    let name = p.expect_lower_name()?;
+// ── Lambda (CPS) ────────────────────────────────────────────────────
 
-    // Parse argument patterns until we hit `=`.
-    let mut args = Vec::new();
-    loop {
-        p.skip_whitespace();
-        if matches!(p.peek(), Token::Equals) {
-            break;
-        }
-        if !can_start_pattern(p.peek()) {
-            break;
-        }
-        args.push(super::pattern::parse_pattern(p)?);
-    }
-
-    p.expect(&Token::Equals)?;
-    let body = parse_expr(p)?;
-
-    let implementation = FunctionImplementation { name, args, body };
-    let func = Function {
-        documentation: None,
-        signature,
-        declaration: p.spanned_from(start, implementation),
-    };
-
-    Ok(LetDeclaration::Function(Box::new(func)))
-}
-
-fn parse_lambda_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
+fn parse_lambda_expr_cps(p: &mut Parser) -> ParseResult<Step> {
     let start = p.current_pos();
     p.expect(&Token::Backslash)?;
 
-    // Parse argument patterns until `->`.
     let mut args = Vec::new();
     loop {
         p.skip_whitespace();
@@ -618,18 +884,152 @@ fn parse_lambda_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
     }
 
     p.expect(&Token::Arrow)?;
-    let body = parse_expr(p)?;
 
-    Ok(p.spanned_from(
-        start,
-        Expr::Lambda {
-            args,
-            body: Box::new(body),
-        },
-    ))
+    // Need body
+    Ok(Step::NeedExpr(Box::new(move |p, body| {
+        Ok(Step::Done(p.spanned_from(
+            start,
+            Expr::Lambda {
+                args,
+                body: Box::new(body),
+            },
+        )))
+    })))
 }
 
-fn parse_record_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
+// ── Paren / Tuple / Prefix operator / Unit (CPS) ────────────────────
+
+fn parse_paren_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
+    p.advance(); // consume `(`
+    p.skip_whitespace();
+
+    // Unit: `()`
+    if matches!(p.peek(), Token::RightParen) {
+        p.advance();
+        return Ok(Step::Done(p.spanned_from(start, Expr::Unit)));
+    }
+
+    // Prefix operator: `(+)`, `(::)`, `(-)`
+    match p.peek().clone() {
+        Token::Operator(op) => {
+            p.advance();
+            p.skip_whitespace();
+            if matches!(p.peek(), Token::RightParen) {
+                p.advance();
+                return Ok(Step::Done(p.spanned_from(start, Expr::PrefixOperator(op))));
+            }
+            return Err(p.error("expected `)` after operator in prefix expression"));
+        }
+        Token::Minus => {
+            p.advance();
+            p.skip_whitespace();
+            if matches!(p.peek(), Token::RightParen) {
+                p.advance();
+                return Ok(Step::Done(
+                    p.spanned_from(start, Expr::PrefixOperator("-".into())),
+                ));
+            }
+            // Negation inside parens: `(-expr)` or `(-expr, ...)`
+            return Ok(Step::NeedExpr(Box::new(move |p, operand| {
+                let neg = Expr::Negation(Box::new(operand));
+                let neg_spanned = p.spanned_from(start, neg);
+                paren_after_first(p, start, neg_spanned)
+            })));
+        }
+        _ => {}
+    }
+
+    // Regular parenthesized expression or tuple.
+    Ok(Step::NeedExpr(Box::new(move |p, first| {
+        paren_after_first(p, start, first)
+    })))
+}
+
+fn paren_after_first(p: &mut Parser, start: Position, first: Spanned<Expr>) -> ParseResult<Step> {
+    p.skip_whitespace();
+    match p.peek() {
+        Token::Comma => {
+            p.advance(); // consume comma
+            let elements = vec![first];
+            // Need next tuple element
+            Ok(Step::NeedExpr(Box::new(move |p, next| {
+                tuple_after_element(p, start, elements, next)
+            })))
+        }
+        Token::RightParen => {
+            p.advance();
+            Ok(Step::Done(
+                p.spanned_from(start, Expr::Parenthesized(Box::new(first))),
+            ))
+        }
+        _ => Err(p.error("expected `,` or `)` in expression")),
+    }
+}
+
+fn tuple_after_element(
+    p: &mut Parser,
+    start: Position,
+    mut elements: Vec<Spanned<Expr>>,
+    elem: Spanned<Expr>,
+) -> ParseResult<Step> {
+    elements.push(elem);
+    p.skip_whitespace();
+    if p.eat(&Token::Comma) {
+        // More elements
+        Ok(Step::NeedExpr(Box::new(move |p, next| {
+            tuple_after_element(p, start, elements, next)
+        })))
+    } else {
+        p.expect(&Token::RightParen)?;
+        Ok(Step::Done(p.spanned_from(start, Expr::Tuple(elements))))
+    }
+}
+
+// ── List (CPS) ───────────────────────────────────────────────────────
+
+fn parse_list_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
+    let bracket_col = start.column;
+    p.advance(); // consume `[`
+    p.skip_whitespace();
+
+    if matches!(p.peek(), Token::RightBracket) {
+        p.advance();
+        return Ok(Step::Done(p.spanned_from(start, Expr::List(Vec::new()))));
+    }
+
+    // Set the application context column to the bracket's column so that
+    // function args at any column past the bracket are collected.
+    p.app_context_col = Some(bracket_col);
+
+    // Need first element
+    Ok(Step::NeedExpr(Box::new(move |p, first| {
+        list_after_element(p, start, bracket_col, Vec::new(), first)
+    })))
+}
+
+fn list_after_element(
+    p: &mut Parser,
+    start: Position,
+    bracket_col: u32,
+    mut elements: Vec<Spanned<Expr>>,
+    elem: Spanned<Expr>,
+) -> ParseResult<Step> {
+    elements.push(elem);
+    if p.eat(&Token::Comma) {
+        // Re-set the context column for the next element.
+        p.app_context_col = Some(bracket_col);
+        Ok(Step::NeedExpr(Box::new(move |p, next| {
+            list_after_element(p, start, bracket_col, elements, next)
+        })))
+    } else {
+        p.expect(&Token::RightBracket)?;
+        Ok(Step::Done(p.spanned_from(start, Expr::List(elements))))
+    }
+}
+
+// ── Record / Record update (CPS) ────────────────────────────────────
+
+fn parse_record_expr_cps(p: &mut Parser) -> ParseResult<Step> {
     let start = p.current_pos();
     p.expect(&Token::LeftBrace)?;
     p.skip_whitespace();
@@ -637,26 +1037,17 @@ fn parse_record_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
     // Empty record: `{}`
     if matches!(p.peek(), Token::RightBrace) {
         p.advance();
-        return Ok(p.spanned_from(start, Expr::Record(Vec::new())));
+        return Ok(Step::Done(p.spanned_from(start, Expr::Record(Vec::new()))));
     }
 
     // Check for record update: `{ name | ... }`
-    // We need to look ahead: `lowerName |`
     if matches!(p.peek(), Token::LowerName(_)) {
         let save_pos = p.pos;
         if let Ok(base_name) = p.expect_lower_name() {
             p.skip_whitespace();
             if matches!(p.peek(), Token::Pipe) {
                 p.advance(); // consume `|`
-                let updates = parse_record_setters(p)?;
-                p.expect(&Token::RightBrace)?;
-                return Ok(p.spanned_from(
-                    start,
-                    Expr::RecordUpdate {
-                        base: base_name,
-                        updates,
-                    },
-                ));
+                return record_parse_setter(p, start, Vec::new(), RecordContext::Update(base_name));
             }
             // Not a record update — backtrack.
             p.pos = save_pos;
@@ -666,38 +1057,68 @@ fn parse_record_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
     }
 
     // Regular record expression.
-    let fields = parse_record_setters(p)?;
-    p.expect(&Token::RightBrace)?;
-    Ok(p.spanned_from(start, Expr::Record(fields)))
+    record_parse_setter(p, start, Vec::new(), RecordContext::Plain)
 }
 
-fn parse_record_setters(p: &mut Parser) -> ParseResult<Vec<Spanned<RecordSetter>>> {
-    let mut setters = Vec::new();
-    setters.push(parse_record_setter(p)?);
-
-    while p.eat(&Token::Comma) {
-        setters.push(parse_record_setter(p)?);
-    }
-
-    Ok(setters)
-}
-
-fn parse_record_setter(p: &mut Parser) -> ParseResult<Spanned<RecordSetter>> {
-    let start = p.current_pos();
+fn record_parse_setter(
+    p: &mut Parser,
+    rec_start: Position,
+    setters: Vec<Spanned<RecordSetter>>,
+    context: RecordContext,
+) -> ParseResult<Step> {
+    let setter_start = p.current_pos();
     let field = p.expect_lower_name()?;
     p.expect(&Token::Equals)?;
-    let value = parse_expr(p)?;
-    Ok(p.spanned_from(start, RecordSetter { field, value }))
+
+    // Set the application context column to the brace's column so that
+    // function args at any column past the brace are collected.
+    p.app_context_col = Some(rec_start.column);
+
+    // Need field value
+    Ok(Step::NeedExpr(Box::new(move |p, value| {
+        record_after_value(p, rec_start, setters, setter_start, field, value, context)
+    })))
 }
+
+fn record_after_value(
+    p: &mut Parser,
+    rec_start: Position,
+    mut setters: Vec<Spanned<RecordSetter>>,
+    setter_start: Position,
+    field: Spanned<String>,
+    value: Spanned<Expr>,
+    context: RecordContext,
+) -> ParseResult<Step> {
+    let setter = RecordSetter { field, value };
+    setters.push(p.spanned_from(setter_start, setter));
+
+    if p.eat(&Token::Comma) {
+        record_parse_setter(p, rec_start, setters, context)
+    } else {
+        p.expect(&Token::RightBrace)?;
+        match context {
+            RecordContext::Plain => {
+                Ok(Step::Done(p.spanned_from(rec_start, Expr::Record(setters))))
+            }
+            RecordContext::Update(base) => Ok(Step::Done(p.spanned_from(
+                rec_start,
+                Expr::RecordUpdate {
+                    base,
+                    updates: setters,
+                },
+            ))),
+        }
+    }
+}
+
+// ── Qualified value (unchanged) ──────────────────────────────────────
 
 /// Parse a possibly-qualified value reference: `foo`, `List.map`, `Maybe.Just`
 fn parse_qualified_value(p: &mut Parser) -> ParseResult<(Vec<String>, String)> {
     let first = p.expect_upper_name()?;
     let mut parts: Vec<String> = vec![first.value];
 
-    // Consume `.Name` segments.
     while matches!(p.peek(), Token::Dot) {
-        // Peek at what follows the dot.
         let next = p.peek_nth_past_whitespace(1);
         match next {
             Token::UpperName(_) | Token::LowerName(_) => {}
@@ -715,7 +1136,7 @@ fn parse_qualified_value(p: &mut Parser) -> ParseResult<(Vec<String>, String)> {
             Token::LowerName(name) => {
                 p.advance();
                 parts.push(name);
-                break; // lowercase name is always the final segment
+                break;
             }
             _ => {
                 p.pos = dot_pos;
@@ -727,6 +1148,8 @@ fn parse_qualified_value(p: &mut Parser) -> ParseResult<(Vec<String>, String)> {
     let name = parts.pop().unwrap();
     Ok((parts, name))
 }
+
+// ── Token predicates (unchanged) ─────────────────────────────────────
 
 fn can_start_pattern(tok: &Token) -> bool {
     matches!(

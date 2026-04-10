@@ -6,7 +6,7 @@ A `syn`-quality Rust library for parsing and constructing Elm 0.19.1 ASTs, plus 
 
 `elm-ast` provides a complete, strongly-typed representation of Elm source code as a Rust AST, along with a parser, printer, and visitor/fold traits for traversal and transformation. It is modeled after Rust's [`syn`](https://github.com/dtolnay/syn) crate, with a formatting approach inspired by [`elm-format`](https://github.com/avh4/elm-format).
 
-**Tested against 149 real-world `.elm` files from 23 packages** (including `elm/core`, `elm/browser`, `rtfeldman/elm-css`, `mdgriffith/elm-ui`, `elm-explorations/test`) with 100% parse, round-trip, and printer idempotency rates.
+**Tested against 291 real-world `.elm` files from 50 packages** (including `elm/core`, `elm/browser`, `rtfeldman/elm-css`, `mdgriffith/elm-ui`, `dillonkearns/elm-markdown`, `folkertdev/elm-flate`, `elm-explorations/test`) with 100% parse, round-trip, and printer idempotency rates.
 
 ## Tool suite
 
@@ -137,7 +137,7 @@ The printer produces idempotent output: `print(parse(print(parse(src)))) == prin
 
 Top-level comments (line comments `--` and block comments `{- -}` between declarations) are captured during parsing and round-tripped through the printer. Comments are placed immediately before the declaration they precede.
 
-**Limitations:** Comments inside expressions (e.g., within a `let` block or on a specific line of a case branch) are not yet preserved. Doc comments (`{-| -}`) are attached to their declarations and always round-trip correctly.
+Comments inside `let`/`in` blocks and `case`/`of` branches are attached to their respective AST nodes and round-trip correctly. Doc comments (`{-| -}`) are attached to their declarations and always round-trip correctly.
 
 ## Visitors
 
@@ -205,22 +205,35 @@ The design follows `syn`'s proven patterns:
 
 The printer uses an approach inspired by [`elm-format`](https://github.com/avh4/elm-format): eagerly detect whether sub-expressions are multi-line, then switch containers to vertical layout when any child is multi-line.
 
+### Fully iterative expression parser
+
+The expression parser uses **zero stack recursion**. Traditional recursive-descent parsers can overflow the call stack on deeply nested input. `elm-ast` eliminates this entirely through three techniques:
+
+1. **Iterative Pratt parsing** -- binary operators use an explicit `Vec<PendingOp>` heap-allocated operator stack instead of recursive descent through precedence levels.
+2. **CPS (continuation-passing style)** -- every compound expression (if/case/let/lambda/paren/tuple/list/record) that would normally call `parse_expr` recursively instead returns a `NeedExpr(continuation)` step, where the continuation is a closure capturing the partial parse state.
+3. **Trampoline loop** -- a top-level loop drives execution: when a compound form needs a sub-expression, its continuation is pushed onto a heap-allocated stack and the loop restarts. When a sub-expression completes, the continuation is popped and invoked.
+
+This guarantees **O(1) call-stack depth** regardless of expression nesting. The continuation stack is bounded by `MAX_EXPR_DEPTH` (256) as a resource guard, not a safety requirement.
+
+None of this was strictly necessary -- a simple depth limit would have sufficed -- but it was fun to build, and, most importantly, it is thoroughly tested and works.
+
 ## Test coverage
 
-350 tests across the workspace:
+448 tests across the workspace:
 
 | Suite | Tests |
 |---|---|
 | Lexer | 59 |
-| Parser | 71 |
-| Printer | 42 |
+| Parser | 109 |
+| Printer | 55 |
 | Visitors | 29 |
-| Edge cases + serde + builders + comments | 78 |
-| Integration (149 real files, 23 packages) | 3 |
-| elm-unused | 5 |
-| elm-lint | 25 |
-| elm-deps | 8 |
-| elm-refactor | 10 |
+| Edge cases + serde + builders + comments | 104 |
+| Property-based (proptest) | 5 |
+| Integration (291 real files, 50 packages) | 3 |
+| elm-unused | 9 |
+| elm-lint | 26 |
+| elm-deps | 11 |
+| elm-refactor | 15 |
 | elm-search | 21 |
 
 ## License

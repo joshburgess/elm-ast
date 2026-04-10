@@ -8,10 +8,43 @@ use elm_ast::pattern::Pattern;
 use elm_ast::type_annotation::TypeAnnotation;
 use elm_ast::{parse, print};
 
+// ── Regression watchlist ─────────────────────────────────────────────
+//
+// These files were the hardest to get right and are the most likely to
+// regress. If a parser or printer change breaks the suite, check these first.
+//
+// 1. elm-community/typed-svg — Examples/GradientsPatterns.elm
+//    Problem: Inside list literals like `[ linearGradient [...] [...], ... ]`,
+//    function application args can appear at the *same* column as the function
+//    name (both indented to the bracket's column). The standard application_loop
+//    column check (`arg_col <= func_col`) rejected these as not-indented-enough.
+//    Fix: `app_context_col` — list/record parsers set the opening bracket's
+//    column as the reference for application_loop, relaxing the check to
+//    `arg_col <= bracket_col` instead of `arg_col <= func_col`.
+//
+// 2. mdgriffith/elm-animator — src/Animator.elm
+//    Problem: The printer output multiline function applications inline
+//    (space-separated), causing subsequent args to land at columns far below
+//    the function name after a multiline lambda/parenthesized arg. On re-parse,
+//    application_loop rejected those args.
+//    Fix: Vertical application layout — when any non-function arg is multiline,
+//    each arg is emitted on its own indented line. Also, multiline record setter
+//    values are placed on new indented lines so function names within them start
+//    near the indent column.
+//
+// Other packages with non-trivial coverage (complex patterns, deep nesting,
+// heavy operator use, GLSL blocks, large files):
+//   - folkertdev/elm-flate (large generated decompression tables)
+//   - dillonkearns/elm-markdown (deep nesting, complex case expressions)
+//   - rtfeldman/elm-css (heavy operator use, many record updates)
+//   - elm-explorations/webgl (GLSL shader blocks)
+//   - elm/core (infix declarations, wide variety of patterns)
+
 // ── Fixture discovery ────────────────────────────────────────────────
 
 fn all_fixture_dirs() -> Vec<(&'static str, &'static str)> {
     vec![
+        // ── elm/* ───────────────────────────────────────────────
         ("elm/core", "test-fixtures/core/src"),
         ("elm/html", "test-fixtures/html/src"),
         ("elm/browser", "test-fixtures/browser/src"),
@@ -25,21 +58,80 @@ fn all_fixture_dirs() -> Vec<(&'static str, &'static str)> {
         ("elm/time", "test-fixtures/time/src"),
         ("elm/regex", "test-fixtures/regex/src"),
         ("elm/random", "test-fixtures/random/src"),
-        ("rtfeldman/elm-css", "test-fixtures/elm-css/src"),
-        ("mdgriffith/elm-ui", "test-fixtures/elm-ui/src"),
         ("elm/svg", "test-fixtures/svg/src"),
         ("elm/compiler", "test-fixtures/compiler/reactor/src"),
+        (
+            "elm/project-metadata-utils",
+            "test-fixtures/project-metadata-utils/src",
+        ),
+        // ── elm-explorations/* ──────────────────────────────────
         ("elm-explorations/test", "test-fixtures/test/src"),
         ("elm-explorations/markdown", "test-fixtures/markdown/src"),
+        (
+            "elm-explorations/linear-algebra",
+            "test-fixtures/linear-algebra/src",
+        ),
+        ("elm-explorations/webgl", "test-fixtures/webgl/src"),
+        ("elm-explorations/benchmark", "test-fixtures/benchmark/src"),
+        // ── elm-community/* ─────────────────────────────────────
         ("elm-community/list-extra", "test-fixtures/list-extra/src"),
         ("elm-community/maybe-extra", "test-fixtures/maybe-extra/src"),
         (
             "elm-community/string-extra",
             "test-fixtures/string-extra/src",
         ),
+        ("elm-community/dict-extra", "test-fixtures/dict-extra/src"),
+        ("elm-community/array-extra", "test-fixtures/array-extra/src"),
+        (
+            "elm-community/result-extra",
+            "test-fixtures/result-extra/src",
+        ),
+        ("elm-community/html-extra", "test-fixtures/html-extra/src"),
+        ("elm-community/json-extra", "test-fixtures/json-extra/src"),
+        ("elm-community/typed-svg", "test-fixtures/typed-svg/src"),
+        // ── NoRedInk/* ──────────────────────────────────────────
         (
             "NoRedInk/elm-json-decode-pipeline",
             "test-fixtures/elm-json-decode-pipeline/src",
+        ),
+        (
+            "NoRedInk/elm-sweet-poll",
+            "test-fixtures/elm-sweet-poll/src",
+        ),
+        ("NoRedInk/elm-compare", "test-fixtures/elm-compare/src"),
+        (
+            "NoRedInk/elm-string-conversions",
+            "test-fixtures/elm-string-conversions/src",
+        ),
+        (
+            "NoRedInk/elm-sortable-table",
+            "test-fixtures/elm-sortable-table/src",
+        ),
+        // ── rtfeldman/* ─────────────────────────────────────────
+        ("rtfeldman/elm-css", "test-fixtures/elm-css/src"),
+        ("rtfeldman/elm-hex", "test-fixtures/elm-hex/src"),
+        (
+            "rtfeldman/elm-iso8601-date-strings",
+            "test-fixtures/elm-iso8601-date-strings/src",
+        ),
+        // ── Other widely-used packages ──────────────────────────
+        ("mdgriffith/elm-ui", "test-fixtures/elm-ui/src"),
+        ("mdgriffith/elm-animator", "test-fixtures/elm-animator/src"),
+        (
+            "dillonkearns/elm-markdown",
+            "test-fixtures/elm-markdown/src",
+        ),
+        ("krisajenkins/remotedata", "test-fixtures/remotedata/src"),
+        ("robinheghan/murmur3", "test-fixtures/murmur3/src"),
+        ("myrho/elm-round", "test-fixtures/elm-round/src"),
+        ("truqu/elm-base64", "test-fixtures/elm-base64/src"),
+        ("folkertdev/elm-flate", "test-fixtures/elm-flate/src"),
+        ("BrianHicks/elm-csv", "test-fixtures/elm-csv/src"),
+        ("zwilias/elm-rosetree", "test-fixtures/elm-rosetree/src"),
+        ("pzp1997/assoc-list", "test-fixtures/assoc-list/src"),
+        (
+            "Chadtech/elm-bool-extra",
+            "test-fixtures/elm-bool-extra/src",
         ),
     ]
 }
@@ -476,6 +568,14 @@ fn parse_all_packages() {
     assert!(total > 0, "no .elm files found in test-fixtures/");
     let pass_rate = (passed as f64 / total as f64) * 100.0;
     eprintln!("\nParse pass rate: {pass_rate:.1}%");
+    assert_eq!(
+        passed,
+        total,
+        "{} of {} files failed to parse:\n{}",
+        total - passed,
+        total,
+        failures.join("\n")
+    );
 }
 
 #[test]
@@ -509,6 +609,14 @@ fn round_trip_all_packages() {
         let pass_rate = (passed as f64 / total as f64) * 100.0;
         eprintln!("\nRound-trip pass rate: {pass_rate:.1}%");
     }
+    assert_eq!(
+        passed,
+        total,
+        "{} of {} files failed round-trip:\n{}",
+        total - passed,
+        total,
+        failures.join("\n")
+    );
 }
 
 #[test]
@@ -542,4 +650,12 @@ fn printer_idempotency() {
         let pass_rate = (passed as f64 / total as f64) * 100.0;
         eprintln!("\nIdempotency pass rate: {pass_rate:.1}%");
     }
+    assert_eq!(
+        passed,
+        total,
+        "{} of {} files failed idempotency:\n{}",
+        total - passed,
+        total,
+        failures.join("\n")
+    );
 }

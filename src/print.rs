@@ -647,6 +647,15 @@ impl Printer {
         self.write_expr_inner(expr);
     }
 
+    /// Emit leading comments attached to a node.
+    fn write_leading_comments(&mut self, comments: &[Spanned<Comment>]) {
+        for c in comments {
+            self.write_comment(&c.value);
+            self.newline();
+            self.write_indent();
+        }
+    }
+
     /// The core expression dispatcher.
     fn write_expr_inner(&mut self, expr: &Expr) {
         match expr {
@@ -656,11 +665,27 @@ impl Printer {
                 right,
                 ..
             } => {
+                let right_ml = is_multiline(&right.value);
+                self.write_leading_comments(&left.comments);
                 self.write_expr_operand(&left.value, operator, true);
-                self.write_char(' ');
-                self.write(operator);
-                self.write_char(' ');
-                self.write_expr_operand(&right.value, operator, false);
+                if right_ml {
+                    // Vertical layout: operator and right operand on a new
+                    // indented line so that the right side starts at a
+                    // predictable column (satisfying the parser's indent rules).
+                    self.indent();
+                    self.newline_indent();
+                    self.write(operator);
+                    self.write_char(' ');
+                    self.write_leading_comments(&right.comments);
+                    self.write_expr_operand(&right.value, operator, false);
+                    self.dedent();
+                } else {
+                    self.write_char(' ');
+                    self.write(operator);
+                    self.write_char(' ');
+                    self.write_leading_comments(&right.comments);
+                    self.write_expr_operand(&right.value, operator, false);
+                }
             }
             Expr::IfElse {
                 branches,
@@ -722,13 +747,27 @@ impl Printer {
     fn write_expr_app(&mut self, expr: &Expr) {
         match expr {
             Expr::Application(args) => {
-                // Application args are always written on the same line.
-                // Block expression args get parenthesized by write_expr_atomic.
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        self.write_char(' ');
+                // When any argument (beyond the function) is multiline,
+                // use vertical layout so each arg starts on a new indented
+                // line — this ensures args are always at a column greater
+                // than the function name, satisfying the parser's indent rules.
+                let any_arg_ml =
+                    args.len() > 1 && args.iter().skip(1).any(|a| is_multiline(&a.value));
+                if any_arg_ml {
+                    self.write_expr_atomic(&args[0].value);
+                    self.indent();
+                    for arg in &args[1..] {
+                        self.newline_indent();
+                        self.write_expr_atomic(&arg.value);
                     }
-                    self.write_expr_atomic(&arg.value);
+                    self.dedent();
+                } else {
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.write_char(' ');
+                        }
+                        self.write_expr_atomic(&arg.value);
+                    }
                 }
             }
             Expr::Negation(inner) => {
@@ -852,8 +891,6 @@ impl Printer {
             }
 
             // Block expressions in atomic position: parenthesized.
-            // The closing `)` stays inline so subsequent application args
-            // can follow at the right column.
             Expr::IfElse { .. }
             | Expr::CaseOf { .. }
             | Expr::LetIn { .. }
@@ -900,8 +937,16 @@ impl Printer {
 
     fn write_record_setter(&mut self, setter: &RecordSetter) {
         self.write(&setter.field.value);
-        self.write(" = ");
-        self.write_expr(&setter.value.value);
+        if is_multiline(&setter.value.value) {
+            self.write(" =");
+            self.indent();
+            self.newline_indent();
+            self.write_expr(&setter.value.value);
+            self.dedent();
+        } else {
+            self.write(" = ");
+            self.write_expr(&setter.value.value);
+        }
     }
 
     fn write_if_expr(&mut self, branches: &[(Spanned<Expr>, Spanned<Expr>)], else_branch: &Expr) {
@@ -951,10 +996,14 @@ impl Printer {
         self.indent();
         for branch in branches {
             self.newline_indent();
+            // Emit leading comments on the branch pattern.
+            self.write_leading_comments(&branch.pattern.comments);
             self.write_pattern(&branch.pattern.value);
             self.write(" ->");
             self.indent();
             self.newline_indent();
+            // Emit leading comments on the branch body.
+            self.write_leading_comments(&branch.body.comments);
             self.write_expr(&branch.body.value);
             self.dedent();
         }
@@ -966,6 +1015,8 @@ impl Printer {
         self.indent();
         for decl in declarations {
             self.newline_indent();
+            // Emit leading comments on this let declaration.
+            self.write_leading_comments(&decl.comments);
             self.write_let_declaration(&decl.value);
         }
         self.dedent();
@@ -1003,8 +1054,16 @@ impl Printer {
             }
             self.write_pattern_atomic(&arg.value);
         }
-        self.write(" -> ");
-        self.write_expr(body);
+        if is_multiline(body) {
+            self.write(" ->");
+            self.indent();
+            self.newline_indent();
+            self.write_expr(body);
+            self.dedent();
+        } else {
+            self.write(" -> ");
+            self.write_expr(body);
+        }
     }
 
     // ── Literals ─────────────────────────────────────────────────────

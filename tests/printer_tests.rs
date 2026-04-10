@@ -538,3 +538,258 @@ x = 0xFF
     );
     assert!(output.contains("0xFF"));
 }
+
+// ── Additional round-trip tests ─────────────────────────────────────
+
+#[test]
+fn round_trip_large_record() {
+    round_trip(
+        r#"
+module Main exposing (..)
+
+config =
+    { host = "localhost"
+    , port_ = 8080
+    , debug = True
+    , name = "test"
+    , timeout = 30
+    , retries = 3
+    , verbose = False
+    , logLevel = "info"
+    }
+"#,
+    );
+}
+
+#[test]
+fn round_trip_many_case_branches() {
+    round_trip(
+        "\
+module Main exposing (..)
+
+toStr n =
+    case n of
+        0 ->
+            \"zero\"
+        1 ->
+            \"one\"
+        2 ->
+            \"two\"
+        3 ->
+            \"three\"
+        4 ->
+            \"four\"
+        _ ->
+            \"other\"
+",
+    );
+}
+
+#[test]
+fn round_trip_all_pattern_types() {
+    round_trip(
+        "\
+module Main exposing (..)
+
+f x =
+    case x of
+        _ ->
+            1
+
+        42 ->
+            2
+
+        \"hi\" ->
+            3
+
+        ( a, b ) ->
+            4
+
+        Just val ->
+            5
+
+        { name } ->
+            6
+
+        a :: rest ->
+            7
+
+        [] ->
+            8
+
+        y as z ->
+            9
+",
+    );
+}
+
+#[test]
+fn round_trip_parenthesized_expression() {
+    round_trip(
+        "\
+module Main exposing (..)
+
+x = (1 + 2) * 3
+",
+    );
+}
+
+#[test]
+fn round_trip_record_access_chain() {
+    round_trip(
+        "\
+module Main exposing (..)
+
+x = model.user.name
+",
+    );
+}
+
+#[test]
+fn round_trip_complex_nested_operators() {
+    round_trip(
+        "\
+module Main exposing (..)
+
+x = a && b || c && (d || e)
+",
+    );
+}
+
+#[test]
+fn round_trip_nested_let_in() {
+    round_trip(
+        "\
+module Main exposing (..)
+
+x =
+    let
+        a =
+            let
+                b = 1
+            in
+            b + 1
+    in
+    a * 2
+",
+    );
+}
+
+#[test]
+fn round_trip_nested_case() {
+    round_trip(
+        "\
+module Main exposing (..)
+
+x =
+    case a of
+        Just val ->
+            case val of
+                1 ->
+                    True
+
+                _ ->
+                    False
+
+        Nothing ->
+            False
+",
+    );
+}
+
+#[test]
+fn round_trip_multiline_function_type() {
+    round_trip(
+        "\
+module Main exposing (..)
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model = ( model, Cmd.none )
+",
+    );
+}
+
+#[test]
+fn round_trip_record_update_multiple_fields() {
+    round_trip(
+        "\
+module Main exposing (..)
+
+x = { model | name = \"Bob\", age = 30, active = True }
+",
+    );
+}
+
+#[test]
+fn round_trip_nested_lambda() {
+    round_trip(
+        "\
+module Main exposing (..)
+
+x = \\a -> \\b -> a + b
+",
+    );
+}
+
+/// Parse → print → parse → print: second print should equal the first.
+fn idempotent(source: &str) {
+    let ast1 = parse(source).unwrap();
+    let print1 = print(&ast1);
+    let ast2 = parse(&print1).unwrap();
+    let print2 = print(&ast2);
+    assert_eq!(print1, print2, "printer not idempotent");
+}
+
+#[test]
+fn idempotent_complex_module() {
+    idempotent(
+        r#"
+module Main exposing (Model, Msg(..), update, view)
+
+import Html exposing (Html, div, text)
+import Html.Events exposing (onClick)
+
+type Msg = Increment | Decrement | Reset
+
+type alias Model = { count : Int, name : String }
+
+update : Msg -> Model -> Model
+update msg model =
+    case msg of
+        Increment ->
+            { model | count = model.count + 1 }
+        Decrement ->
+            { model | count = model.count - 1 }
+        Reset ->
+            { model | count = 0 }
+
+view : Model -> Html Msg
+view model =
+    div []
+        [ text (String.fromInt model.count) ]
+"#,
+    );
+}
+
+#[test]
+fn idempotent_let_case_if() {
+    idempotent(
+        "\
+module Main exposing (..)
+
+f x =
+    let
+        y =
+            if x > 0 then
+                case x of
+                    1 ->
+                        \"one\"
+                    _ ->
+                        \"other\"
+            else
+                \"negative\"
+    in
+    y
+",
+    );
+}
