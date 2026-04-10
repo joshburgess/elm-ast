@@ -213,7 +213,9 @@ The expression parser uses **zero stack recursion**. Traditional recursive-desce
 2. **CPS (continuation-passing style)** -- every compound expression (if/case/let/lambda/paren/tuple/list/record) that would normally call `parse_expr` recursively instead returns a `NeedExpr(continuation)` step, where the continuation is a closure capturing the partial parse state.
 3. **Trampoline loop** -- a top-level loop drives execution: when a compound form needs a sub-expression, its continuation is pushed onto a heap-allocated stack and the loop restarts. When a sub-expression completes, the continuation is popped and invoked.
 
-This guarantees **O(1) call-stack depth** regardless of expression nesting. The continuation stack is bounded by `MAX_EXPR_DEPTH` (256) as a resource guard, not a safety requirement. None of this was strictly necessary -- a simple depth limit would have sufficed -- but it was fun to build, and, most importantly, it is thoroughly tested and works.
+This guarantees **O(1) call-stack depth** regardless of expression nesting. The continuation stack is bounded by `MAX_EXPR_DEPTH` (256) as a resource guard, not a safety requirement.
+
+None of this was strictly necessary -- a simple depth limit would have sufficed -- but it was fun to build, and, most importantly, it is thoroughly tested and works.
 
 ## Test coverage
 
