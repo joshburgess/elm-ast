@@ -302,30 +302,39 @@ fn unary_wrap_negation(
 /// Parse function application: `f x y z`
 fn parse_application_cps(p: &mut Parser) -> ParseResult<Step> {
     let start = p.current_pos();
+    // Consume app_context_col (set by list/record parsers) so that nested
+    // expression parsing doesn't inherit it. The value is threaded through
+    // the CPS continuations for this application only.
+    let ctx_col = p.app_context_col.take();
     let first_step = parse_atomic_expr_cps(p)?;
 
     match first_step {
         Step::Done(first) => {
             let first_line = first.span.start.line;
-            application_loop(p, start, first_line, vec![first])
+            application_loop(p, start, first_line, vec![first], ctx_col)
         }
         Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
             let step = cont(p, sub_expr)?;
-            app_after_first_atom(p, step, start)
+            app_after_first_atom(p, step, start, ctx_col)
         }))),
     }
 }
 
 /// Wrapper: when the first atom of an application comes from a compound form.
-fn app_after_first_atom(p: &mut Parser, step: Step, start: Position) -> ParseResult<Step> {
+fn app_after_first_atom(
+    p: &mut Parser,
+    step: Step,
+    start: Position,
+    ctx_col: Option<u32>,
+) -> ParseResult<Step> {
     match step {
         Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
             let step = cont(p, sub_expr)?;
-            app_after_first_atom(p, step, start)
+            app_after_first_atom(p, step, start, ctx_col)
         }))),
         Step::Done(first) => {
             let first_line = first.span.start.line;
-            application_loop(p, start, first_line, vec![first])
+            application_loop(p, start, first_line, vec![first], ctx_col)
         }
     }
 }
@@ -336,6 +345,7 @@ fn application_loop(
     start: Position,
     first_line: u32,
     mut args: Vec<Spanned<Expr>>,
+    ctx_col: Option<u32>,
 ) -> ParseResult<Step> {
     loop {
         p.skip_whitespace();
@@ -344,7 +354,12 @@ fn application_loop(
         }
         let arg_col = p.current_column();
         let arg_line = p.current_pos().line;
-        if arg_line != first_line && arg_col <= start.column {
+        // When ctx_col is set (inside list/record), use the bracket's
+        // column as the reference — arguments past the bracket are valid.
+        // Otherwise, require args to be strictly more indented than the
+        // function to avoid consuming sibling declarations or case branches.
+        let ref_col = ctx_col.unwrap_or(start.column);
+        if arg_line != first_line && arg_col <= ref_col {
             break;
         }
         let step = parse_atomic_expr_cps(p)?;
@@ -353,7 +368,7 @@ fn application_loop(
             Step::NeedExpr(cont) => {
                 return Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
                     let step = cont(p, sub_expr)?;
-                    app_after_arg(p, step, start, first_line, args)
+                    app_after_arg(p, step, start, first_line, args, ctx_col)
                 })));
             }
         }
@@ -373,16 +388,17 @@ fn app_after_arg(
     start: Position,
     first_line: u32,
     args: Vec<Spanned<Expr>>,
+    ctx_col: Option<u32>,
 ) -> ParseResult<Step> {
     match step {
         Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
             let step = cont(p, sub_expr)?;
-            app_after_arg(p, step, start, first_line, args)
+            app_after_arg(p, step, start, first_line, args, ctx_col)
         }))),
         Step::Done(arg) => {
             let mut args = args;
             args.push(arg);
-            application_loop(p, start, first_line, args)
+            application_loop(p, start, first_line, args, ctx_col)
         }
     }
 }
@@ -643,6 +659,10 @@ fn case_next_branch(
     }
     p.expect(&Token::Arrow)?;
 
+    // Clear the application context column so that the branch body uses
+    // normal column checking (prevents over-consuming the next branch pattern).
+    p.app_context_col = None;
+
     // Need branch body
     Ok(Step::NeedExpr(Box::new(move |p, body| {
         let mut branches = branches;
@@ -705,6 +725,8 @@ fn let_next_decl(
         || (!p.in_paren_context() && p.current_column() < let_col + 1)
     {
         p.expect(&Token::In)?;
+        // Clear app_context_col for the `in` body.
+        p.app_context_col = None;
         // Need body
         return Ok(Step::NeedExpr(Box::new(move |p, body| {
             Ok(Step::Done(p.spanned_from(
@@ -744,6 +766,9 @@ fn let_next_decl(
                 }
                 p.expect(&Token::Equals)?;
 
+                // Clear app_context_col for the function body.
+                p.app_context_col = None;
+
                 // Need function body
                 Ok(Step::NeedExpr(Box::new(move |p, body| {
                     let implementation = FunctionImplementation { name, args, body };
@@ -779,6 +804,9 @@ fn let_next_decl(
                 }
                 p.expect(&Token::Equals)?;
 
+                // Clear app_context_col for the function body.
+                p.app_context_col = None;
+
                 // Need function body
                 Ok(Step::NeedExpr(Box::new(move |p, body| {
                     let implementation = FunctionImplementation { name, args, body };
@@ -802,6 +830,9 @@ fn let_next_decl(
             // Destructuring pattern.
             let pattern = parse_pattern(p)?;
             p.expect(&Token::Equals)?;
+
+            // Clear app_context_col for the destructuring body.
+            p.app_context_col = None;
 
             // Need destructuring body
             Ok(Step::NeedExpr(Box::new(move |p, body| {
@@ -964,6 +995,7 @@ fn tuple_after_element(
 // ── List (CPS) ───────────────────────────────────────────────────────
 
 fn parse_list_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
+    let bracket_col = start.column;
     p.advance(); // consume `[`
     p.skip_whitespace();
 
@@ -972,22 +1004,29 @@ fn parse_list_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
         return Ok(Step::Done(p.spanned_from(start, Expr::List(Vec::new()))));
     }
 
+    // Set the application context column to the bracket's column so that
+    // function args at any column past the bracket are collected.
+    p.app_context_col = Some(bracket_col);
+
     // Need first element
     Ok(Step::NeedExpr(Box::new(move |p, first| {
-        list_after_element(p, start, Vec::new(), first)
+        list_after_element(p, start, bracket_col, Vec::new(), first)
     })))
 }
 
 fn list_after_element(
     p: &mut Parser,
     start: Position,
+    bracket_col: u32,
     mut elements: Vec<Spanned<Expr>>,
     elem: Spanned<Expr>,
 ) -> ParseResult<Step> {
     elements.push(elem);
     if p.eat(&Token::Comma) {
+        // Re-set the context column for the next element.
+        p.app_context_col = Some(bracket_col);
         Ok(Step::NeedExpr(Box::new(move |p, next| {
-            list_after_element(p, start, elements, next)
+            list_after_element(p, start, bracket_col, elements, next)
         })))
     } else {
         p.expect(&Token::RightBracket)?;
@@ -1042,6 +1081,10 @@ fn record_parse_setter(
     let setter_start = p.current_pos();
     let field = p.expect_lower_name()?;
     p.expect(&Token::Equals)?;
+
+    // Set the application context column to the brace's column so that
+    // function args at any column past the brace are collected.
+    p.app_context_col = Some(rec_start.column);
 
     // Need field value
     Ok(Step::NeedExpr(Box::new(move |p, value| {

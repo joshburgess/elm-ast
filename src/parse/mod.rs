@@ -49,6 +49,12 @@ pub struct Parser {
     /// indentation-sensitive layout rules are suspended (any column is valid).
     /// This matches the elm/compiler behavior.
     paren_depth: u32,
+    /// When set, `application_loop` uses this column instead of the function's
+    /// column for continuation checks. Set by list/record parsers (to the
+    /// opening bracket's column) so that function arguments at any column past
+    /// the bracket are collected. Cleared by case/let parsers before parsing
+    /// branch/declaration bodies so that normal column checking resumes.
+    pub(crate) app_context_col: Option<u32>,
     /// Comments collected as a side-channel during parsing.
     /// `skip_whitespace` saves comments here instead of silently discarding them,
     /// so that `parse_module` can include them in the final AST.
@@ -62,6 +68,7 @@ impl Parser {
             tokens,
             pos: 0,
             paren_depth: 0,
+            app_context_col: None,
             collected_comments: Vec::new(),
         }
     }
@@ -82,6 +89,7 @@ impl Parser {
     pub fn in_paren_context(&self) -> bool {
         self.paren_depth > 0
     }
+
 
     // ── Position & peeking ───────────────────────────────────────────
 

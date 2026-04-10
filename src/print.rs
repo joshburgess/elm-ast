@@ -747,11 +747,27 @@ impl Printer {
     fn write_expr_app(&mut self, expr: &Expr) {
         match expr {
             Expr::Application(args) => {
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        self.write_char(' ');
+                // When any argument (beyond the function) is multiline,
+                // use vertical layout so each arg starts on a new indented
+                // line — this ensures args are always at a column greater
+                // than the function name, satisfying the parser's indent rules.
+                let any_arg_ml =
+                    args.len() > 1 && args.iter().skip(1).any(|a| is_multiline(&a.value));
+                if any_arg_ml {
+                    self.write_expr_atomic(&args[0].value);
+                    self.indent();
+                    for arg in &args[1..] {
+                        self.newline_indent();
+                        self.write_expr_atomic(&arg.value);
                     }
-                    self.write_expr_atomic(&arg.value);
+                    self.dedent();
+                } else {
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.write_char(' ');
+                        }
+                        self.write_expr_atomic(&arg.value);
+                    }
                 }
             }
             Expr::Negation(inner) => {
@@ -921,8 +937,16 @@ impl Printer {
 
     fn write_record_setter(&mut self, setter: &RecordSetter) {
         self.write(&setter.field.value);
-        self.write(" = ");
-        self.write_expr(&setter.value.value);
+        if is_multiline(&setter.value.value) {
+            self.write(" =");
+            self.indent();
+            self.newline_indent();
+            self.write_expr(&setter.value.value);
+            self.dedent();
+        } else {
+            self.write(" = ");
+            self.write_expr(&setter.value.value);
+        }
     }
 
     fn write_if_expr(&mut self, branches: &[(Spanned<Expr>, Spanned<Expr>)], else_branch: &Expr) {

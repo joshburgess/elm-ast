@@ -6,7 +6,7 @@ A `syn`-quality Rust library for parsing and constructing Elm 0.19.1 ASTs, plus 
 
 `elm-ast` provides a complete, strongly-typed representation of Elm source code as a Rust AST, along with a parser, printer, and visitor/fold traits for traversal and transformation. It is modeled after Rust's [`syn`](https://github.com/dtolnay/syn) crate, with a formatting approach inspired by [`elm-format`](https://github.com/avh4/elm-format).
 
-**Tested against 291 real-world `.elm` files from 50 packages** (including `elm/core`, `elm/browser`, `rtfeldman/elm-css`, `mdgriffith/elm-ui`, `dillonkearns/elm-markdown`, `folkertdev/elm-flate`, `elm-explorations/test`) with 99.7% parse, 99.3% round-trip, and 99.3% printer idempotency rates.
+**Tested against 291 real-world `.elm` files from 50 packages** (including `elm/core`, `elm/browser`, `rtfeldman/elm-css`, `mdgriffith/elm-ui`, `dillonkearns/elm-markdown`, `folkertdev/elm-flate`, `elm-explorations/test`) with 100% parse, round-trip, and printer idempotency rates.
 
 ## Tool suite
 

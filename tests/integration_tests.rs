@@ -503,6 +503,13 @@ fn parse_all_packages() {
     assert!(total > 0, "no .elm files found in test-fixtures/");
     let pass_rate = (passed as f64 / total as f64) * 100.0;
     eprintln!("\nParse pass rate: {pass_rate:.1}%");
+    assert_eq!(
+        passed, total,
+        "{} of {} files failed to parse:\n{}",
+        total - passed,
+        total,
+        failures.join("\n")
+    );
 }
 
 #[test]
@@ -536,6 +543,13 @@ fn round_trip_all_packages() {
         let pass_rate = (passed as f64 / total as f64) * 100.0;
         eprintln!("\nRound-trip pass rate: {pass_rate:.1}%");
     }
+    assert_eq!(
+        passed, total,
+        "{} of {} files failed round-trip:\n{}",
+        total - passed,
+        total,
+        failures.join("\n")
+    );
 }
 
 #[test]
@@ -569,4 +583,11 @@ fn printer_idempotency() {
         let pass_rate = (passed as f64 / total as f64) * 100.0;
         eprintln!("\nIdempotency pass rate: {pass_rate:.1}%");
     }
+    assert_eq!(
+        passed, total,
+        "{} of {} files failed idempotency:\n{}",
+        total - passed,
+        total,
+        failures.join("\n")
+    );
 }
