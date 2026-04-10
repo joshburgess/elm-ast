@@ -1,5 +1,5 @@
-use elm_ast_rs::file::ElmModule;
-use elm_ast_rs::span::Span;
+use elm_ast::file::ElmModule;
+use elm_ast::span::Span;
 
 /// A lint error reported by a rule.
 #[derive(Debug, Clone)]

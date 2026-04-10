@@ -10,12 +10,12 @@ fn main() {
         eprintln!("Error reading {path}: {e}");
         std::process::exit(1);
     });
-    let module = elm_ast_rs::parse(&source).unwrap_or_else(|errors| {
+    let module = elm_ast::parse(&source).unwrap_or_else(|errors| {
         eprintln!("Parse errors in {path}:");
         for e in &errors {
             eprintln!("  {e}");
         }
         std::process::exit(1);
     });
-    print!("{}", elm_ast_rs::print(&module));
+    print!("{}", elm_ast::print(&module));
 }

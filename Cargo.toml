@@ -2,7 +2,7 @@
 members = [".", "tools/elm-unused", "tools/elm-lint", "tools/elm-deps", "tools/elm-refactor", "tools/elm-search"]
 
 [package]
-name = "elm-ast-rs"
+name = "elm-ast"
 version = "0.1.0"
 edition = "2024"
 description = "A syn-quality Rust library for parsing and constructing Elm 0.19.1 ASTs"
@@ -10,7 +10,7 @@ license = "MIT OR Apache-2.0"
 keywords = ["elm", "ast", "parser", "syntax"]
 categories = ["parsing", "development-tools"]
 repository = "https://github.com/joshburgess/elm-ast-rs"
-documentation = "https://docs.rs/elm-ast-rs"
+documentation = "https://docs.rs/elm-ast"
 readme = "README.md"
 
 [features]

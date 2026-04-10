@@ -1,12 +1,13 @@
-use elm_ast_rs::expr::Expr;
-use elm_ast_rs::fold::Fold;
-use elm_ast_rs::literal::Literal;
-use elm_ast_rs::node::Spanned;
-use elm_ast_rs::pattern::Pattern;
-use elm_ast_rs::type_annotation::TypeAnnotation;
-use elm_ast_rs::visit::Visit;
-use elm_ast_rs::visit_mut::VisitMut;
-use elm_ast_rs::{parse, print};
+use elm_ast::declaration::Declaration;
+use elm_ast::expr::Expr;
+use elm_ast::fold::Fold;
+use elm_ast::literal::Literal;
+use elm_ast::node::Spanned;
+use elm_ast::pattern::Pattern;
+use elm_ast::type_annotation::TypeAnnotation;
+use elm_ast::visit::Visit;
+use elm_ast::visit_mut::VisitMut;
+use elm_ast::{parse, print};
 
 // ── Visit: counting ──────────────────────────────────────────────────
 
@@ -15,7 +16,7 @@ struct ExprCounter(usize);
 impl Visit for ExprCounter {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         self.0 += 1;
-        elm_ast_rs::visit::walk_expr(self, expr);
+        elm_ast::visit::walk_expr(self, expr);
     }
 }
 
@@ -75,7 +76,7 @@ impl Visit for LambdaCounter {
         if matches!(&expr.value, Expr::Lambda { .. }) {
             self.0 += 1;
         }
-        elm_ast_rs::visit::walk_expr(self, expr);
+        elm_ast::visit::walk_expr(self, expr);
     }
 }
 
@@ -104,7 +105,7 @@ impl Visit for WildcardCounter {
         if matches!(&pattern.value, Pattern::Anything) {
             self.0 += 1;
         }
-        elm_ast_rs::visit::walk_pattern(self, pattern);
+        elm_ast::visit::walk_pattern(self, pattern);
     }
 }
 
@@ -133,7 +134,7 @@ impl Visit for TypeNameCollector {
         if let TypeAnnotation::Typed { name, .. } = &ty.value {
             self.0.push(name.value.clone());
         }
-        elm_ast_rs::visit::walk_type_annotation(self, ty);
+        elm_ast::visit::walk_type_annotation(self, ty);
     }
 }
 
@@ -162,9 +163,9 @@ foo x = \"hello\"
 struct DeclCounter(usize);
 
 impl Visit for DeclCounter {
-    fn visit_declaration(&mut self, _decl: &Spanned<elm_ast_rs::declaration::Declaration>) {
+    fn visit_declaration(&mut self, _decl: &Spanned<elm_ast::declaration::Declaration>) {
         self.0 += 1;
-        elm_ast_rs::visit::walk_declaration(self, _decl);
+        elm_ast::visit::walk_declaration(self, _decl);
     }
 }
 
@@ -380,7 +381,7 @@ struct NegationRemover;
 
 impl Fold for NegationRemover {
     fn fold_expr(&mut self, expr: Spanned<Expr>) -> Spanned<Expr> {
-        let expr = elm_ast_rs::fold::fold_expr(self, expr);
+        let expr = elm_ast::fold::fold_expr(self, expr);
         match &expr.value {
             Expr::Negation(inner) => {
                 // Replace -x with x
@@ -440,4 +441,182 @@ sub a b = a - b
     assert!(output.contains("x + b"));
     assert!(output.contains("x - b"));
     assert!(!output.contains("a +"));
+}
+
+// ── Visit: descent into all expr children ───────────────────────────
+
+#[test]
+fn visit_descends_into_all_expr_children() {
+    // A source that contains many different expression forms.
+    // Count every Expr node visited to verify full descent.
+    let src = "\
+module Main exposing (..)
+
+f x =
+    let
+        y = x + 1
+    in
+    if y > 0 then
+        case y of
+            1 -> [y, x]
+            _ -> (\\z -> { a = z })
+    else
+        ()
+";
+    let m = parse(src).unwrap();
+
+    struct AllExprCounter(usize);
+    impl Visit for AllExprCounter {
+        fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+            self.0 += 1;
+            elm_ast::visit::walk_expr(self, expr);
+        }
+    }
+
+    let mut counter = AllExprCounter(0);
+    counter.visit_module(&m);
+    // There should be a significant number of expr nodes visited
+    // (let body, binop, if cond, if branches, case subject, case branches,
+    //  list elements, lambda body, record field, unit, literals, vars)
+    assert!(
+        counter.0 >= 15,
+        "should visit at least 15 expr nodes, got {}",
+        counter.0
+    );
+}
+
+// ── Visit: descent into patterns ────────────────────────────────────
+
+#[test]
+fn visit_descends_into_patterns() {
+    let src = "\
+module Main exposing (..)
+
+f x =
+    case x of
+        Just (a :: b) -> a
+        { name } -> name
+        (y, _) -> y
+        Nothing -> 0
+";
+    let m = parse(src).unwrap();
+
+    struct AllPatternCounter(usize);
+    impl Visit for AllPatternCounter {
+        fn visit_pattern(&mut self, pat: &Spanned<Pattern>) {
+            self.0 += 1;
+            elm_ast::visit::walk_pattern(self, pat);
+        }
+    }
+
+    let mut counter = AllPatternCounter(0);
+    counter.visit_module(&m);
+    // Patterns: x (arg), Just (a :: b), a, b, {name}, name, (y, _), y, _, Nothing
+    assert!(
+        counter.0 >= 10,
+        "should visit at least 10 pattern nodes, got {}",
+        counter.0
+    );
+}
+
+// ── Visit: descent into type annotations ────────────────────────────
+
+#[test]
+fn visit_descends_into_type_annotations() {
+    let src = "\
+module Main exposing (..)
+
+f : Int -> { name : String, age : List (Maybe a) } -> ( Bool, () )
+f x y = x
+";
+    let m = parse(src).unwrap();
+
+    struct AllTypeCounter(usize);
+    impl Visit for AllTypeCounter {
+        fn visit_type_annotation(&mut self, ty: &Spanned<TypeAnnotation>) {
+            self.0 += 1;
+            elm_ast::visit::walk_type_annotation(self, ty);
+        }
+    }
+
+    let mut counter = AllTypeCounter(0);
+    counter.visit_module(&m);
+    // Types: Int, record type, String, List (Maybe a), Maybe a, a, (Bool, ()), Bool, (), plus function arrows
+    assert!(
+        counter.0 >= 8,
+        "should visit at least 8 type nodes, got {}",
+        counter.0
+    );
+}
+
+// ── VisitMut: modify all string literals ────────────────────────────
+
+#[test]
+fn visit_mut_modifies_all_string_literals() {
+    let src = "\
+module Main exposing (..)
+
+f = [ \"hello\", \"world\" ]
+
+g = { name = \"test\" }
+";
+    let mut m = parse(src).unwrap();
+
+    struct UppercaseStrings;
+    impl VisitMut for UppercaseStrings {
+        fn visit_expr_mut(&mut self, expr: &mut Spanned<Expr>) {
+            if let Expr::Literal(Literal::String(s)) = &mut expr.value {
+                *s = s.to_uppercase();
+            }
+            elm_ast::visit_mut::walk_expr_mut(self, expr);
+        }
+    }
+
+    UppercaseStrings.visit_module_mut(&mut m);
+    let output = print::print(&m);
+    assert!(output.contains("\"HELLO\""), "should uppercase hello");
+    assert!(output.contains("\"WORLD\""), "should uppercase world");
+    assert!(output.contains("\"TEST\""), "should uppercase test");
+}
+
+// ── Fold: transform all declarations ────────────────────────────────
+
+#[test]
+fn fold_transforms_all_declarations() {
+    let src = "\
+module Main exposing (..)
+
+add x y = x + y
+
+sub x y = x - y
+";
+    let m = parse(src).unwrap();
+
+    // Fold that prefixes all function names with "my_"
+    struct PrefixFunctions;
+    impl Fold for PrefixFunctions {
+        fn fold_declaration(&mut self, decl: Spanned<Declaration>) -> Spanned<Declaration> {
+            let decl = elm_ast::fold::fold_declaration(self, decl);
+            match decl.value {
+                Declaration::FunctionDeclaration(mut func) => {
+                    func.declaration.value.name.value =
+                        format!("my_{}", func.declaration.value.name.value);
+                    if let Some(ref mut sig) = func.signature {
+                        sig.value.name.value = format!("my_{}", sig.value.name.value);
+                    }
+                    Spanned::new(decl.span, Declaration::FunctionDeclaration(func))
+                }
+                other => Spanned::new(decl.span, other),
+            }
+        }
+    }
+
+    let m2 = PrefixFunctions.fold_module(m);
+    let output = print::print(&m2);
+    assert!(output.contains("my_add"), "should prefix add");
+    assert!(output.contains("my_sub"), "should prefix sub");
+    assert!(
+        !output.contains("\nadd "),
+        "should not have original name 'add'"
+    );
 }

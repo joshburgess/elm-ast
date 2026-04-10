@@ -1,12 +1,12 @@
-use elm_ast_rs::declaration::Declaration;
-use elm_ast_rs::exposing::{ExposedItem, Exposing};
-use elm_ast_rs::expr::Expr;
-use elm_ast_rs::file::ElmModule;
-use elm_ast_rs::literal::Literal;
-use elm_ast_rs::module_header::ModuleHeader;
-use elm_ast_rs::parse;
-use elm_ast_rs::pattern::Pattern;
-use elm_ast_rs::type_annotation::TypeAnnotation;
+use elm_ast::declaration::Declaration;
+use elm_ast::exposing::{ExposedItem, Exposing};
+use elm_ast::expr::Expr;
+use elm_ast::file::ElmModule;
+use elm_ast::literal::Literal;
+use elm_ast::module_header::ModuleHeader;
+use elm_ast::parse;
+use elm_ast::pattern::Pattern;
+use elm_ast::type_annotation::TypeAnnotation;
 
 /// Parse and unwrap, panicking on error.
 fn parse_ok(source: &str) -> ElmModule {
@@ -22,7 +22,7 @@ fn parse_ok(source: &str) -> ElmModule {
 }
 
 /// Helper to extract the inner value from a Spanned.
-fn v<T>(spanned: &elm_ast_rs::Spanned<T>) -> &T {
+fn v<T>(spanned: &elm_ast::Spanned<T>) -> &T {
     &spanned.value
 }
 

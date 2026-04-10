@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use elm_ast_rs::module_header::ModuleHeader;
+use elm_ast::module_header::ModuleHeader;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -56,7 +56,7 @@ fn main() {
             Ok(s) => s,
             Err(_) => continue,
         };
-        match elm_ast_rs::parse(&source) {
+        match elm_ast::parse(&source) {
             Ok(module) => {
                 let mod_name = match &module.header.value {
                     ModuleHeader::Normal { name, .. }

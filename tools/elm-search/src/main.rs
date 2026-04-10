@@ -57,7 +57,7 @@ fn main() {
             Ok(s) => s,
             Err(_) => continue,
         };
-        let module = match elm_ast_rs::parse(&source) {
+        let module = match elm_ast::parse(&source) {
             Ok(m) => m,
             Err(_) => continue,
         };

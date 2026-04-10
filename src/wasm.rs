@@ -6,7 +6,7 @@
 //! ## Usage from JavaScript
 //!
 //! ```js
-//! import init, { parse_elm, print_elm, parse_elm_to_json } from './elm_ast_rs.js';
+//! import init, { parse_elm, print_elm, parse_elm_to_json } from './elm_ast.js';
 //!
 //! await init();
 //!

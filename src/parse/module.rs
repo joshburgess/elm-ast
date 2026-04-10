@@ -1,4 +1,3 @@
-use crate::comment::Comment;
 use crate::exposing::{ExposedItem, Exposing};
 use crate::file::ElmModule;
 use crate::import::Import;
@@ -11,18 +10,28 @@ use super::{ParseError, ParseResult, Parser};
 
 /// Parse a complete Elm module (file).
 pub fn parse_module(p: &mut Parser) -> ParseResult<ElmModule> {
-    // Collect leading comments.
-    let mut comments = Vec::new();
-    collect_comments(p, &mut comments);
+    // Drain any comments collected during initial whitespace skipping.
+    p.drain_comments();
 
     // Parse module header.
     let header = parse_module_header(p)?;
 
     // Parse imports.
+    // Use skip_whitespace_before_doc so we don't accidentally consume
+    // doc comments that belong to the first declaration. If we encounter
+    // a DocComment, check whether an Import follows — if so, skip past
+    // the doc comment (it's a module-level doc) and continue the loop.
     let mut imports = Vec::new();
     loop {
-        collect_comments(p, &mut comments);
-        p.skip_whitespace();
+        p.skip_whitespace_before_doc();
+        if matches!(p.peek(), Token::DocComment(_)) {
+            if matches!(p.peek_past_whitespace(), Token::Import) {
+                p.skip_whitespace(); // consume the doc comment
+            // Fall through to parse the import below.
+            } else {
+                break; // Doc comment is for the first declaration.
+            }
+        }
         if !matches!(p.peek(), Token::Import) {
             break;
         }
@@ -30,15 +39,19 @@ pub fn parse_module(p: &mut Parser) -> ParseResult<ElmModule> {
     }
 
     // Parse declarations.
+    // Use skip_whitespace_before_doc so doc comments stay in the stream
+    // for parse_declaration's try_doc_comment to pick up.
     let mut declarations = Vec::new();
     loop {
-        collect_comments(p, &mut comments);
-        p.skip_whitespace();
+        p.skip_whitespace_before_doc();
         if p.is_eof() {
             break;
         }
         declarations.push(parse_declaration(p)?);
     }
+
+    // All comments encountered during parsing were saved by skip_whitespace.
+    let comments = p.drain_comments();
 
     Ok(ElmModule {
         header,
@@ -278,40 +291,15 @@ fn parse_import(p: &mut Parser) -> ParseResult<Spanned<Import>> {
     ))
 }
 
-/// Collect any comment tokens into the comments vec.
-fn collect_comments(p: &mut Parser, comments: &mut Vec<Spanned<Comment>>) {
-    loop {
-        match p.peek().clone() {
-            Token::Newline => {
-                p.advance();
-            }
-            Token::LineComment(text) => {
-                let tok = p.advance();
-                comments.push(Spanned::new(tok.span, Comment::Line(text)));
-            }
-            Token::BlockComment(text) => {
-                let tok = p.advance();
-                comments.push(Spanned::new(tok.span, Comment::Block(text)));
-            }
-            Token::DocComment(_text) => {
-                // Don't consume doc comments here — they get attached to declarations.
-                break;
-            }
-            _ => break,
-        }
-    }
-}
-
 /// Parse a module with error recovery.
 ///
 /// If the module header or imports fail, returns `(None, errors)`.
 /// If declarations fail, skips to the next declaration and continues,
 /// returning the partial AST with all collected errors.
 pub fn parse_module_recovering(p: &mut Parser) -> (Option<ElmModule>, Vec<ParseError>) {
-    let mut comments = Vec::new();
     let mut errors = Vec::new();
 
-    collect_comments(p, &mut comments);
+    p.drain_comments();
 
     let header = match parse_module_header(p) {
         Ok(h) => h,
@@ -320,8 +308,14 @@ pub fn parse_module_recovering(p: &mut Parser) -> (Option<ElmModule>, Vec<ParseE
 
     let mut imports = Vec::new();
     loop {
-        collect_comments(p, &mut comments);
-        p.skip_whitespace();
+        p.skip_whitespace_before_doc();
+        if matches!(p.peek(), Token::DocComment(_)) {
+            if matches!(p.peek_past_whitespace(), Token::Import) {
+                p.skip_whitespace();
+            } else {
+                break;
+            }
+        }
         if !matches!(p.peek(), Token::Import) {
             break;
         }
@@ -336,8 +330,7 @@ pub fn parse_module_recovering(p: &mut Parser) -> (Option<ElmModule>, Vec<ParseE
 
     let mut declarations = Vec::new();
     loop {
-        collect_comments(p, &mut comments);
-        p.skip_whitespace();
+        p.skip_whitespace_before_doc();
         if p.is_eof() {
             break;
         }
@@ -349,6 +342,8 @@ pub fn parse_module_recovering(p: &mut Parser) -> (Option<ElmModule>, Vec<ParseE
             }
         }
     }
+
+    let comments = p.drain_comments();
 
     (
         Some(ElmModule {

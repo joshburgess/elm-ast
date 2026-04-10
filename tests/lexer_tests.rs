@@ -1,6 +1,6 @@
-use elm_ast_rs::lexer::Lexer;
-use elm_ast_rs::literal::Literal;
-use elm_ast_rs::token::Token;
+use elm_ast::lexer::Lexer;
+use elm_ast::literal::Literal;
+use elm_ast::token::Token;
 
 /// Helper: lex source and return just the token values (no spans), excluding Eof.
 fn lex(source: &str) -> Vec<Token> {
@@ -14,7 +14,7 @@ fn lex(source: &str) -> Vec<Token> {
 }
 
 /// Helper: lex and expect errors, returning (tokens, errors).
-fn lex_with_errors(source: &str) -> (Vec<Token>, Vec<elm_ast_rs::lexer::LexError>) {
+fn lex_with_errors(source: &str) -> (Vec<Token>, Vec<elm_ast::lexer::LexError>) {
     let (tokens, errors) = Lexer::new(source).tokenize();
     let toks = tokens
         .into_iter()

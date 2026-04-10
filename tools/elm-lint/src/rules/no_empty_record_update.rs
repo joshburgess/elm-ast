@@ -1,6 +1,6 @@
-use elm_ast_rs::expr::Expr;
-use elm_ast_rs::node::Spanned;
-use elm_ast_rs::visit::{self, Visit};
+use elm_ast::expr::Expr;
+use elm_ast::node::Spanned;
+use elm_ast::visit::{self, Visit};
 
 use crate::rule::{LintContext, LintError, Rule};
 
@@ -32,7 +32,7 @@ impl Rule for NoEmptyRecordUpdate {
     }
 }
 
-struct Visitor(Vec<elm_ast_rs::span::Span>);
+struct Visitor(Vec<elm_ast::span::Span>);
 
 impl Visit for Visitor {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {

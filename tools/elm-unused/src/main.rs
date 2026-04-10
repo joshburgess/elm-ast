@@ -40,7 +40,7 @@ fn main() {
             }
         };
 
-        match elm_ast_rs::parse(&source) {
+        match elm_ast::parse(&source) {
             Ok(module) => {
                 let info = collect::collect_module_info(&module);
                 let mod_name = info.module_name.join(".");

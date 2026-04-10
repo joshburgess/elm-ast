@@ -4,6 +4,7 @@ pub mod module;
 pub mod pattern;
 pub mod type_annotation;
 
+use crate::comment::Comment;
 use crate::node::Spanned;
 use crate::span::{Position, Span};
 use crate::token::Token;
@@ -41,6 +42,10 @@ pub struct Parser {
     /// indentation-sensitive layout rules are suspended (any column is valid).
     /// This matches the elm/compiler behavior.
     paren_depth: u32,
+    /// Comments collected as a side-channel during parsing.
+    /// `skip_whitespace` saves comments here instead of silently discarding them,
+    /// so that `parse_module` can include them in the final AST.
+    collected_comments: Vec<Spanned<Comment>>,
 }
 
 impl Parser {
@@ -50,7 +55,13 @@ impl Parser {
             tokens,
             pos: 0,
             paren_depth: 0,
+            collected_comments: Vec::new(),
         }
+    }
+
+    /// Drain all comments collected so far by `skip_whitespace`.
+    pub fn drain_comments(&mut self) -> Vec<Spanned<Comment>> {
+        std::mem::take(&mut self.collected_comments)
     }
 
     /// Returns true if currently inside parens/brackets/braces.
@@ -113,13 +124,50 @@ impl Parser {
         tok
     }
 
-    /// Skip over any newline and comment tokens.
+    /// Skip over newline, line comment, block comment, and doc comment tokens.
+    /// Line and block comments are saved to `collected_comments` for round-tripping.
     pub fn skip_whitespace(&mut self) {
         while matches!(
             self.peek(),
             Token::Newline | Token::LineComment(_) | Token::BlockComment(_) | Token::DocComment(_)
         ) {
-            self.advance();
+            let tok = self.peek().clone();
+            let spanned_tok = self.advance();
+            match tok {
+                Token::LineComment(text) => {
+                    self.collected_comments
+                        .push(Spanned::new(spanned_tok.span, Comment::Line(text)));
+                }
+                Token::BlockComment(text) => {
+                    self.collected_comments
+                        .push(Spanned::new(spanned_tok.span, Comment::Block(text)));
+                }
+                _ => {} // Newline, DocComment
+            }
+        }
+    }
+
+    /// Skip whitespace and comments, saving line/block comments, but stop
+    /// before consuming a `DocComment` token. Used by `try_doc_comment` so
+    /// it can see the doc comment after skipping preceding whitespace.
+    pub fn skip_whitespace_before_doc(&mut self) {
+        while matches!(
+            self.peek(),
+            Token::Newline | Token::LineComment(_) | Token::BlockComment(_)
+        ) {
+            let tok = self.peek().clone();
+            let spanned_tok = self.advance();
+            match tok {
+                Token::LineComment(text) => {
+                    self.collected_comments
+                        .push(Spanned::new(spanned_tok.span, Comment::Line(text)));
+                }
+                Token::BlockComment(text) => {
+                    self.collected_comments
+                        .push(Spanned::new(spanned_tok.span, Comment::Block(text)));
+                }
+                _ => {} // Newline
+            }
         }
     }
 
@@ -254,7 +302,7 @@ impl Parser {
 
     /// If the current token is a doc comment, consume and return it.
     pub fn try_doc_comment(&mut self) -> Option<Spanned<String>> {
-        self.skip_newlines();
+        self.skip_whitespace_before_doc();
         if let Token::DocComment(text) = self.peek().clone() {
             let tok = self.advance();
             Some(Spanned::new(tok.span, text))

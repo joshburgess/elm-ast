@@ -1,16 +1,16 @@
-# elm-ast-rs
+# elm-ast
 
 A `syn`-quality Rust library for parsing and constructing Elm 0.19.1 ASTs, plus a suite of developer tools built on top.
 
 ## Overview
 
-`elm-ast-rs` provides a complete, strongly-typed representation of Elm source code as a Rust AST, along with a parser, printer, and visitor/fold traits for traversal and transformation. It is modeled after Rust's [`syn`](https://github.com/dtolnay/syn) crate, with a formatting approach inspired by [`elm-format`](https://github.com/avh4/elm-format).
+`elm-ast` provides a complete, strongly-typed representation of Elm source code as a Rust AST, along with a parser, printer, and visitor/fold traits for traversal and transformation. It is modeled after Rust's [`syn`](https://github.com/dtolnay/syn) crate, with a formatting approach inspired by [`elm-format`](https://github.com/avh4/elm-format).
 
 **Tested against 149 real-world `.elm` files from 23 packages** (including `elm/core`, `elm/browser`, `rtfeldman/elm-css`, `mdgriffith/elm-ui`, `elm-explorations/test`) with 100% parse, round-trip, and printer idempotency rates.
 
 ## Tool suite
 
-Built on `elm-ast-rs`, five standalone CLI tools for Elm development:
+Built on `elm-ast`, five standalone CLI tools for Elm development:
 
 | Tool | Description | Speed |
 |---|---|---|
@@ -45,7 +45,7 @@ cargo run -p elm-search -- --dir src unused-args
 ## Library quick start
 
 ```rust
-use elm_ast_rs::{parse, print};
+use elm_ast::{parse, print};
 
 let source = r#"
 module Main exposing (..)
@@ -70,7 +70,7 @@ All features are enabled by default via `full`. Disable `default-features` and p
 
 ```toml
 [dependencies]
-elm-ast-rs = "0.1"
+elm-ast = "0.1"
 ```
 
 | Feature | Description |
@@ -88,7 +88,7 @@ elm-ast-rs = "0.1"
 
 ```toml
 [dependencies]
-elm-ast-rs = { version = "0.1", default-features = false }
+elm-ast = { version = "0.1", default-features = false }
 ```
 
 ## AST types
@@ -111,19 +111,19 @@ All nodes carry source location information via `Spanned<T>`.
 ## Parsing
 
 ```rust
-use elm_ast_rs::parse;
+use elm_ast::parse;
 
 // Strict: fails on first error
 let module = parse(source)?;
 
 // Recovering: returns partial AST + all errors
-let (maybe_module, errors) = elm_ast_rs::parse_recovering(source);
+let (maybe_module, errors) = elm_ast::parse_recovering(source);
 ```
 
 ## Printing
 
 ```rust
-use elm_ast_rs::print;
+use elm_ast::print;
 
 let output = print(&module);
 
@@ -133,12 +133,18 @@ println!("{module}");
 
 The printer produces idempotent output: `print(parse(print(parse(src)))) == print(parse(src))`.
 
+### Comment preservation
+
+Top-level comments (line comments `--` and block comments `{- -}` between declarations) are captured during parsing and round-tripped through the printer. Comments are placed immediately before the declaration they precede.
+
+**Limitations:** Comments inside expressions (e.g., within a `let` block or on a specific line of a case branch) are not yet preserved. Doc comments (`{-| -}`) are attached to their declarations and always round-trip correctly.
+
 ## Visitors
 
 ```rust
-use elm_ast_rs::visit::{Visit, walk_expr};
-use elm_ast_rs::expr::Expr;
-use elm_ast_rs::node::Spanned;
+use elm_ast::visit::{Visit, walk_expr};
+use elm_ast::expr::Expr;
+use elm_ast::node::Spanned;
 
 struct FunctionCallCounter(usize);
 
@@ -166,7 +172,7 @@ Three traversal traits:
 Construct AST nodes programmatically (with dummy spans):
 
 ```rust
-use elm_ast_rs::builder::*;
+use elm_ast::builder::*;
 
 let m = module(
     vec!["Main"],
@@ -184,9 +190,9 @@ println!("{m}"); // prints valid Elm
 With the `serde` feature, all AST types support JSON serialization:
 
 ```rust
-let module = elm_ast_rs::parse(source).unwrap();
+let module = elm_ast::parse(source).unwrap();
 let json = serde_json::to_string_pretty(&module).unwrap();
-let module2: elm_ast_rs::ElmModule = serde_json::from_str(&json).unwrap();
+let module2: elm_ast::ElmModule = serde_json::from_str(&json).unwrap();
 ```
 
 ## Architecture
@@ -201,21 +207,21 @@ The printer uses an approach inspired by [`elm-format`](https://github.com/avh4/
 
 ## Test coverage
 
-263 tests across the workspace:
+311 tests across the workspace:
 
 | Suite | Tests |
 |---|---|
 | Lexer | 59 |
 | Parser | 44 |
 | Printer | 42 |
-| Visitors | 14 |
-| Edge cases + serde + builders + comments | 43 |
+| Visitors | 19 |
+| Edge cases + serde + builders + comments | 73 |
 | Integration (149 real files, 23 packages) | 3 |
 | elm-unused | 5 |
-| elm-lint | 23 |
+| elm-lint | 25 |
 | elm-deps | 8 |
-| elm-refactor | 6 |
-| elm-search | 15 |
+| elm-refactor | 10 |
+| elm-search | 21 |
 
 ## License
 

@@ -1,7 +1,7 @@
-use elm_ast_rs::exposing::{ExposedItem, Exposing};
-use elm_ast_rs::expr::Expr;
-use elm_ast_rs::node::Spanned;
-use elm_ast_rs::visit_mut::{self, VisitMut};
+use elm_ast::exposing::{ExposedItem, Exposing};
+use elm_ast::expr::Expr;
+use elm_ast::node::Spanned;
+use elm_ast::visit_mut::{self, VisitMut};
 
 use crate::project::Project;
 

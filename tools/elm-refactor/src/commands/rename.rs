@@ -1,6 +1,6 @@
-use elm_ast_rs::exposing::{ExposedItem, Exposing};
-use elm_ast_rs::node::Spanned;
-use elm_ast_rs::visit_mut::{self, VisitMut};
+use elm_ast::exposing::{ExposedItem, Exposing};
+use elm_ast::node::Spanned;
+use elm_ast::visit_mut::{self, VisitMut};
 
 use crate::project::Project;
 
@@ -95,8 +95,8 @@ struct QualifiedRenamer {
 }
 
 impl VisitMut for QualifiedRenamer {
-    fn visit_expr_mut(&mut self, expr: &mut Spanned<elm_ast_rs::expr::Expr>) {
-        if let elm_ast_rs::expr::Expr::FunctionOrValue { module_name, name } = &mut expr.value {
+    fn visit_expr_mut(&mut self, expr: &mut Spanned<elm_ast::expr::Expr>) {
+        if let elm_ast::expr::Expr::FunctionOrValue { module_name, name } = &mut expr.value {
             let qualified_module = module_name.join(".");
             if qualified_module == self.module_name && *name == self.from {
                 *name = self.to.clone();
@@ -107,11 +107,11 @@ impl VisitMut for QualifiedRenamer {
     }
 }
 
-fn rename_in_exposing(module: &mut elm_ast_rs::file::ElmModule, from: &str, to: &str) -> usize {
+fn rename_in_exposing(module: &mut elm_ast::file::ElmModule, from: &str, to: &str) -> usize {
     let exposing = match &mut module.header.value {
-        elm_ast_rs::module_header::ModuleHeader::Normal { exposing, .. }
-        | elm_ast_rs::module_header::ModuleHeader::Port { exposing, .. }
-        | elm_ast_rs::module_header::ModuleHeader::Effect { exposing, .. } => exposing,
+        elm_ast::module_header::ModuleHeader::Normal { exposing, .. }
+        | elm_ast::module_header::ModuleHeader::Port { exposing, .. }
+        | elm_ast::module_header::ModuleHeader::Effect { exposing, .. } => exposing,
     };
 
     rename_in_import_exposing(&mut exposing.value, from, to)

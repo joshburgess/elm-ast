@@ -1,4 +1,4 @@
-use elm_ast_rs::parse;
+use elm_ast::parse;
 use elm_search::query::parse_query;
 use elm_search::search::search;
 

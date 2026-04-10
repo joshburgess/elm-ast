@@ -1,4 +1,4 @@
-use elm_ast_rs::declaration::Declaration;
+use elm_ast::declaration::Declaration;
 
 use crate::rule::{LintContext, LintError, Rule};
 

@@ -10,7 +10,7 @@ fn main() {
         eprintln!("Error reading {path}: {e}");
         std::process::exit(1);
     });
-    match elm_ast_rs::parse(&source) {
+    match elm_ast::parse(&source) {
         Ok(module) => {
             #[cfg(feature = "serde")]
             {

@@ -6,4 +6,4 @@ description = "Fast Elm linter with built-in rules"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-elm-ast-rs = { path = "../.." }
+elm-ast = { path = "../.." }

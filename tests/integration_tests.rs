@@ -1,12 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use elm_ast_rs::declaration::Declaration;
-use elm_ast_rs::expr::Expr;
-use elm_ast_rs::file::ElmModule;
-use elm_ast_rs::pattern::Pattern;
-use elm_ast_rs::type_annotation::TypeAnnotation;
-use elm_ast_rs::{parse, print};
+use elm_ast::declaration::Declaration;
+use elm_ast::expr::Expr;
+use elm_ast::file::ElmModule;
+use elm_ast::pattern::Pattern;
+use elm_ast::type_annotation::TypeAnnotation;
+use elm_ast::{parse, print};
 
 // ── Fixture discovery ────────────────────────────────────────────────
 

@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 
-use elm_ast_rs::declaration::Declaration;
-use elm_ast_rs::expr::Expr;
-use elm_ast_rs::file::ElmModule;
-use elm_ast_rs::node::Spanned;
-use elm_ast_rs::pattern::Pattern;
-use elm_ast_rs::span::Span;
-use elm_ast_rs::type_annotation::TypeAnnotation;
-use elm_ast_rs::visit::{self, Visit};
+use elm_ast::declaration::Declaration;
+use elm_ast::expr::Expr;
+use elm_ast::file::ElmModule;
+use elm_ast::node::Spanned;
+use elm_ast::pattern::Pattern;
+use elm_ast::span::Span;
+use elm_ast::type_annotation::TypeAnnotation;
+use elm_ast::visit::{self, Visit};
 
 use crate::query::{ExprKindQuery, Query};
 
@@ -450,10 +450,10 @@ fn collect_used_names(expr: &Expr, names: &mut HashSet<String>) {
         Expr::LetIn { declarations, body } => {
             for d in declarations {
                 match &d.value {
-                    elm_ast_rs::expr::LetDeclaration::Function(f) => {
+                    elm_ast::expr::LetDeclaration::Function(f) => {
                         collect_used_names(&f.declaration.value.body.value, names);
                     }
-                    elm_ast_rs::expr::LetDeclaration::Destructuring { body: b, .. } => {
+                    elm_ast::expr::LetDeclaration::Destructuring { body: b, .. } => {
                         collect_used_names(&b.value, names);
                     }
                 }

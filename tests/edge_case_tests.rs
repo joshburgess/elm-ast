@@ -1,13 +1,13 @@
-use elm_ast_rs::builder;
-use elm_ast_rs::declaration::Declaration;
-use elm_ast_rs::expr::Expr;
-use elm_ast_rs::file::{associate_comments, extract_comments};
-use elm_ast_rs::literal::Literal;
-use elm_ast_rs::pattern::Pattern;
-use elm_ast_rs::type_annotation::TypeAnnotation;
-use elm_ast_rs::{Lexer, parse, parse_recovering};
+use elm_ast::builder;
+use elm_ast::declaration::Declaration;
+use elm_ast::expr::Expr;
+use elm_ast::file::{associate_comments, extract_comments};
+use elm_ast::literal::Literal;
+use elm_ast::pattern::Pattern;
+use elm_ast::type_annotation::TypeAnnotation;
+use elm_ast::{Lexer, parse, parse_recovering};
 
-fn parse_ok(source: &str) -> elm_ast_rs::file::ElmModule {
+fn parse_ok(source: &str) -> elm_ast::file::ElmModule {
     match parse(source) {
         Ok(m) => m,
         Err(errors) => {
@@ -19,7 +19,7 @@ fn parse_ok(source: &str) -> elm_ast_rs::file::ElmModule {
     }
 }
 
-fn get_body(m: &elm_ast_rs::file::ElmModule) -> &Expr {
+fn get_body(m: &elm_ast::file::ElmModule) -> &Expr {
     match &m.declarations[0].value {
         Declaration::FunctionDeclaration(f) => &f.declaration.value.body.value,
         _ => panic!("expected function"),
@@ -28,7 +28,7 @@ fn get_body(m: &elm_ast_rs::file::ElmModule) -> &Expr {
 
 fn round_trip(source: &str) {
     let ast1 = parse(source).unwrap();
-    let printed = elm_ast_rs::print::print(&ast1);
+    let printed = elm_ast::print::print(&ast1);
     parse(&printed).unwrap_or_else(|e| {
         eprintln!("--- printed ---\n{printed}\n---");
         panic!("round-trip failed: {e:?}");
@@ -736,12 +736,12 @@ sub x y = x - y
     assert_eq!(associated[0].len(), 1);
     assert!(matches!(
         &associated[0][0].value,
-        elm_ast_rs::comment::Comment::Line(text) if text.contains("helper")
+        elm_ast::comment::Comment::Line(text) if text.contains("helper")
     ));
     assert_eq!(associated[1].len(), 1);
     assert!(matches!(
         &associated[1][0].value,
-        elm_ast_rs::comment::Comment::Line(text) if text.contains("Subtracts")
+        elm_ast::comment::Comment::Line(text) if text.contains("Subtracts")
     ));
 }
 
@@ -848,7 +848,752 @@ add x y = x + y
 ";
     let m = parse_ok(src);
     let json = serde_json::to_string(&m).expect("serialize");
-    let m2: elm_ast_rs::ElmModule = serde_json::from_str(&json).expect("deserialize");
+    let m2: elm_ast::ElmModule = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(m.declarations.len(), m2.declarations.len());
     assert_eq!(m.imports.len(), m2.imports.len());
+}
+
+// ── Error recovery (additional) ─────────────────────────────────────
+
+#[test]
+fn error_recovery_malformed_type_annotation() {
+    // A declaration with broken type annotation should be skipped,
+    // but subsequent good declarations should be recovered.
+    let src = "\
+module Main exposing (..)
+
+broken : -> Int
+broken x = x
+
+good : Int -> Int
+good x = x
+";
+    let (module, errors) = parse_recovering(src);
+    let m = module.expect("should return partial AST");
+    assert!(
+        !errors.is_empty(),
+        "should have errors for broken type annotation"
+    );
+    // Should recover at least the 'good' function
+    assert!(
+        m.declarations.iter().any(|d| {
+            matches!(
+                &d.value,
+                Declaration::FunctionDeclaration(f)
+                    if f.declaration.value.name.value == "good"
+            )
+        }),
+        "should recover 'good' declaration"
+    );
+}
+
+#[test]
+fn error_recovery_incomplete_function_body() {
+    // When a function has an incomplete body (missing expression after `=`),
+    // the parser may consume the next top-level declaration as the body.
+    // We verify that parse_recovering still returns a partial AST with errors.
+    let src = "\
+module Main exposing (..)
+
+incomplete x =
+
+working y = y + 1
+";
+    let (module, errors) = parse_recovering(src);
+    let m = module.expect("should return partial AST");
+    assert!(!errors.is_empty(), "should have at least one error");
+    // The parser consumes `working y = y + 1` as the body of `incomplete`,
+    // so we just verify recovery produced a partial module with declarations.
+    assert!(
+        !m.declarations.is_empty(),
+        "should have at least 1 declaration"
+    );
+}
+
+#[test]
+fn error_recovery_multiple_broken_declarations() {
+    let src = "\
+module Main exposing (..)
+
+bad1 = if
+
+bad2 = case
+
+ok1 x = x
+
+bad3 = let in
+
+ok2 y = y
+";
+    let (module, errors) = parse_recovering(src);
+    let m = module.expect("should return partial AST");
+    assert!(
+        errors.len() >= 2,
+        "should have multiple errors, got {}",
+        errors.len()
+    );
+    let recovered_names: Vec<&str> = m
+        .declarations
+        .iter()
+        .filter_map(|d| match &d.value {
+            Declaration::FunctionDeclaration(f) => Some(f.declaration.value.name.value.as_str()),
+            _ => None,
+        })
+        .collect();
+    // Recovery should salvage at least ok1 from among the broken declarations
+    assert!(
+        recovered_names.contains(&"ok1"),
+        "should recover ok1, got {:?}",
+        recovered_names
+    );
+    // The parser may or may not recover ok2 depending on how `let in` is consumed
+    assert!(
+        recovered_names.len() >= 2,
+        "should recover at least 2 declarations, got {:?}",
+        recovered_names
+    );
+}
+
+#[test]
+fn error_recovery_error_has_span_info() {
+    let src = "\
+module Main exposing (..)
+
+broken = if
+";
+    let (_, errors) = parse_recovering(src);
+    assert!(!errors.is_empty());
+    // Errors should have non-zero span info
+    for e in &errors {
+        assert!(
+            e.span.start.line > 0,
+            "error span should have line info: {:?}",
+            e
+        );
+    }
+}
+
+// ── Edge cases (additional) ─────────────────────────────────────────
+
+#[test]
+fn empty_module_no_declarations() {
+    let src = "\
+module Main exposing (..)
+";
+    let m = parse_ok(src);
+    assert!(m.declarations.is_empty());
+    assert!(m.imports.is_empty());
+}
+
+#[test]
+fn module_with_imports_only() {
+    let src = "\
+module Main exposing (..)
+
+import Html
+import Json.Decode as Decode
+";
+    let m = parse_ok(src);
+    assert!(m.declarations.is_empty());
+    assert_eq!(m.imports.len(), 2);
+}
+
+#[test]
+fn deeply_nested_expressions() {
+    // Build a deeply nested expression: f (f (f (... (f x) ...)))
+    // 100 levels of nesting
+    let mut src = String::from("module Main exposing (..)\n\nresult = ");
+    for _ in 0..100 {
+        src.push_str("identity (");
+    }
+    src.push_str("42");
+    for _ in 0..100 {
+        src.push(')');
+    }
+    src.push('\n');
+    let m = parse_ok(&src);
+    assert_eq!(m.declarations.len(), 1);
+    // Verify round-trip
+    round_trip(&src);
+}
+
+#[test]
+fn deeply_nested_if_else() {
+    // 50 levels of nested if-else
+    let mut src = String::from("module Main exposing (..)\n\nresult x = ");
+    for i in 0..50 {
+        src.push_str(&format!("if x == {} then {} else ", i, i));
+    }
+    src.push_str("0\n");
+    let m = parse_ok(&src);
+    assert_eq!(m.declarations.len(), 1);
+}
+
+// ── Builder API (additional) ────────────────────────────────────────
+
+#[test]
+fn builder_int_float_string_char() {
+    use elm_ast::builder::*;
+    use elm_ast::print::print;
+
+    let m = module(
+        vec!["Main"],
+        vec![
+            func("myInt", vec![], int(42)),
+            func("myFloat", vec![], float(3.5)),
+            func("myString", vec![], string("hello")),
+            func("myChar", vec![], char_lit('x')),
+            func("myUnit", vec![], unit()),
+        ],
+    );
+    let output = print(&m);
+    assert!(output.contains("myInt ="), "should have myInt");
+    assert!(output.contains("42"), "should have 42");
+    assert!(output.contains("3.5"), "should have 3.5");
+    assert!(output.contains("\"hello\""), "should have hello string");
+    assert!(output.contains("'x'"), "should have char x");
+    assert!(output.contains("()"), "should have unit");
+}
+
+#[test]
+fn builder_qualified_and_patterns() {
+    use elm_ast::builder::*;
+    use elm_ast::print::print;
+
+    let m = module(
+        vec!["Main"],
+        vec![func(
+            "test",
+            vec![pwild(), precord(vec!["x", "y"])],
+            qualified(&["List"], "map"),
+        )],
+    );
+    let output = print(&m);
+    assert!(output.contains("_"), "should have wildcard pattern");
+    assert!(output.contains("{ x, y }"), "should have record pattern");
+    assert!(output.contains("List.map"), "should have qualified name");
+}
+
+#[test]
+fn builder_func_with_sig() {
+    use elm_ast::builder::*;
+    use elm_ast::print::print;
+
+    let m = module(
+        vec!["Main"],
+        vec![func_with_sig(
+            "add",
+            vec![pvar("x"), pvar("y")],
+            binop("+", var("x"), var("y")),
+            tfunc(
+                tname("Int", vec![]),
+                tfunc(tname("Int", vec![]), tname("Int", vec![])),
+            ),
+        )],
+    );
+    let output = print(&m);
+    assert!(
+        output.contains("add : Int -> Int -> Int"),
+        "should have type sig, got:\n{}",
+        output
+    );
+    assert!(output.contains("add x y"), "should have function impl");
+}
+
+#[test]
+fn builder_type_alias_and_custom_type() {
+    use elm_ast::builder::*;
+    use elm_ast::print::print;
+
+    let m = module(
+        vec!["Main"],
+        vec![
+            type_alias("Pair", vec!["a", "b"], tname("Record", vec![])),
+            custom_type(
+                "Maybe",
+                vec!["a"],
+                vec![("Just", vec![tvar("a")]), ("Nothing", vec![])],
+            ),
+        ],
+    );
+    let output = print(&m);
+    assert!(output.contains("type alias Pair"), "should have type alias");
+    assert!(output.contains("type Maybe"), "should have custom type");
+    assert!(output.contains("= Just a"), "should have Just constructor");
+    assert!(
+        output.contains("| Nothing"),
+        "should have Nothing constructor"
+    );
+}
+
+#[test]
+fn builder_import() {
+    use elm_ast::builder::*;
+    use elm_ast::print::print;
+
+    let mut m = module(vec!["Main"], vec![func("x", vec![], int(1))]);
+    m.imports = vec![import(vec!["Html"]), import(vec!["Json", "Decode"])];
+    let output = print(&m);
+    assert!(output.contains("import Html"), "should have Html import");
+    assert!(
+        output.contains("import Json.Decode"),
+        "should have Json.Decode import"
+    );
+}
+
+#[test]
+fn builder_tvar_and_tunit() {
+    use elm_ast::builder::*;
+    use elm_ast::print::print;
+
+    let m = module(
+        vec!["Main"],
+        vec![func_with_sig(
+            "f",
+            vec![pvar("x")],
+            var("x"),
+            tfunc(tvar("a"), tunit()),
+        )],
+    );
+    let output = print(&m);
+    assert!(
+        output.contains("f : a -> ()"),
+        "should have type sig with tvar and tunit, got:\n{}",
+        output
+    );
+}
+
+// ── Comment round-tripping ──────────────────────────────────────────
+
+#[test]
+fn comment_between_declarations_round_trips() {
+    let src = "\
+module Main exposing (..)
+
+
+add x y =
+    x + y
+
+
+-- Helper function
+subtract x y =
+    x - y
+";
+    let m = parse_ok(src);
+    assert!(!m.comments.is_empty(), "should capture line comment");
+
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("-- Helper function"),
+        "printed output should contain the comment, got:\n{}",
+        output
+    );
+
+    // Verify it re-parses
+    let m2 = parse_ok(&output);
+    assert_eq!(m2.declarations.len(), 2);
+}
+
+#[test]
+fn block_comment_between_declarations_round_trips() {
+    let src = "\
+module Main exposing (..)
+
+
+foo =
+    1
+
+
+{- This is a block comment -}
+bar =
+    2
+";
+    let m = parse_ok(src);
+    assert!(
+        m.comments
+            .iter()
+            .any(|c| matches!(&c.value, elm_ast::comment::Comment::Block(_))),
+        "should capture block comment"
+    );
+
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("{- This is a block comment -}"),
+        "printed output should contain the block comment, got:\n{}",
+        output
+    );
+}
+
+#[test]
+fn multiple_comments_between_declarations() {
+    let src = "\
+module Main exposing (..)
+
+
+first =
+    1
+
+
+-- Comment A
+-- Comment B
+second =
+    2
+";
+    let m = parse_ok(src);
+    assert!(
+        m.comments.len() >= 2,
+        "should capture both comments, got {}",
+        m.comments.len()
+    );
+
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("-- Comment A"),
+        "should contain Comment A, got:\n{}",
+        output
+    );
+    assert!(
+        output.contains("-- Comment B"),
+        "should contain Comment B, got:\n{}",
+        output
+    );
+}
+
+#[test]
+fn trailing_comment_after_last_declaration() {
+    let src = "\
+module Main exposing (..)
+
+
+x =
+    1
+
+
+-- trailing
+";
+    let m = parse_ok(src);
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("-- trailing"),
+        "trailing comment should be preserved, got:\n{}",
+        output
+    );
+}
+
+#[test]
+fn comment_round_trip_reparses() {
+    let src = "\
+module Main exposing (..)
+
+
+-- Before first
+a =
+    1
+
+
+-- Between
+b =
+    2
+
+
+-- After last
+";
+    let m = parse_ok(src);
+    let printed = elm_ast::print::print(&m);
+
+    // Must re-parse successfully
+    let m2 = parse_ok(&printed);
+    assert_eq!(
+        m2.declarations.len(),
+        2,
+        "should have 2 declarations after round-trip"
+    );
+    assert!(
+        !m2.comments.is_empty(),
+        "comments should survive the round-trip"
+    );
+}
+
+#[test]
+fn comment_between_imports() {
+    let src = "\
+module Main exposing (..)
+
+import Html
+-- comment between imports
+import Json.Decode
+
+x =
+    1
+";
+    let m = parse_ok(src);
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("-- comment between imports"),
+        "comment between imports should be preserved, got:\n{}",
+        output
+    );
+    // Re-parse must succeed
+    let m2 = parse_ok(&output);
+    assert_eq!(m2.imports.len(), 2);
+    assert_eq!(m2.declarations.len(), 1);
+}
+
+#[test]
+fn comment_between_header_and_imports() {
+    let src = "\
+module Main exposing (..)
+
+-- module-level comment
+import Html
+
+x =
+    1
+";
+    let m = parse_ok(src);
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("-- module-level comment"),
+        "comment between header and imports should be preserved, got:\n{}",
+        output
+    );
+    let m2 = parse_ok(&output);
+    assert_eq!(m2.imports.len(), 1);
+}
+
+#[test]
+fn comment_between_imports_and_first_declaration() {
+    let src = "\
+module Main exposing (..)
+
+import Html
+
+-- section marker
+x =
+    1
+";
+    let m = parse_ok(src);
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("-- section marker"),
+        "comment between imports and declarations should be preserved, got:\n{}",
+        output
+    );
+    let m2 = parse_ok(&output);
+    assert_eq!(m2.declarations.len(), 1);
+}
+
+#[test]
+fn nested_block_comment_round_trips() {
+    let src = "\
+module Main exposing (..)
+
+
+{- outer {- inner -} comment -}
+x =
+    1
+";
+    let m = parse_ok(src);
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("{- outer {- inner -} comment -}"),
+        "nested block comment should be preserved, got:\n{}",
+        output
+    );
+    let m2 = parse_ok(&output);
+    assert_eq!(m2.declarations.len(), 1);
+}
+
+#[test]
+fn mixed_line_and_block_comments() {
+    let src = "\
+module Main exposing (..)
+
+
+a =
+    1
+
+
+-- line comment
+{- block comment -}
+b =
+    2
+";
+    let m = parse_ok(src);
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("-- line comment"),
+        "line comment should be preserved, got:\n{}",
+        output
+    );
+    assert!(
+        output.contains("{- block comment -}"),
+        "block comment should be preserved, got:\n{}",
+        output
+    );
+}
+
+#[test]
+fn comment_idempotency() {
+    // parse -> print -> parse -> print must produce identical output
+    let src = "\
+module Main exposing (..)
+
+import Html
+-- between imports
+import Json.Decode
+
+
+-- section A
+a =
+    1
+
+
+-- section B
+{- extra -}
+b =
+    2
+
+
+-- trailing
+";
+    let m1 = parse_ok(src);
+    let print1 = elm_ast::print::print(&m1);
+
+    let m2 = parse_ok(&print1);
+    let print2 = elm_ast::print::print(&m2);
+
+    assert_eq!(
+        print1, print2,
+        "comment printing must be idempotent.\nFirst print:\n{}\nSecond print:\n{}",
+        print1, print2
+    );
+}
+
+#[test]
+fn comments_preserved_across_many_declarations() {
+    let src = "\
+module Main exposing (..)
+
+
+-- A
+a =
+    1
+
+
+-- B
+b =
+    2
+
+
+-- C
+c =
+    3
+
+
+-- D
+d =
+    4
+";
+    let m = parse_ok(src);
+    assert!(
+        m.comments.len() >= 4,
+        "should capture all 4 comments, got {}",
+        m.comments.len()
+    );
+
+    let output = elm_ast::print::print(&m);
+    for label in &["-- A", "-- B", "-- C", "-- D"] {
+        assert!(
+            output.contains(label),
+            "should contain {}, got:\n{}",
+            label,
+            output
+        );
+    }
+
+    // Idempotency
+    let m2 = parse_ok(&output);
+    let output2 = elm_ast::print::print(&m2);
+    assert_eq!(output, output2, "multi-comment printing must be idempotent");
+}
+
+#[test]
+fn comment_only_module_no_declarations() {
+    let src = "\
+module Main exposing (..)
+
+-- just a comment
+";
+    let m = parse_ok(src);
+    assert!(m.declarations.is_empty());
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("-- just a comment"),
+        "comment in declaration-less module should be preserved, got:\n{}",
+        output
+    );
+}
+
+#[test]
+fn doc_comment_and_line_comment_coexist() {
+    // Doc comments are attached to declarations, line comments are separate.
+    let src = "\
+module Main exposing (..)
+
+
+-- section marker
+{-| Documentation for foo -}
+foo =
+    1
+";
+    let m = parse_ok(src);
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("-- section marker"),
+        "line comment before doc comment should be preserved, got:\n{}",
+        output
+    );
+    assert!(
+        output.contains("{-|"),
+        "doc comment should be preserved, got:\n{}",
+        output
+    );
+}
+
+#[test]
+fn comment_count_survives_round_trip() {
+    let src = "\
+module Main exposing (..)
+
+
+-- one
+-- two
+-- three
+x =
+    1
+
+
+-- four
+y =
+    2
+";
+    let m = parse_ok(src);
+    let comment_count = m.comments.len();
+    assert!(
+        comment_count >= 4,
+        "should have at least 4 comments, got {}",
+        comment_count
+    );
+
+    let output = elm_ast::print::print(&m);
+    let m2 = parse_ok(&output);
+    assert_eq!(
+        m2.comments.len(),
+        comment_count,
+        "comment count should survive round-trip: {} vs {}.\nPrinted:\n{}",
+        comment_count,
+        m2.comments.len(),
+        output
+    );
 }

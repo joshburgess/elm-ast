@@ -20,7 +20,7 @@ fn bench_parse(c: &mut Criterion) {
         let source = load_fixture(path);
         let lines = source.lines().count();
         group.bench_with_input(BenchmarkId::new(*label, lines), &source, |b, src| {
-            b.iter(|| elm_ast_rs::parse(black_box(src)).unwrap());
+            b.iter(|| elm_ast::parse(black_box(src)).unwrap());
         });
     }
     group.finish();
@@ -38,7 +38,7 @@ fn bench_lex(c: &mut Criterion) {
         let source = load_fixture(path);
         let lines = source.lines().count();
         group.bench_with_input(BenchmarkId::new(*label, lines), &source, |b, src| {
-            b.iter(|| elm_ast_rs::Lexer::new(black_box(src)).tokenize());
+            b.iter(|| elm_ast::Lexer::new(black_box(src)).tokenize());
         });
     }
     group.finish();
@@ -54,10 +54,10 @@ fn bench_print(c: &mut Criterion) {
     let mut group = c.benchmark_group("print");
     for (label, path) in &files {
         let source = load_fixture(path);
-        let module = elm_ast_rs::parse(&source).unwrap();
+        let module = elm_ast::parse(&source).unwrap();
         let lines = source.lines().count();
         group.bench_with_input(BenchmarkId::new(*label, lines), &module, |b, m| {
-            b.iter(|| elm_ast_rs::print(black_box(m)));
+            b.iter(|| elm_ast::print(black_box(m)));
         });
     }
     group.finish();
@@ -76,8 +76,8 @@ fn bench_round_trip(c: &mut Criterion) {
         let lines = source.lines().count();
         group.bench_with_input(BenchmarkId::new(*label, lines), &source, |b, src| {
             b.iter(|| {
-                let m = elm_ast_rs::parse(black_box(src)).unwrap();
-                let _ = elm_ast_rs::print(&m);
+                let m = elm_ast::parse(black_box(src)).unwrap();
+                let _ = elm_ast::print(&m);
             });
         });
     }

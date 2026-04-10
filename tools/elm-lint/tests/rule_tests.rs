@@ -1,4 +1,4 @@
-use elm_ast_rs::parse;
+use elm_ast::parse;
 use elm_lint::rule::{LintContext, Rule};
 use elm_lint::rules;
 

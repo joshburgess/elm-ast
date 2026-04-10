@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use elm_ast_rs::file::ElmModule;
-use elm_ast_rs::module_header::ModuleHeader;
+use elm_ast::file::ElmModule;
+use elm_ast::module_header::ModuleHeader;
 
 /// A parsed Elm project: all source files with their ASTs.
 pub struct Project {
@@ -31,7 +31,7 @@ impl Project {
                     continue;
                 }
             };
-            match elm_ast_rs::parse(&source) {
+            match elm_ast::parse(&source) {
                 Ok(module) => {
                     let module_name = match &module.header.value {
                         ModuleHeader::Normal { name, .. }
@@ -59,7 +59,7 @@ impl Project {
     pub fn write_changes(&self) -> usize {
         let mut written = 0;
         for file in &self.files {
-            let printed = elm_ast_rs::print(&file.module);
+            let printed = elm_ast::print(&file.module);
             if printed != file.source {
                 if let Err(e) = fs::write(&file.path, &printed) {
                     eprintln!("  error writing {}: {e}", file.path.display());

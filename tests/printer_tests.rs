@@ -1,5 +1,5 @@
-use elm_ast_rs::parse;
-use elm_ast_rs::print::print;
+use elm_ast::parse;
+use elm_ast::print::print;
 
 /// Parse source, print it, then parse the printed output. The two ASTs
 /// should be structurally identical (ignoring spans).

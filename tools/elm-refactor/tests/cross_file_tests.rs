@@ -1,4 +1,4 @@
-use elm_ast_rs::{parse, print};
+use elm_ast::{parse, print};
 use elm_refactor::commands;
 use elm_refactor::project::{Project, ProjectFile};
 use std::path::PathBuf;
@@ -9,11 +9,9 @@ fn make_project(files: Vec<(&str, &str)>) -> Project {
         .map(|(name, source)| {
             let module = parse(source).unwrap_or_else(|e| panic!("parse {name} failed: {e:?}"));
             let module_name = match &module.header.value {
-                elm_ast_rs::module_header::ModuleHeader::Normal { name, .. }
-                | elm_ast_rs::module_header::ModuleHeader::Port { name, .. }
-                | elm_ast_rs::module_header::ModuleHeader::Effect { name, .. } => {
-                    name.value.join(".")
-                }
+                elm_ast::module_header::ModuleHeader::Normal { name, .. }
+                | elm_ast::module_header::ModuleHeader::Port { name, .. }
+                | elm_ast::module_header::ModuleHeader::Effect { name, .. } => name.value.join("."),
             };
             ProjectFile {
                 path: PathBuf::from(name),

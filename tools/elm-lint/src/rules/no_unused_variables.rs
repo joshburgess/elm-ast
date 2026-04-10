@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use elm_ast_rs::declaration::Declaration;
-use elm_ast_rs::expr::{Expr, LetDeclaration};
-use elm_ast_rs::node::Spanned;
-use elm_ast_rs::pattern::Pattern;
+use elm_ast::declaration::Declaration;
+use elm_ast::expr::{Expr, LetDeclaration};
+use elm_ast::node::Spanned;
+use elm_ast::pattern::Pattern;
 
 use crate::rule::{LintContext, LintError, Rule};
 
@@ -35,7 +35,7 @@ impl Rule for NoUnusedVariables {
 fn check_expr(expr: &Spanned<Expr>, errors: &mut Vec<LintError>) {
     if let Expr::LetIn { declarations, body } = &expr.value {
         // Collect all names defined in this let block.
-        let mut defined: Vec<(String, elm_ast_rs::span::Span)> = Vec::new();
+        let mut defined: Vec<(String, elm_ast::span::Span)> = Vec::new();
         for decl in declarations {
             match &decl.value {
                 LetDeclaration::Function(func) => {
@@ -131,7 +131,7 @@ fn check_expr(expr: &Spanned<Expr>, errors: &mut Vec<LintError>) {
     }
 }
 
-fn collect_pattern_names(_pat: &Pattern, _out: &mut Vec<(String, elm_ast_rs::span::Span)>) {
+fn collect_pattern_names(_pat: &Pattern, _out: &mut Vec<(String, elm_ast::span::Span)>) {
     // Destructuring patterns in let blocks — handled minimally for now.
     // A full implementation would extract all variable names from the pattern.
 }

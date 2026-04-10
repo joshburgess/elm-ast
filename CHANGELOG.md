@@ -15,7 +15,7 @@ Initial release.
 - `Spanned<T>` wrapper carrying source location (`Span`) on every node
 - Lexer with support for nestable block comments, multi-line strings, GLSL blocks, unicode escapes, hex literals, and custom operators
 - Pratt parser with indentation-aware layout and error recovery (`parse_recovering()`)
-- Pretty-printer producing idempotent, elm-format-style output
+- Pretty-printer producing idempotent, elm-format-style output with top-level comment round-tripping
 - `Visit` trait for immutable AST traversal
 - `VisitMut` trait for in-place AST mutation
 - `Fold` trait for owned AST transformation
@@ -24,7 +24,7 @@ Initial release.
 - Feature gates: `parsing`, `printing`, `visit`, `visit-mut`, `fold`, `serde`, `wasm`
 - `serde` support (`Serialize`/`Deserialize`) for all 28 AST types
 - WASM bindings via `wasm-bindgen`
-- 275 tests across the workspace, including integration tests against 149 real-world `.elm` files from 23 packages
+- 311 tests across the workspace, including integration tests against 149 real-world `.elm` files from 23 packages
 
 ### Tool suite
 
@@ -34,4 +34,4 @@ Initial release.
 - **elm-refactor** -- cross-file rename, sort/qualify imports
 - **elm-search** -- semantic AST-aware code search with 10 query types
 
-[0.1.0]: https://github.com/joshburgess/elm-ast-rs/releases/tag/v0.1.0
+[0.1.0]: https://github.com/joshburgess/elm-ast/releases/tag/v0.1.0

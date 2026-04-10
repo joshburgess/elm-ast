@@ -17,6 +17,7 @@
 //!
 //! This produces idempotent output: `print(parse(print(parse(src)))) == print(parse(src))`.
 
+use crate::comment::Comment;
 use crate::declaration::{CustomType, Declaration, InfixDef, TypeAlias, ValueConstructor};
 use crate::exposing::{ExposedItem, Exposing};
 use crate::expr::{
@@ -107,24 +108,106 @@ impl Printer {
     // ── Module ───────────────────────────────────────────────────────
 
     pub fn write_module(&mut self, module: &ElmModule) {
+        // Sort comments by source position.
+        let mut comments: Vec<&Spanned<Comment>> = module.comments.iter().collect();
+        comments.sort_by_key(|c| c.span.start.offset);
+
+        // Build an ordered list of "anchors" — items with start offsets that
+        // comments can be assigned relative to. Each anchor is either an import
+        // or a declaration. A comment belongs before the first anchor whose
+        // start offset is strictly greater than the comment's offset.
+        let num_imports = module.imports.len();
+        let num_decls = module.declarations.len();
+        let total_anchors = num_imports + num_decls;
+
+        // anchor_offsets[i] = start offset of anchor i
+        let mut anchor_offsets: Vec<usize> = Vec::with_capacity(total_anchors);
+        for imp in &module.imports {
+            anchor_offsets.push(imp.span.start.offset);
+        }
+        for decl in &module.declarations {
+            anchor_offsets.push(decl.span.start.offset);
+        }
+
+        // Assign comments to slots: one per anchor + one trailing slot.
+        let mut anchor_comments: Vec<Vec<&Spanned<Comment>>> = vec![vec![]; total_anchors + 1];
+        for c in &comments {
+            let offset = c.span.start.offset;
+            let slot = anchor_offsets
+                .iter()
+                .position(|&a| a > offset)
+                .unwrap_or(total_anchors);
+            anchor_comments[slot].push(c);
+        }
+
         self.write_module_header(&module.header.value);
         self.newline();
 
         if !module.imports.is_empty() {
             self.newline();
-            for imp in &module.imports {
+            for (i, imp) in module.imports.iter().enumerate() {
+                // Slot i = comments before import i.
+                if !anchor_comments[i].is_empty() {
+                    for c in &anchor_comments[i] {
+                        self.write_comment(&c.value);
+                        self.newline();
+                    }
+                }
                 self.write_import(&imp.value);
                 self.newline();
             }
         }
 
-        for decl in &module.declarations {
+        for (i, decl) in module.declarations.iter().enumerate() {
+            let slot = num_imports + i;
+
+            // Blank line separator before each declaration.
             self.newline();
-            self.newline();
+
+            // Emit leading comments for this declaration.
+            if !anchor_comments[slot].is_empty() {
+                self.newline();
+                for c in &anchor_comments[slot] {
+                    self.write_comment(&c.value);
+                    self.newline();
+                }
+            } else {
+                self.newline();
+            }
+
             self.write_declaration(&decl.value);
         }
 
+        // Trailing comments after the last anchor.
+        if !anchor_comments[total_anchors].is_empty() {
+            self.newline();
+            self.newline();
+            for c in &anchor_comments[total_anchors] {
+                self.write_comment(&c.value);
+                self.newline();
+            }
+        }
+
         self.newline();
+    }
+
+    fn write_comment(&mut self, comment: &Comment) {
+        match comment {
+            Comment::Line(text) => {
+                self.write("--");
+                self.write(text);
+            }
+            Comment::Block(text) => {
+                self.write("{-");
+                self.write(text);
+                self.write("-}");
+            }
+            Comment::Doc(text) => {
+                self.write("{-|");
+                self.write(text);
+                self.write("-}");
+            }
+        }
     }
 
     fn write_module_header(&mut self, header: &ModuleHeader) {

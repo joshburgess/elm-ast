@@ -4,9 +4,9 @@
 //! Default implementations recursively descend into child nodes.
 //!
 //! ```
-//! use elm_ast_rs::visit::{Visit, walk_expr};
-//! use elm_ast_rs::expr::Expr;
-//! use elm_ast_rs::node::Spanned;
+//! use elm_ast::visit::{Visit, walk_expr};
+//! use elm_ast::expr::Expr;
+//! use elm_ast::node::Spanned;
 //!
 //! struct FunctionCounter(usize);
 //!

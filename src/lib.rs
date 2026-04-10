@@ -7,7 +7,7 @@
 //! # Quick start
 //!
 //! ```rust
-//! use elm_ast_rs::{parse, print};
+//! use elm_ast::{parse, print};
 //!
 //! let source = r#"
 //! module Main exposing (..)

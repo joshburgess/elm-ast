@@ -1,8 +1,8 @@
-use elm_ast_rs::{parse, print};
+use elm_ast::{parse, print};
 use elm_refactor::commands;
 
 /// Parse source, apply a transformation to the module, print back.
-fn _transform(source: &str, f: impl FnOnce(&mut elm_ast_rs::file::ElmModule)) -> String {
+fn _transform(source: &str, f: impl FnOnce(&mut elm_ast::file::ElmModule)) -> String {
     let mut module = parse(source).unwrap_or_else(|e| panic!("parse failed: {e:?}"));
     f(&mut module);
     print(&module)
@@ -133,9 +133,9 @@ x = List.map f list
 fn make_project(source: &str) -> elm_refactor::project::Project {
     let module = parse(source).unwrap();
     let module_name = match &module.header.value {
-        elm_ast_rs::module_header::ModuleHeader::Normal { name, .. }
-        | elm_ast_rs::module_header::ModuleHeader::Port { name, .. }
-        | elm_ast_rs::module_header::ModuleHeader::Effect { name, .. } => name.value.join("."),
+        elm_ast::module_header::ModuleHeader::Normal { name, .. }
+        | elm_ast::module_header::ModuleHeader::Port { name, .. }
+        | elm_ast::module_header::ModuleHeader::Effect { name, .. } => name.value.join("."),
     };
     elm_refactor::project::Project {
         files: vec![elm_refactor::project::ProjectFile {

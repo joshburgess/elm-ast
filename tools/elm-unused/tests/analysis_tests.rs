@@ -2,10 +2,10 @@
 // Since elm-unused is a binary, we'll replicate the test by directly
 // using elm-ast-rs and the analysis logic inline.
 
-use elm_ast_rs::parse;
+use elm_ast::parse;
 
 /// Helper: parse source, collect info, and return the module info.
-fn parse_module(source: &str) -> elm_ast_rs::file::ElmModule {
+fn parse_module(source: &str) -> elm_ast::file::ElmModule {
     parse(source).unwrap_or_else(|e| panic!("parse failed: {e:?}"))
 }
 
@@ -13,10 +13,10 @@ fn parse_module(source: &str) -> elm_ast_rs::file::ElmModule {
 // we test the tool end-to-end by checking that elm-ast-rs provides the right
 // data for analysis. These tests verify the Visit-based collection patterns.
 
-use elm_ast_rs::declaration::Declaration;
-use elm_ast_rs::expr::Expr;
-use elm_ast_rs::node::Spanned;
-use elm_ast_rs::visit::{self, Visit};
+use elm_ast::declaration::Declaration;
+use elm_ast::expr::Expr;
+use elm_ast::node::Spanned;
+use elm_ast::visit::{self, Visit};
 
 struct IdentCollector(Vec<String>);
 
@@ -136,9 +136,9 @@ x = 1
     impl Visit for TypeCollector {
         fn visit_type_annotation(
             &mut self,
-            ty: &Spanned<elm_ast_rs::type_annotation::TypeAnnotation>,
+            ty: &Spanned<elm_ast::type_annotation::TypeAnnotation>,
         ) {
-            if let elm_ast_rs::type_annotation::TypeAnnotation::Typed { name, .. } = &ty.value {
+            if let elm_ast::type_annotation::TypeAnnotation::Typed { name, .. } = &ty.value {
                 self.0.push(name.value.clone());
             }
             visit::walk_type_annotation(self, ty);

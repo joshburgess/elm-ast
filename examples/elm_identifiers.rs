@@ -1,16 +1,16 @@
 /// List all identifiers in an Elm file using the Visit trait.
 ///
 /// Usage: cargo run --example elm_identifiers -- <file.elm>
-use elm_ast_rs::node::Spanned;
-use elm_ast_rs::visit::{Visit, walk_expr};
+use elm_ast::node::Spanned;
+use elm_ast::visit::{Visit, walk_expr};
 
 struct IdentCollector {
     idents: Vec<(String, u32, u32)>, // (name, line, column)
 }
 
 impl Visit for IdentCollector {
-    fn visit_expr(&mut self, expr: &Spanned<elm_ast_rs::expr::Expr>) {
-        if let elm_ast_rs::expr::Expr::FunctionOrValue { module_name, name } = &expr.value {
+    fn visit_expr(&mut self, expr: &Spanned<elm_ast::expr::Expr>) {
+        if let elm_ast::expr::Expr::FunctionOrValue { module_name, name } = &expr.value {
             let qualified = if module_name.is_empty() {
                 name.clone()
             } else {
@@ -32,7 +32,7 @@ fn main() {
         eprintln!("Error reading {path}: {e}");
         std::process::exit(1);
     });
-    let module = elm_ast_rs::parse(&source).unwrap_or_else(|errors| {
+    let module = elm_ast::parse(&source).unwrap_or_else(|errors| {
         eprintln!("Parse errors in {path}:");
         for e in &errors {
             eprintln!("  {e}");

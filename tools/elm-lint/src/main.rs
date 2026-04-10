@@ -77,7 +77,7 @@ fn main() {
 
     // Collect all module names for cross-module context.
     let mut project_modules = Vec::new();
-    let mut parsed: Vec<(String, elm_ast_rs::file::ElmModule, String)> = Vec::new();
+    let mut parsed: Vec<(String, elm_ast::file::ElmModule, String)> = Vec::new();
     let mut parse_errors = 0;
 
     for file in &files {
@@ -85,12 +85,12 @@ fn main() {
             Ok(s) => s,
             Err(_) => continue,
         };
-        match elm_ast_rs::parse(&source) {
+        match elm_ast::parse(&source) {
             Ok(module) => {
                 let mod_name = match &module.header.value {
-                    elm_ast_rs::module_header::ModuleHeader::Normal { name, .. }
-                    | elm_ast_rs::module_header::ModuleHeader::Port { name, .. }
-                    | elm_ast_rs::module_header::ModuleHeader::Effect { name, .. } => {
+                    elm_ast::module_header::ModuleHeader::Normal { name, .. }
+                    | elm_ast::module_header::ModuleHeader::Port { name, .. }
+                    | elm_ast::module_header::ModuleHeader::Effect { name, .. } => {
                         name.value.join(".")
                     }
                 };
