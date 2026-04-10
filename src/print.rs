@@ -665,13 +665,27 @@ impl Printer {
                 right,
                 ..
             } => {
+                let right_ml = is_multiline(&right.value);
                 self.write_leading_comments(&left.comments);
                 self.write_expr_operand(&left.value, operator, true);
-                self.write_char(' ');
-                self.write(operator);
-                self.write_char(' ');
-                self.write_leading_comments(&right.comments);
-                self.write_expr_operand(&right.value, operator, false);
+                if right_ml {
+                    // Vertical layout: operator and right operand on a new
+                    // indented line so that the right side starts at a
+                    // predictable column (satisfying the parser's indent rules).
+                    self.indent();
+                    self.newline_indent();
+                    self.write(operator);
+                    self.write_char(' ');
+                    self.write_leading_comments(&right.comments);
+                    self.write_expr_operand(&right.value, operator, false);
+                    self.dedent();
+                } else {
+                    self.write_char(' ');
+                    self.write(operator);
+                    self.write_char(' ');
+                    self.write_leading_comments(&right.comments);
+                    self.write_expr_operand(&right.value, operator, false);
+                }
             }
             Expr::IfElse {
                 branches,
@@ -733,8 +747,6 @@ impl Printer {
     fn write_expr_app(&mut self, expr: &Expr) {
         match expr {
             Expr::Application(args) => {
-                // Application args are always written on the same line.
-                // Block expression args get parenthesized by write_expr_atomic.
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
                         self.write_char(' ');

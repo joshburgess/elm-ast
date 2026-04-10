@@ -2473,3 +2473,4 @@ fn error_at_depth_boundary() {
     let err_msg = format!("{:?}", result.unwrap_err());
     assert!(err_msg.contains("nesting too deep"), "error should mention depth: {err_msg}");
 }
+
