@@ -840,6 +840,279 @@ identity x = x
     assert_eq!(m.declarations.len(), 3);
 }
 
+// ── Port declarations ────────────────────────────────────────────────
+
+#[test]
+fn port_declaration() {
+    let src = "\
+port module Ports exposing (..)
+
+port sendMessage : String -> Cmd msg
+";
+    let m = parse_ok(src);
+    assert_eq!(m.declarations.len(), 1);
+    match v(&m.declarations[0]) {
+        Declaration::PortDeclaration(sig) => {
+            assert_eq!(v(&sig.name), "sendMessage");
+            match &sig.type_annotation.value {
+                TypeAnnotation::FunctionType { from, to } => {
+                    assert!(matches!(
+                        &from.value,
+                        TypeAnnotation::Typed { name, .. } if name.value == "String"
+                    ));
+                    assert!(matches!(
+                        &to.value,
+                        TypeAnnotation::Typed { name, .. } if name.value == "Cmd"
+                    ));
+                }
+                _ => panic!("expected FunctionType"),
+            }
+        }
+        _ => panic!("expected PortDeclaration"),
+    }
+}
+
+#[test]
+fn port_declaration_round_trip() {
+    let src = "\
+port module Ports exposing (..)
+
+port sendMessage : String -> Cmd msg
+
+port onMessage : (String -> msg) -> Sub msg
+";
+    let ast1 = parse(src).unwrap();
+    let printed = elm_ast::print::print(&ast1);
+    let ast2 = parse(&printed).unwrap();
+    assert_eq!(ast2.declarations.len(), 2);
+    assert!(matches!(
+        v(&ast2.declarations[0]),
+        Declaration::PortDeclaration(_)
+    ));
+    assert!(matches!(
+        v(&ast2.declarations[1]),
+        Declaration::PortDeclaration(_)
+    ));
+}
+
+// ── Infix declarations ──────────────────────────────────────────────
+
+#[test]
+fn infix_declaration_left() {
+    let src = "\
+module Main exposing (..)
+
+infix left 6 (+) = add
+";
+    let m = parse_ok(src);
+    assert_eq!(m.declarations.len(), 1);
+    match v(&m.declarations[0]) {
+        Declaration::InfixDeclaration(infix) => {
+            assert_eq!(infix.operator.value, "+");
+            assert_eq!(infix.function.value, "add");
+            assert_eq!(infix.precedence.value, 6);
+            assert_eq!(
+                infix.direction.value,
+                elm_ast::operator::InfixDirection::Left
+            );
+        }
+        _ => panic!("expected InfixDeclaration"),
+    }
+}
+
+#[test]
+fn infix_declaration_right() {
+    let src = "\
+module Main exposing (..)
+
+infix right 5 (|>) = apR
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::InfixDeclaration(infix) => {
+            assert_eq!(infix.operator.value, "|>");
+            assert_eq!(infix.function.value, "apR");
+            assert_eq!(infix.precedence.value, 5);
+            assert_eq!(
+                infix.direction.value,
+                elm_ast::operator::InfixDirection::Right
+            );
+        }
+        _ => panic!("expected InfixDeclaration"),
+    }
+}
+
+#[test]
+fn infix_declaration_non() {
+    let src = "\
+module Main exposing (..)
+
+infix non 4 (==) = eq
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::InfixDeclaration(infix) => {
+            assert_eq!(infix.operator.value, "==");
+            assert_eq!(infix.function.value, "eq");
+            assert_eq!(infix.precedence.value, 4);
+            assert_eq!(
+                infix.direction.value,
+                elm_ast::operator::InfixDirection::Non
+            );
+        }
+        _ => panic!("expected InfixDeclaration"),
+    }
+}
+
+#[test]
+fn infix_declaration_round_trip() {
+    let src = "\
+module Main exposing (..)
+
+infix left 6 (+) = add
+
+infix right 0 (|>) = apR
+";
+    let ast1 = parse(src).unwrap();
+    let printed = elm_ast::print::print(&ast1);
+    let ast2 = parse(&printed).unwrap();
+    assert_eq!(ast2.declarations.len(), 2);
+    assert!(matches!(
+        v(&ast2.declarations[0]),
+        Declaration::InfixDeclaration(_)
+    ));
+    assert!(matches!(
+        v(&ast2.declarations[1]),
+        Declaration::InfixDeclaration(_)
+    ));
+}
+
+// ── Top-level destructuring ─────────────────────────────────────────
+
+#[test]
+fn top_level_destructuring_tuple() {
+    let src = "\
+module Main exposing (..)
+
+( a, b ) = someTuple
+";
+    let m = parse_ok(src);
+    assert_eq!(m.declarations.len(), 1);
+    match v(&m.declarations[0]) {
+        Declaration::Destructuring { pattern, body } => {
+            assert!(matches!(&pattern.value, Pattern::Tuple(elems) if elems.len() == 2));
+            assert!(matches!(
+                &body.value,
+                Expr::FunctionOrValue { name, .. } if name == "someTuple"
+            ));
+        }
+        _ => panic!("expected Destructuring"),
+    }
+}
+
+#[test]
+fn top_level_destructuring_record() {
+    let src = "\
+module Main exposing (..)
+
+{ name, age } = person
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::Destructuring { pattern, .. } => {
+            match &pattern.value {
+                Pattern::Record(fields) => {
+                    assert_eq!(fields.len(), 2);
+                    assert_eq!(v(&fields[0]), "name");
+                    assert_eq!(v(&fields[1]), "age");
+                }
+                _ => panic!("expected Record pattern"),
+            }
+        }
+        _ => panic!("expected Destructuring"),
+    }
+}
+
+#[test]
+fn top_level_destructuring_round_trip() {
+    let src = "\
+module Main exposing (..)
+
+( a, b ) = someTuple
+";
+    let ast1 = parse(src).unwrap();
+    let printed = elm_ast::print::print(&ast1);
+    let ast2 = parse(&printed).unwrap();
+    assert_eq!(ast2.declarations.len(), 1);
+    assert!(matches!(
+        v(&ast2.declarations[0]),
+        Declaration::Destructuring { .. }
+    ));
+}
+
+// ── GLSL expressions ────────────────────────────────────────────────
+
+#[test]
+fn glsl_expression_parse() {
+    let src = "\
+module Main exposing (..)
+
+shader = [glsl|
+    precision mediump float;
+    void main() {
+        gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+    }
+|]
+";
+    let m = parse_ok(src);
+    match v(&m.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::GLSLExpression(src) => {
+                assert!(src.contains("precision mediump float"));
+                assert!(src.contains("gl_FragColor"));
+            }
+            other => panic!("expected GLSLExpression, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn glsl_expression_round_trip() {
+    let src = "\
+module Main exposing (..)
+
+shader = [glsl|
+    void main() {}
+|]
+";
+    let ast1 = parse(src).unwrap();
+    let printed = elm_ast::print::print(&ast1);
+    assert!(printed.contains("[glsl|"));
+    assert!(printed.contains("|]"));
+    let ast2 = parse(&printed).unwrap();
+    assert_eq!(ast2.declarations.len(), 1);
+    match v(&ast2.declarations[0]) {
+        Declaration::FunctionDeclaration(func) => {
+            assert!(matches!(
+                &func.declaration.value.body.value,
+                Expr::GLSLExpression(_)
+            ));
+        }
+        _ => panic!("expected FunctionDeclaration"),
+    }
+}
+
+#[test]
+fn glsl_lexer_token() {
+    let lexer = elm_ast::Lexer::new("[glsl| some shader code |]");
+    let (tokens, errors) = lexer.tokenize();
+    assert!(errors.is_empty(), "unexpected lex errors: {errors:?}");
+    assert!(tokens
+        .iter()
+        .any(|t| matches!(&t.value, elm_ast::Token::Glsl(_))));
+}
+
 // ── Error cases ──────────────────────────────────────────────────────
 
 #[test]
@@ -852,4 +1125,168 @@ fn missing_module_header() {
 fn missing_exposing() {
     let result = parse("module Main");
     assert!(result.is_err());
+}
+
+// ── Parse error tests ───────────────────────────────────────────────
+// Each test verifies that the parser returns an error (not a panic)
+// for a specific malformed input.
+
+#[test]
+fn error_expected_direction_in_infix() {
+    let result = parse("module Main exposing (..)\n\ninfix bogus 6 (+) = add");
+    assert!(result.is_err());
+    let msg = result.unwrap_err()[0].message.clone();
+    assert!(
+        msg.contains("left") || msg.contains("right") || msg.contains("non"),
+        "error should mention valid directions, got: {msg}"
+    );
+}
+
+#[test]
+fn error_expected_operator_in_infix() {
+    let result = parse("module Main exposing (..)\n\ninfix left 6 (notAnOp) = add");
+    // "notAnOp" is a LowerName, not an Operator, so this should error
+    // when expecting ')' or produce an error about expected operator
+    assert!(result.is_err());
+}
+
+#[test]
+fn error_expected_precedence_in_infix() {
+    let result = parse("module Main exposing (..)\n\ninfix left foo (+) = add");
+    assert!(result.is_err());
+    let msg = result.unwrap_err()[0].message.clone();
+    assert!(
+        msg.contains("precedence"),
+        "error should mention precedence, got: {msg}"
+    );
+}
+
+#[test]
+fn error_expected_comma_or_rparen_in_expression() {
+    // `( 1 ]` — after the expression `1` we expect `,` or `)`, but got `]`
+    let result = parse("module Main exposing (..)\n\nx = ( 1 ]");
+    assert!(result.is_err());
+}
+
+#[test]
+fn error_expected_rparen_after_prefix_operator() {
+    let result = parse("module Main exposing (..)\n\nx = (+ 1)");
+    // `(+ 1)` is not a valid prefix operator expression — `(+)` is
+    assert!(result.is_err());
+}
+
+#[test]
+fn error_expected_rparen_or_comma() {
+    let result = parse("module Main exposing (..)\n\nx = ( 1, 2 ]");
+    assert!(result.is_err());
+}
+
+#[test]
+fn error_expected_at_least_one_lambda_arg() {
+    let result = parse("module Main exposing (..)\n\nx = \\ -> 1");
+    assert!(result.is_err());
+    let msg = result.unwrap_err()[0].message.clone();
+    assert!(
+        msg.contains("argument") || msg.contains("lambda"),
+        "error should mention lambda arguments, got: {msg}"
+    );
+}
+
+#[test]
+fn error_expected_at_least_one_case_branch() {
+    let result = parse(
+        "\
+module Main exposing (..)
+
+x =
+    case y of
+",
+    );
+    assert!(result.is_err());
+    let msg = result.unwrap_err()[0].message.clone();
+    assert!(
+        msg.contains("case branch"),
+        "error should mention case branch, got: {msg}"
+    );
+}
+
+#[test]
+fn error_expected_field_name_after_dot() {
+    let result = parse("module Main exposing (..)\n\nx = foo.123");
+    assert!(result.is_err());
+}
+
+#[test]
+fn error_expected_operator_in_exposing_list() {
+    let result = parse("module Main exposing ((123))");
+    assert!(result.is_err());
+    let msg = result.unwrap_err()[0].message.clone();
+    assert!(
+        msg.contains("operator") || msg.contains("exposing"),
+        "error should mention operator in exposing, got: {msg}"
+    );
+}
+
+#[test]
+fn error_expected_comma_or_rparen_in_pattern() {
+    let result = parse("module Main exposing (..)\n\nf ( a b ) = a");
+    assert!(result.is_err());
+}
+
+#[test]
+fn error_expected_number_after_minus_in_pattern() {
+    let result = parse("module Main exposing (..)\n\nf (-foo) = 1");
+    assert!(result.is_err());
+}
+
+#[test]
+fn error_expected_comma_or_rparen_in_type() {
+    // `( Int ]` — in a type tuple, after `Int` we expect `,` or `)`, but got `]`
+    let result = parse("module Main exposing (..)\n\nf : ( Int ]\nf x = 1");
+    assert!(result.is_err());
+}
+
+// ── Error recovery tests ────────────────────────────────────────────
+
+#[test]
+fn error_recovery_skips_bad_declaration() {
+    let src = "\
+module Main exposing (..)
+
+good1 = 1
+
+bad declaration here !!!
+
+good2 = 2
+";
+    let (maybe_module, errors) = elm_ast::parse_recovering(src);
+    assert!(!errors.is_empty(), "should have parse errors");
+    let module = maybe_module.expect("should have partial module");
+    // At least one good declaration should have been recovered
+    assert!(
+        !module.declarations.is_empty(),
+        "should recover at least one declaration"
+    );
+}
+
+#[test]
+fn error_recovery_returns_partial_ast() {
+    let src = "\
+module Main exposing (..)
+
+x = 1
+
+y = if then
+
+z = 3
+";
+    let (maybe_module, errors) = elm_ast::parse_recovering(src);
+    assert!(!errors.is_empty());
+    let module = maybe_module.expect("should have partial module");
+    // Should recover x and z even though y fails
+    assert!(
+        module.declarations.len() >= 2,
+        "should recover at least 2 declarations, got {}",
+        module.declarations.len()
+    );
 }

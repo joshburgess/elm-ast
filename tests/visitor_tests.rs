@@ -1,4 +1,6 @@
-use elm_ast::declaration::Declaration;
+use elm_ast::comment::Comment;
+use elm_ast::declaration::{Declaration, InfixDef};
+use elm_ast::exposing::ExposedItem;
 use elm_ast::expr::Expr;
 use elm_ast::fold::Fold;
 use elm_ast::literal::Literal;
@@ -618,5 +620,290 @@ sub x y = x - y
     assert!(
         !output.contains("\nadd "),
         "should not have original name 'add'"
+    );
+}
+
+// ── Visit: visit_comment ────────────────────────────────────────────
+
+struct CommentCollector(Vec<String>);
+
+impl Visit for CommentCollector {
+    fn visit_comment(&mut self, comment: &Spanned<Comment>) {
+        match &comment.value {
+            Comment::Line(text) => self.0.push(format!("line:{text}")),
+            Comment::Block(text) => self.0.push(format!("block:{text}")),
+            Comment::Doc(text) => self.0.push(format!("doc:{text}")),
+        }
+    }
+}
+
+#[test]
+fn visit_comment_collects_comments() {
+    let m = parse(
+        "\
+module Main exposing (..)
+
+-- a line comment
+{- a block comment -}
+
+x = 1
+",
+    )
+    .unwrap();
+
+    let mut collector = CommentCollector(Vec::new());
+    collector.visit_module(&m);
+    assert!(
+        !collector.0.is_empty(),
+        "should visit at least one comment, got none"
+    );
+    assert!(
+        collector.0.iter().any(|c| c.starts_with("line:")),
+        "should find a line comment"
+    );
+    assert!(
+        collector.0.iter().any(|c| c.starts_with("block:")),
+        "should find a block comment"
+    );
+}
+
+// ── Visit: visit_infix_def ──────────────────────────────────────────
+
+struct InfixDefCollector(Vec<String>);
+
+impl Visit for InfixDefCollector {
+    fn visit_infix_def(&mut self, infix: &InfixDef) {
+        self.0.push(infix.operator.value.clone());
+    }
+}
+
+#[test]
+fn visit_infix_def_called() {
+    let m = parse(
+        "\
+module Main exposing (..)
+
+infix left 6 (+) = add
+
+infix right 5 (|>) = apR
+",
+    )
+    .unwrap();
+
+    let mut collector = InfixDefCollector(Vec::new());
+    collector.visit_module(&m);
+    assert_eq!(collector.0.len(), 2, "should visit 2 infix defs");
+    assert!(collector.0.contains(&"+".to_string()));
+    assert!(collector.0.contains(&"|>".to_string()));
+}
+
+// ── Visit: visit_exposed_item ───────────────────────────────────────
+
+struct ExposedItemCollector(Vec<String>);
+
+impl Visit for ExposedItemCollector {
+    fn visit_exposed_item(&mut self, item: &Spanned<ExposedItem>) {
+        match &item.value {
+            ExposedItem::Function(name) => self.0.push(format!("fn:{name}")),
+            ExposedItem::TypeOrAlias(name) => self.0.push(format!("type:{name}")),
+            ExposedItem::TypeExpose { name, .. } => self.0.push(format!("type_expose:{name}")),
+            ExposedItem::Infix(op) => self.0.push(format!("infix:{op}")),
+        }
+    }
+}
+
+#[test]
+fn visit_exposed_item_called() {
+    let m = parse("module Main exposing (main, view, Msg(..))").unwrap();
+
+    let mut collector = ExposedItemCollector(Vec::new());
+    collector.visit_module(&m);
+    assert_eq!(collector.0.len(), 3, "should visit 3 exposed items");
+    assert!(collector.0.contains(&"fn:main".to_string()));
+    assert!(collector.0.contains(&"fn:view".to_string()));
+    assert!(collector.0.contains(&"type_expose:Msg".to_string()));
+}
+
+#[test]
+fn visit_exposed_item_with_imports() {
+    let m = parse(
+        "\
+module Main exposing (main)
+
+import Html exposing (div, text)
+",
+    )
+    .unwrap();
+
+    let mut collector = ExposedItemCollector(Vec::new());
+    collector.visit_module(&m);
+    // Module exposing (main) + import exposing (div, text) = 3 items
+    assert_eq!(collector.0.len(), 3, "should visit 3 exposed items");
+    assert!(collector.0.contains(&"fn:main".to_string()));
+    assert!(collector.0.contains(&"fn:div".to_string()));
+    assert!(collector.0.contains(&"fn:text".to_string()));
+}
+
+// ── Visit: visit_ident override ─────────────────────────────────────
+
+#[test]
+fn visit_ident_sees_port_names() {
+    let m = parse(
+        "\
+port module Ports exposing (..)
+
+port sendMessage : String -> Cmd msg
+",
+    )
+    .unwrap();
+
+    let mut collector = IdentCollector(Vec::new());
+    collector.visit_module(&m);
+    assert!(
+        collector.0.contains(&"sendMessage".to_string()),
+        "should visit port name via visit_ident"
+    );
+}
+
+// ── Fold: fold_comment ──────────────────────────────────────────────
+
+struct CommentPrefixer;
+
+impl Fold for CommentPrefixer {
+    fn fold_comment(&mut self, comment: Spanned<Comment>) -> Spanned<Comment> {
+        let new_value = match comment.value {
+            Comment::Line(text) => Comment::Line(format!("PREFIXED: {text}")),
+            Comment::Block(text) => Comment::Block(format!("PREFIXED: {text}")),
+            Comment::Doc(text) => Comment::Doc(format!("PREFIXED: {text}")),
+        };
+        Spanned::new(comment.span, new_value)
+    }
+}
+
+#[test]
+fn fold_comment_transforms_comments() {
+    let m = parse(
+        "\
+module Main exposing (..)
+
+-- original comment
+
+x = 1
+",
+    )
+    .unwrap();
+
+    let m2 = CommentPrefixer.fold_module(m);
+    assert!(
+        m2.comments.iter().any(|c| match &c.value {
+            Comment::Line(text) => text.contains("PREFIXED:"),
+            _ => false,
+        }),
+        "fold_comment should transform line comments"
+    );
+}
+
+// ── Fold: fold_infix_def ────────────────────────────────────────────
+
+struct InfixDefTransformer;
+
+impl Fold for InfixDefTransformer {
+    fn fold_infix_def(&mut self, mut infix: InfixDef) -> InfixDef {
+        infix.function.value = format!("transformed_{}", infix.function.value);
+        infix
+    }
+}
+
+#[test]
+fn fold_infix_def_transforms() {
+    let m = parse(
+        "\
+module Main exposing (..)
+
+infix left 6 (+) = add
+",
+    )
+    .unwrap();
+
+    let m2 = InfixDefTransformer.fold_module(m);
+    let output = print::print(&m2);
+    assert!(
+        output.contains("transformed_add"),
+        "fold_infix_def should transform function name. Output:\n{output}"
+    );
+}
+
+// ── Fold: fold_literal for Char, Hex, Float ─────────────────────────
+
+struct AllLiteralsToZero;
+
+impl Fold for AllLiteralsToZero {
+    fn fold_literal(&mut self, lit: Literal) -> Literal {
+        match lit {
+            Literal::Int(_) => Literal::Int(0),
+            Literal::Float(_) => Literal::Float(0.0),
+            Literal::Char(_) => Literal::Char('0'),
+            Literal::Hex(_) => Literal::Hex(0),
+            Literal::String(_) => Literal::String("0".into()),
+            Literal::MultilineString(_) => Literal::MultilineString("0".into()),
+        }
+    }
+}
+
+#[test]
+fn fold_literal_char() {
+    let m = parse(
+        "\
+module Main exposing (..)
+
+x = 'a'
+",
+    )
+    .unwrap();
+
+    let m2 = AllLiteralsToZero.fold_module(m);
+    let output = print::print(&m2);
+    assert!(
+        output.contains("'0'"),
+        "fold_literal should transform Char. Output:\n{output}"
+    );
+}
+
+#[test]
+fn fold_literal_float() {
+    let m = parse(
+        "\
+module Main exposing (..)
+
+x = 3.14
+",
+    )
+    .unwrap();
+
+    let m2 = AllLiteralsToZero.fold_module(m);
+    let output = print::print(&m2);
+    // 0.0 may print as "0" or "0.0" depending on the printer
+    assert!(
+        output.contains("0"),
+        "fold_literal should transform Float. Output:\n{output}"
+    );
+}
+
+#[test]
+fn fold_literal_hex() {
+    let m = parse(
+        "\
+module Main exposing (..)
+
+x = 0xFF
+",
+    )
+    .unwrap();
+
+    let m2 = AllLiteralsToZero.fold_module(m);
+    let output = print::print(&m2);
+    assert!(
+        output.contains("0x00") || output.contains("0x0"),
+        "fold_literal should transform Hex. Output:\n{output}"
     );
 }

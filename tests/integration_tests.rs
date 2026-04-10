@@ -168,6 +168,16 @@ fn assert_module_eq(a: &ElmModule, b: &ElmModule, path: &Path) -> Result<(), Str
         ));
     }
 
+    // Check comment count (round-trip should preserve comments).
+    if a.comments.len() != b.comments.len() {
+        return Err(format!(
+            "comment count mismatch for {}: {} vs {}",
+            path.display(),
+            a.comments.len(),
+            b.comments.len()
+        ));
+    }
+
     // Check each declaration structurally.
     for (i, (da, db)) in a.declarations.iter().zip(b.declarations.iter()).enumerate() {
         if !decl_eq(&da.value, &db.value) {

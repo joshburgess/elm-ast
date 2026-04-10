@@ -2,64 +2,55 @@
 
 Test coverage gaps and improvements to address before publishing to crates.io.
 
-## 1. Parse error tests
+## 1. Parse error tests ✅
 
-Only 2 error cases are tested (`missing_module_header`, `missing_exposing`), plus 4 error recovery tests. There are ~14 distinct error messages in the parser with no coverage. Users hitting a malformed `.elm` file are relying on untested paths.
+Added 13 error tests covering all distinct error messages in the parser:
+- Infix direction, operator, and precedence errors
+- Expression comma/rparen/bracket errors
+- Prefix operator rparen error
+- Lambda argument and case branch errors
+- Field name after dot error
+- Operator in exposing list error
+- Pattern comma/rparen and negative number errors
+- Type comma/rparen error
+- 2 error recovery tests verifying partial AST recovery
 
-Specific untested error messages:
-- `expected 'left', 'right', or 'non' in infix declaration`
-- `expected operator in infix declaration`
-- `expected precedence number in infix declaration`
-- `expected ',' or ')' in expression`
-- `expected ')' after operator in prefix expression`
-- `expected ')' or ','`
-- `expected at least one argument in lambda`
-- `expected at least one case branch`
-- `expected field name after '.'`
-- `expected operator in exposing list`
-- `expected ',' or ')' in pattern`
-- `expected number after '-' in pattern`
-- `expected ',' or ')' in type`
+## 2. Port and infix declaration parser tests ✅
 
-Each of these should have a test that feeds the parser a malformed input and asserts it returns an error (not a panic) with a useful message.
+- Port declaration: parse and verify `Declaration::PortDeclaration` with correct name and type annotation
+- Port declaration round-trip with two ports
+- Infix declaration: left, right, and non associativity tested, verifying operator, precedence, direction, function
+- Infix declaration round-trip
 
-## 2. Port and infix declaration parser tests
+## 3. `Expr::BinOps` tests ✅
 
-`port module` header parsing is tested, but `port name : Type` declarations have zero parser unit tests. Infix declarations (`infix left 5 (|=) = keeper`) also have zero unit tests. They work on real files (integration tests pass), but there is no targeted verification of the parsed AST structure.
+- Construction and print test (verifies BinOps nodes print without stack overflow)
+- Visitor traversal test (verifies Visit descends into all BinOps operands)
+- Fold traversal test (verifies Fold transforms literals inside BinOps)
+- Fixed infinite recursion bug in printer for BinOps nodes (added explicit BinOps arm in `write_expr_inner`)
 
-Need:
-- Parse a port declaration, assert it produces `Declaration::PortDeclaration` with correct name and type annotation
-- Parse an infix declaration, assert it produces `Declaration::InfixDeclaration` with correct operator, precedence, direction, and function name
-- Round-trip tests for both
+## 4. GLSL expression tests ✅
 
-## 3. `Expr::BinOps` tests
+- Lexer test: verifies `[glsl| ... |]` produces `Token::Glsl`
+- Parser test: parses GLSL expression and asserts `Expr::GLSLExpression` with shader content
+- Printer round-trip test: verifies `[glsl|` and `|]` survive round-trip
 
-`BinOps` is the raw unresolved operator chain variant in the AST. It exists, is handled by the printer, visitors, and fold, but has zero tests proving any of that works. Need a test that constructs or parses a `BinOps` node and verifies it prints and round-trips correctly.
+## 5. Top-level destructuring tests ✅
 
-## 4. GLSL expression tests
+- Tuple destructuring: `( a, b ) = someTuple` → `Declaration::Destructuring` with tuple pattern
+- Record destructuring: `{ name, age } = person` → `Declaration::Destructuring` with record pattern
+- Round-trip test
 
-GLSL expressions (`[glsl| ... |]`) are only checked in the integration test's equality comparison. No parse test, no print test, no round-trip test. Need:
-- Lexer test for GLSL block delimiters
-- Parser test that parses a GLSL expression and asserts `Expr::GLSLExpression`
-- Printer round-trip test
+## 6. Integration test comment verification ✅
 
-## 5. Top-level destructuring tests
+Added comment count comparison to `assert_module_eq`. All 149 real-world files now verify that comment counts survive round-trip.
 
-`Declaration::Destructuring` (e.g., `(a, b) = someTuple`) is only handled in the integration test's equality comparison. Need:
-- Parser test that parses a top-level destructuring and asserts the pattern and body
-- Printer round-trip test
+## 7. Visitor/Fold trait coverage ✅
 
-## 6. Integration test comment verification
-
-`assert_module_eq` in the integration tests checks import and declaration counts but not comment counts. We don't know if any of the 149 real-world files lose comments on round-trip. Add a comment count comparison to `assert_module_eq` or add a dedicated integration test that verifies comment preservation across all fixture files.
-
-## 7. Visitor/Fold trait coverage
-
-19 visitor tests exist, but many trait methods have no override test:
-- `visit_comment` / `fold_comment`
-- `visit_infix_def` / `fold_infix_def`
-- `visit_exposed_item` / `fold_exposed_item`
-- `visit_ident` / `fold_ident`
-- `fold_literal` for Char, Hex, Float variants (only String is tested)
-
-Each of these should have a test that overrides the method, runs it on appropriate input, and verifies the override was called or the transformation applied.
+- `visit_comment`: collects line and block comments from parsed modules
+- `visit_infix_def`: collects operators from infix declarations
+- `visit_exposed_item`: collects exposed items from module header and imports
+- `visit_ident`: verifies port names are visited
+- `fold_comment`: transforms comment text
+- `fold_infix_def`: transforms infix definition function names
+- `fold_literal` for Char, Float, Hex variants (in addition to existing String/Int tests)

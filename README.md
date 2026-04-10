@@ -207,15 +207,15 @@ The printer uses an approach inspired by [`elm-format`](https://github.com/avh4/
 
 ## Test coverage
 
-311 tests across the workspace:
+350 tests across the workspace:
 
 | Suite | Tests |
 |---|---|
 | Lexer | 59 |
-| Parser | 44 |
+| Parser | 71 |
 | Printer | 42 |
-| Visitors | 19 |
-| Edge cases + serde + builders + comments | 73 |
+| Visitors | 29 |
+| Edge cases + serde + builders + comments | 78 |
 | Integration (149 real files, 23 packages) | 3 |
 | elm-unused | 5 |
 | elm-lint | 25 |

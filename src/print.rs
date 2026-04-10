@@ -680,6 +680,18 @@ impl Printer {
             Expr::Lambda { args, body } => {
                 self.write_lambda(args, &body.value);
             }
+            Expr::BinOps {
+                operands_and_operators,
+                final_operand,
+            } => {
+                for (operand, op) in operands_and_operators {
+                    self.write_expr_app(&operand.value);
+                    self.write_char(' ');
+                    self.write(&op.value);
+                    self.write_char(' ');
+                }
+                self.write_expr_app(&final_operand.value);
+            }
             _ => self.write_expr_app(expr),
         }
     }

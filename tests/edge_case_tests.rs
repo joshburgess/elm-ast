@@ -3,6 +3,7 @@ use elm_ast::declaration::Declaration;
 use elm_ast::expr::Expr;
 use elm_ast::file::{associate_comments, extract_comments};
 use elm_ast::literal::Literal;
+use elm_ast::node::Spanned;
 use elm_ast::pattern::Pattern;
 use elm_ast::type_annotation::TypeAnnotation;
 use elm_ast::{Lexer, parse, parse_recovering};
@@ -1596,4 +1597,141 @@ y =
         m2.comments.len(),
         output
     );
+}
+
+// ── BinOps (raw unresolved operator chain) ──────────────────────────
+
+#[test]
+fn binops_construct_and_print() {
+    // BinOps is not produced by the parser — only for manual AST construction.
+    // Verify we can construct one and the printer handles it.
+    let binops_expr = Spanned::dummy(Expr::BinOps {
+        operands_and_operators: vec![
+            (
+                Spanned::dummy(Expr::FunctionOrValue {
+                    module_name: vec![],
+                    name: "a".into(),
+                }),
+                Spanned::dummy("+".to_string()),
+            ),
+            (
+                Spanned::dummy(Expr::FunctionOrValue {
+                    module_name: vec![],
+                    name: "b".into(),
+                }),
+                Spanned::dummy("*".to_string()),
+            ),
+        ],
+        final_operand: Box::new(Spanned::dummy(Expr::FunctionOrValue {
+            module_name: vec![],
+            name: "c".into(),
+        })),
+    });
+
+    // Build a module containing this expression
+    let m = builder::module(
+        vec!["Main"],
+        vec![builder::func(
+            "x",
+            vec![],
+            binops_expr,
+        )],
+    );
+
+    let output = elm_ast::print::print(&m);
+    // The printer wraps BinOps in parens when in atomic position
+    assert!(
+        output.contains("a") && output.contains("b") && output.contains("c"),
+        "BinOps should print all operands. Output:\n{output}"
+    );
+}
+
+#[test]
+fn binops_visitor_traversal() {
+    use elm_ast::visit::Visit;
+
+    // Construct a BinOps node and verify the visitor traverses operands
+    let binops_expr = Spanned::dummy(Expr::BinOps {
+        operands_and_operators: vec![
+            (
+                Spanned::dummy(Expr::Literal(Literal::Int(1))),
+                Spanned::dummy("+".to_string()),
+            ),
+            (
+                Spanned::dummy(Expr::Literal(Literal::Int(2))),
+                Spanned::dummy("*".to_string()),
+            ),
+        ],
+        final_operand: Box::new(Spanned::dummy(Expr::Literal(Literal::Int(3)))),
+    });
+
+    let m = builder::module(
+        vec!["Main"],
+        vec![builder::func("x", vec![], binops_expr)],
+    );
+
+    struct LiteralCounter(usize);
+    impl Visit for LiteralCounter {
+        fn visit_literal(&mut self, _lit: &Literal) {
+            self.0 += 1;
+        }
+    }
+
+    let mut counter = LiteralCounter(0);
+    counter.visit_module(&m);
+    assert_eq!(counter.0, 3, "should visit all 3 operand literals in BinOps");
+}
+
+#[test]
+fn binops_fold_traversal() {
+    use elm_ast::fold::Fold;
+
+    let binops_expr = Spanned::dummy(Expr::BinOps {
+        operands_and_operators: vec![(
+            Spanned::dummy(Expr::Literal(Literal::Int(10))),
+            Spanned::dummy("+".to_string()),
+        )],
+        final_operand: Box::new(Spanned::dummy(Expr::Literal(Literal::Int(20)))),
+    });
+
+    let m = builder::module(
+        vec!["Main"],
+        vec![builder::func("x", vec![], binops_expr)],
+    );
+
+    // Fold that doubles all integers
+    struct IntDoubler;
+    impl Fold for IntDoubler {
+        fn fold_literal(&mut self, lit: Literal) -> Literal {
+            match lit {
+                Literal::Int(n) => Literal::Int(n * 2),
+                other => other,
+            }
+        }
+    }
+
+    let m2 = IntDoubler.fold_module(m);
+
+    // Verify the fold was applied by checking the AST directly
+    match &m2.declarations[0].value {
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::BinOps {
+                operands_and_operators,
+                final_operand,
+            } => {
+                // First operand should be 20 (10 * 2)
+                assert!(
+                    matches!(&operands_and_operators[0].0.value, Expr::Literal(Literal::Int(20))),
+                    "first operand should be 20"
+                );
+                // Final operand should be 40 (20 * 2)
+                assert!(
+                    matches!(&final_operand.value, Expr::Literal(Literal::Int(40))),
+                    "final operand should be 40"
+                );
+            }
+            other => panic!("expected BinOps, got {other:?}"),
+        },
+        _ => panic!("expected FunctionDeclaration"),
+    }
 }
