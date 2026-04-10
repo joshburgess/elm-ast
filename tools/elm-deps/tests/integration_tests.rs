@@ -1,9 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use elm_ast::module_header::ModuleHeader;
 use elm_ast::parse;
-use elm_search::query::parse_query;
-use elm_search::search::search;
+use elm_deps::graph::{build_graph, find_cycles};
 
 fn find_elm_files(dir: &str) -> Vec<PathBuf> {
     let mut files = Vec::new();
@@ -27,8 +27,8 @@ fn collect_elm_files(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn search_fixtures(query_str: &str) -> usize {
-    let dirs = [
+fn all_fixture_dirs() -> Vec<&'static str> {
+    vec![
         "../../test-fixtures/core/src",
         "../../test-fixtures/html/src",
         "../../test-fixtures/browser/src",
@@ -79,14 +79,17 @@ fn search_fixtures(query_str: &str) -> usize {
         "../../test-fixtures/elm-rosetree/src",
         "../../test-fixtures/assoc-list/src",
         "../../test-fixtures/elm-bool-extra/src",
-    ];
-    let query = parse_query(query_str).unwrap();
-    let mut total = 0;
+    ]
+}
 
-    for dir in &dirs {
-        let files = find_elm_files(dir);
-        for file in &files {
-            let source = match fs::read_to_string(file) {
+/// build_graph and find_cycles should not panic on real-world module graphs.
+#[test]
+fn graph_no_crash_on_all_fixtures() {
+    let mut modules: Vec<(String, Vec<String>)> = Vec::new();
+
+    for dir in all_fixture_dirs() {
+        for file in find_elm_files(dir) {
+            let source = match fs::read_to_string(&file) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -94,68 +97,31 @@ fn search_fixtures(query_str: &str) -> usize {
                 Ok(m) => m,
                 Err(_) => continue,
             };
-            total += search(&module, &query).len();
+
+            let mod_name = match &module.header.value {
+                ModuleHeader::Normal { name, .. }
+                | ModuleHeader::Port { name, .. }
+                | ModuleHeader::Effect { name, .. } => name.value.join("."),
+            };
+            let imports: Vec<String> = module
+                .imports
+                .iter()
+                .map(|imp| imp.value.module_name.value.join("."))
+                .collect();
+            modules.push((mod_name, imports));
         }
     }
-    total
-}
 
-/// All query types should run without panicking on real files.
-#[test]
-fn all_queries_no_crash() {
-    let queries = [
-        "returns Maybe",
-        "type Int",
-        "case-on Just",
-        "update .name",
-        "calls Dict",
-        "unused-args",
-        "lambda 2",
-        "uses map",
-        "def get",
-        "expr case",
-    ];
+    assert!(!modules.is_empty(), "no modules found in fixtures");
 
-    for q in &queries {
-        let count = search_fixtures(q);
-        // Just verify no panic. Some may have 0 results.
-        let _ = count;
-    }
-}
+    // Should not panic.
+    let (graph, _project_modules) = build_graph(&modules);
+    let cycles = find_cycles(&graph);
 
-#[test]
-fn returns_maybe_finds_results_in_core() {
-    let count = search_fixtures("returns Maybe");
-    assert!(
-        count > 0,
-        "should find functions returning Maybe in elm/core"
+    eprintln!(
+        "Built graph with {} modules, {} edges, {} cycles",
+        graph.len(),
+        graph.values().map(|v| v.len()).sum::<usize>(),
+        cycles.len()
     );
-}
-
-#[test]
-fn case_on_just_finds_results_in_core() {
-    let count = search_fixtures("case-on Just");
-    assert!(
-        count > 0,
-        "should find case expressions matching Just in elm/core"
-    );
-}
-
-#[test]
-fn unused_args_finds_results_in_core() {
-    let count = search_fixtures("unused-args");
-    // elm/core has a few unused args in kernel-backed modules.
-    assert!(count > 0, "should find unused args in elm/core");
-}
-
-#[test]
-fn def_finds_common_names() {
-    let count = search_fixtures("def map");
-    assert!(count > 0, "should find definitions containing 'map'");
-}
-
-#[test]
-fn expr_case_finds_case_expressions() {
-    let count = search_fixtures("expr case");
-    assert!(count > 0, "should find case expressions in elm/core");
 }

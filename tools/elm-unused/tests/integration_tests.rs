@@ -1,9 +1,9 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use elm_ast::parse;
-use elm_search::query::parse_query;
-use elm_search::search::search;
+use elm_unused::collect::collect_module_info;
 
 fn find_elm_files(dir: &str) -> Vec<PathBuf> {
     let mut files = Vec::new();
@@ -27,8 +27,8 @@ fn collect_elm_files(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn search_fixtures(query_str: &str) -> usize {
-    let dirs = [
+fn all_fixture_dirs() -> Vec<&'static str> {
+    vec![
         "../../test-fixtures/core/src",
         "../../test-fixtures/html/src",
         "../../test-fixtures/browser/src",
@@ -79,14 +79,17 @@ fn search_fixtures(query_str: &str) -> usize {
         "../../test-fixtures/elm-rosetree/src",
         "../../test-fixtures/assoc-list/src",
         "../../test-fixtures/elm-bool-extra/src",
-    ];
-    let query = parse_query(query_str).unwrap();
+    ]
+}
+
+/// collect_module_info should not panic on any real-world file.
+#[test]
+fn collect_no_crash_on_all_fixtures() {
     let mut total = 0;
 
-    for dir in &dirs {
-        let files = find_elm_files(dir);
-        for file in &files {
-            let source = match fs::read_to_string(file) {
+    for dir in all_fixture_dirs() {
+        for file in find_elm_files(dir) {
+            let source = match fs::read_to_string(&file) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -94,68 +97,47 @@ fn search_fixtures(query_str: &str) -> usize {
                 Ok(m) => m,
                 Err(_) => continue,
             };
-            total += search(&module, &query).len();
+
+            // Should not panic.
+            let _info = collect_module_info(&module);
+            total += 1;
         }
     }
-    total
+
+    assert!(total > 0, "no fixture files found");
+    eprintln!("collect_module_info succeeded on {total} files");
 }
 
-/// All query types should run without panicking on real files.
+/// Full cross-module analysis should not panic when run on all fixtures together.
 #[test]
-fn all_queries_no_crash() {
-    let queries = [
-        "returns Maybe",
-        "type Int",
-        "case-on Just",
-        "update .name",
-        "calls Dict",
-        "unused-args",
-        "lambda 2",
-        "uses map",
-        "def get",
-        "expr case",
-    ];
+fn analyze_no_crash_on_all_fixtures() {
+    let mut modules = HashMap::new();
 
-    for q in &queries {
-        let count = search_fixtures(q);
-        // Just verify no panic. Some may have 0 results.
-        let _ = count;
+    for dir in all_fixture_dirs() {
+        for file in find_elm_files(dir) {
+            let source = match fs::read_to_string(&file) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let module = match parse(&source) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            let info = collect_module_info(&module);
+            let mod_name = info.module_name.join(".");
+            modules.insert(mod_name, info);
+        }
     }
-}
 
-#[test]
-fn returns_maybe_finds_results_in_core() {
-    let count = search_fixtures("returns Maybe");
-    assert!(
-        count > 0,
-        "should find functions returning Maybe in elm/core"
+    assert!(!modules.is_empty(), "no modules collected");
+
+    // Should not panic.
+    let findings = elm_unused::analyze::analyze(&modules);
+
+    eprintln!(
+        "analyze ran on {} modules, produced {} findings",
+        modules.len(),
+        findings.len()
     );
-}
-
-#[test]
-fn case_on_just_finds_results_in_core() {
-    let count = search_fixtures("case-on Just");
-    assert!(
-        count > 0,
-        "should find case expressions matching Just in elm/core"
-    );
-}
-
-#[test]
-fn unused_args_finds_results_in_core() {
-    let count = search_fixtures("unused-args");
-    // elm/core has a few unused args in kernel-backed modules.
-    assert!(count > 0, "should find unused args in elm/core");
-}
-
-#[test]
-fn def_finds_common_names() {
-    let count = search_fixtures("def map");
-    assert!(count > 0, "should find definitions containing 'map'");
-}
-
-#[test]
-fn expr_case_finds_case_expressions() {
-    let count = search_fixtures("expr case");
-    assert!(count > 0, "should find case expressions in elm/core");
 }
