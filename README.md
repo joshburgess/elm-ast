@@ -225,4 +225,4 @@ The printer uses an approach inspired by [`elm-format`](https://github.com/avh4/
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT License](LICENSE-MIT) at your option.
+Dual licensed under [Apache 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT).

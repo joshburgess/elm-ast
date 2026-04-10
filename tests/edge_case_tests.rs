@@ -1735,3 +1735,318 @@ fn binops_fold_traversal() {
         _ => panic!("expected FunctionDeclaration"),
     }
 }
+
+// ── Builder: untested functions ─────────────────────────────────────
+
+#[test]
+fn builder_app() {
+    let expr = builder::app(builder::var("f"), vec![builder::int(1), builder::int(2)]);
+    let m = builder::module(vec!["Main"], vec![builder::func("x", vec![], expr)]);
+    let output = elm_ast::print::print(&m);
+    assert!(output.contains("f 1 2"), "app should print as `f 1 2`. Got:\n{output}");
+    parse_ok(&output);
+}
+
+#[test]
+fn builder_lambda() {
+    let expr = builder::lambda(
+        vec![builder::pvar("a"), builder::pvar("b")],
+        builder::var("a"),
+    );
+    let m = builder::module(vec!["Main"], vec![builder::func("x", vec![], expr)]);
+    let output = elm_ast::print::print(&m);
+    assert!(output.contains("\\a b ->"), "lambda should print args. Got:\n{output}");
+    parse_ok(&output);
+}
+
+#[test]
+fn builder_list() {
+    let expr = builder::list(vec![builder::int(1), builder::int(2), builder::int(3)]);
+    let m = builder::module(vec!["Main"], vec![builder::func("x", vec![], expr)]);
+    let output = elm_ast::print::print(&m);
+    assert!(output.contains("[ 1, 2, 3 ]"), "list should format. Got:\n{output}");
+    parse_ok(&output);
+}
+
+#[test]
+fn builder_tuple() {
+    let expr = builder::tuple(vec![builder::int(1), builder::string("hello")]);
+    let m = builder::module(vec!["Main"], vec![builder::func("x", vec![], expr)]);
+    let output = elm_ast::print::print(&m);
+    assert!(output.contains("( 1, \"hello\" )"), "tuple should format. Got:\n{output}");
+    parse_ok(&output);
+}
+
+#[test]
+fn builder_record() {
+    let expr = builder::record(vec![
+        ("name", builder::string("Alice")),
+        ("age", builder::int(30)),
+    ]);
+    let m = builder::module(vec!["Main"], vec![builder::func("x", vec![], expr)]);
+    let output = elm_ast::print::print(&m);
+    assert!(output.contains("name ="), "record should have field names. Got:\n{output}");
+    assert!(output.contains("\"Alice\""), "record should have values. Got:\n{output}");
+    parse_ok(&output);
+}
+
+// ── VisitMut round-trip ─────────────────────────────────────────────
+
+#[test]
+fn visit_mut_round_trip_preserves_parsability() {
+    use elm_ast::visit_mut::VisitMut;
+
+    let src = "\
+module Main exposing (..)
+
+add : Int -> Int -> Int
+add x y = x + y
+
+greet name = \"Hello, \" ++ name
+";
+    let mut m = parse_ok(src);
+
+    // Rename 'x' to 'z' everywhere
+    struct Renamer;
+    impl VisitMut for Renamer {
+        fn visit_ident_mut(&mut self, name: &mut String) {
+            if *name == "x" {
+                *name = "z".to_string();
+            }
+        }
+    }
+    Renamer.visit_module_mut(&mut m);
+
+    // The mutated AST should still print and reparse correctly
+    let output = elm_ast::print::print(&m);
+    let m2 = parse_ok(&output);
+    assert_eq!(m2.declarations.len(), 2);
+    assert!(output.contains("z + y"), "should have renamed x to z. Got:\n{output}");
+    assert!(!output.contains("x +"), "should not have original x in body. Got:\n{output}");
+
+    // Second round-trip: print again and verify idempotent
+    let output2 = elm_ast::print::print(&m2);
+    assert_eq!(output, output2, "mutated AST should print idempotently");
+}
+
+#[test]
+fn visit_mut_round_trip_with_complex_ast() {
+    use elm_ast::visit_mut::VisitMut;
+
+    let src = r#"
+module Main exposing (..)
+
+type Msg
+    = Increment
+    | Decrement
+
+update : Msg -> Int -> Int
+update msg model =
+    case msg of
+        Increment ->
+            model + 1
+
+        Decrement ->
+            model - 1
+
+view model =
+    if model > 0 then
+        "positive"
+    else
+        "non-positive"
+"#;
+    let mut m = parse_ok(src);
+
+    // Double all integer literals
+    struct IntDoubler;
+    impl VisitMut for IntDoubler {
+        fn visit_literal_mut(&mut self, lit: &mut Literal) {
+            if let Literal::Int(n) = lit {
+                *n *= 2;
+            }
+        }
+    }
+    IntDoubler.visit_module_mut(&mut m);
+
+    let output = elm_ast::print::print(&m);
+    let m2 = parse_ok(&output);
+    assert_eq!(m2.declarations.len(), 3);
+
+    // Verify idempotent
+    let output2 = elm_ast::print::print(&m2);
+    assert_eq!(output, output2);
+}
+
+// ── Serde: additional coverage ──────────────────────────────────────
+
+#[test]
+#[cfg(feature = "serde")]
+fn serde_round_trip_complex_module() {
+    let src = r#"
+module Main exposing (..)
+
+import Html exposing (div, text)
+
+type Msg
+    = Increment
+    | Decrement
+
+type alias Model =
+    { count : Int
+    , name : String
+    }
+
+update : Msg -> Model -> Model
+update msg model =
+    case msg of
+        Increment ->
+            { model | count = model.count + 1 }
+
+        Decrement ->
+            { model | count = model.count - 1 }
+"#;
+    let m = parse_ok(src);
+    let json = serde_json::to_string(&m).expect("serialize");
+    let m2: elm_ast::file::ElmModule = serde_json::from_str(&json).expect("deserialize");
+
+    assert_eq!(m.imports.len(), m2.imports.len());
+    assert_eq!(m.declarations.len(), m2.declarations.len());
+    assert_eq!(m.comments.len(), m2.comments.len());
+
+    // The deserialized AST should print identically to the original
+    let output1 = elm_ast::print::print(&m);
+    let output2 = elm_ast::print::print(&m2);
+    assert_eq!(output1, output2, "serde round-trip should preserve print output");
+}
+
+#[test]
+#[cfg(feature = "serde")]
+fn serde_round_trip_preserves_all_expr_types() {
+    let src = r#"
+module Main exposing (..)
+
+a = 42
+
+b = "hello"
+
+c = 'x'
+
+d = 3.14
+
+e = ()
+
+f = [ 1, 2, 3 ]
+
+g = ( 1, 2 )
+
+h = \x -> x
+
+i = { name = "test" }
+"#;
+    let m = parse_ok(src);
+    let json = serde_json::to_string_pretty(&m).expect("serialize");
+    let m2: elm_ast::file::ElmModule = serde_json::from_str(&json).expect("deserialize");
+
+    assert_eq!(m.declarations.len(), m2.declarations.len());
+
+    let output1 = elm_ast::print::print(&m);
+    let output2 = elm_ast::print::print(&m2);
+    assert_eq!(output1, output2);
+}
+
+#[test]
+#[cfg(feature = "serde")]
+fn serde_parse_serialize_reparse_idempotent() {
+    let src = "\
+module Main exposing (..)
+
+add : Int -> Int -> Int
+add x y = x + y
+";
+    let m1 = parse_ok(src);
+    let json = serde_json::to_string(&m1).expect("serialize");
+    let m2: elm_ast::file::ElmModule = serde_json::from_str(&json).expect("deserialize");
+    let printed = elm_ast::print::print(&m2);
+    let m3 = parse_ok(&printed);
+    let printed2 = elm_ast::print::print(&m3);
+    assert_eq!(printed, printed2, "parse→serialize→deserialize→print→parse→print should be idempotent");
+}
+
+// ── Display impls: independent tests ────────────────────────────────
+
+#[test]
+fn display_expr_literal() {
+    assert_eq!(format!("{}", Expr::Literal(Literal::Int(42))), "42");
+    assert_eq!(format!("{}", Expr::Literal(Literal::String("hi".into()))), "\"hi\"");
+    assert_eq!(format!("{}", Expr::Literal(Literal::Char('a'))), "'a'");
+    assert_eq!(format!("{}", Expr::Unit), "()");
+}
+
+#[test]
+fn display_expr_function_or_value() {
+    let expr = Expr::FunctionOrValue {
+        module_name: vec![],
+        name: "foo".into(),
+    };
+    assert_eq!(format!("{expr}"), "foo");
+
+    let qualified = Expr::FunctionOrValue {
+        module_name: vec!["Html".into()],
+        name: "div".into(),
+    };
+    assert_eq!(format!("{qualified}"), "Html.div");
+}
+
+#[test]
+fn display_expr_list() {
+    let list = Expr::List(vec![
+        Spanned::dummy(Expr::Literal(Literal::Int(1))),
+        Spanned::dummy(Expr::Literal(Literal::Int(2))),
+    ]);
+    let output = format!("{list}");
+    assert!(output.contains("1") && output.contains("2"), "list display: {output}");
+}
+
+#[test]
+fn display_pattern_variants() {
+    assert_eq!(format!("{}", Pattern::Anything), "_");
+    assert_eq!(format!("{}", Pattern::Var("x".into())), "x");
+    assert_eq!(format!("{}", Pattern::Unit), "()");
+    assert_eq!(
+        format!("{}", Pattern::Literal(Literal::Int(42))),
+        "42"
+    );
+}
+
+#[test]
+fn display_type_annotation_variants() {
+    assert_eq!(
+        format!("{}", TypeAnnotation::GenericType("a".into())),
+        "a"
+    );
+    assert_eq!(format!("{}", TypeAnnotation::Unit), "()");
+
+    let typed = TypeAnnotation::Typed {
+        module_name: vec![],
+        name: Spanned::dummy("Int".into()),
+        args: vec![],
+    };
+    assert_eq!(format!("{typed}"), "Int");
+}
+
+#[test]
+fn display_declaration() {
+    let m = parse_ok("module Main exposing (..)\n\nadd x y = x + y");
+    let decl = &m.declarations[0].value;
+    let output = format!("{decl}");
+    assert!(output.contains("add x y"), "declaration display: {output}");
+    assert!(output.contains("x + y"), "declaration display: {output}");
+}
+
+#[test]
+fn display_module() {
+    let m = parse_ok("module Main exposing (..)\n\nx = 1");
+    let output = format!("{m}");
+    assert!(output.contains("module Main exposing"), "module display: {output}");
+    assert!(output.contains("x ="), "module display: {output}");
+}
