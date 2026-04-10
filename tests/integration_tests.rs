@@ -8,6 +8,38 @@ use elm_ast::pattern::Pattern;
 use elm_ast::type_annotation::TypeAnnotation;
 use elm_ast::{parse, print};
 
+// ── Regression watchlist ─────────────────────────────────────────────
+//
+// These files were the hardest to get right and are the most likely to
+// regress. If a parser or printer change breaks the suite, check these first.
+//
+// 1. elm-community/typed-svg — Examples/GradientsPatterns.elm
+//    Problem: Inside list literals like `[ linearGradient [...] [...], ... ]`,
+//    function application args can appear at the *same* column as the function
+//    name (both indented to the bracket's column). The standard application_loop
+//    column check (`arg_col <= func_col`) rejected these as not-indented-enough.
+//    Fix: `app_context_col` — list/record parsers set the opening bracket's
+//    column as the reference for application_loop, relaxing the check to
+//    `arg_col <= bracket_col` instead of `arg_col <= func_col`.
+//
+// 2. mdgriffith/elm-animator — src/Animator.elm
+//    Problem: The printer output multiline function applications inline
+//    (space-separated), causing subsequent args to land at columns far below
+//    the function name after a multiline lambda/parenthesized arg. On re-parse,
+//    application_loop rejected those args.
+//    Fix: Vertical application layout — when any non-function arg is multiline,
+//    each arg is emitted on its own indented line. Also, multiline record setter
+//    values are placed on new indented lines so function names within them start
+//    near the indent column.
+//
+// Other packages with non-trivial coverage (complex patterns, deep nesting,
+// heavy operator use, GLSL blocks, large files):
+//   - folkertdev/elm-flate (large generated decompression tables)
+//   - dillonkearns/elm-markdown (deep nesting, complex case expressions)
+//   - rtfeldman/elm-css (heavy operator use, many record updates)
+//   - elm-explorations/webgl (GLSL shader blocks)
+//   - elm/core (infix declarations, wide variety of patterns)
+
 // ── Fixture discovery ────────────────────────────────────────────────
 
 fn all_fixture_dirs() -> Vec<(&'static str, &'static str)> {
