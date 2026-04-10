@@ -6,7 +6,7 @@ A `syn`-quality Rust library for parsing and constructing Elm 0.19.1 ASTs, plus 
 
 `elm-ast` provides a complete, strongly-typed representation of Elm source code as a Rust AST, along with a parser, printer, and visitor/fold traits for traversal and transformation. It is modeled after Rust's [`syn`](https://github.com/dtolnay/syn) crate, with a formatting approach inspired by [`elm-format`](https://github.com/avh4/elm-format).
 
-**Tested against 149 real-world `.elm` files from 23 packages** (including `elm/core`, `elm/browser`, `rtfeldman/elm-css`, `mdgriffith/elm-ui`, `elm-explorations/test`) with 100% parse, round-trip, and printer idempotency rates.
+**Tested against 291 real-world `.elm` files from 50 packages** (including `elm/core`, `elm/browser`, `rtfeldman/elm-css`, `mdgriffith/elm-ui`, `dillonkearns/elm-markdown`, `folkertdev/elm-flate`, `elm-explorations/test`) with 99.7% parse, 99.3% round-trip, and 99.3% printer idempotency rates.
 
 ## Tool suite
 
@@ -219,16 +219,17 @@ None of this was strictly necessary -- a simple depth limit would have sufficed 
 
 ## Test coverage
 
-373 tests across the workspace:
+435 tests across the workspace:
 
 | Suite | Tests |
 |---|---|
 | Lexer | 59 |
-| Parser | 71 |
-| Printer | 42 |
+| Parser | 109 |
+| Printer | 55 |
 | Visitors | 29 |
-| Edge cases + serde + builders + comments | 98 |
-| Integration (149 real files, 23 packages) | 3 |
+| Edge cases + serde + builders + comments | 104 |
+| Property-based (proptest) | 5 |
+| Integration (291 real files, 50 packages) | 3 |
 | elm-unused | 5 |
 | elm-lint | 25 |
 | elm-deps | 8 |

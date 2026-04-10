@@ -12,6 +12,7 @@ use elm_ast::{parse, print};
 
 fn all_fixture_dirs() -> Vec<(&'static str, &'static str)> {
     vec![
+        // ── elm/* ───────────────────────────────────────────────
         ("elm/core", "test-fixtures/core/src"),
         ("elm/html", "test-fixtures/html/src"),
         ("elm/browser", "test-fixtures/browser/src"),
@@ -25,22 +26,48 @@ fn all_fixture_dirs() -> Vec<(&'static str, &'static str)> {
         ("elm/time", "test-fixtures/time/src"),
         ("elm/regex", "test-fixtures/regex/src"),
         ("elm/random", "test-fixtures/random/src"),
-        ("rtfeldman/elm-css", "test-fixtures/elm-css/src"),
-        ("mdgriffith/elm-ui", "test-fixtures/elm-ui/src"),
         ("elm/svg", "test-fixtures/svg/src"),
         ("elm/compiler", "test-fixtures/compiler/reactor/src"),
+        ("elm/project-metadata-utils", "test-fixtures/project-metadata-utils/src"),
+        // ── elm-explorations/* ──────────────────────────────────
         ("elm-explorations/test", "test-fixtures/test/src"),
         ("elm-explorations/markdown", "test-fixtures/markdown/src"),
+        ("elm-explorations/linear-algebra", "test-fixtures/linear-algebra/src"),
+        ("elm-explorations/webgl", "test-fixtures/webgl/src"),
+        ("elm-explorations/benchmark", "test-fixtures/benchmark/src"),
+        // ── elm-community/* ─────────────────────────────────────
         ("elm-community/list-extra", "test-fixtures/list-extra/src"),
         ("elm-community/maybe-extra", "test-fixtures/maybe-extra/src"),
-        (
-            "elm-community/string-extra",
-            "test-fixtures/string-extra/src",
-        ),
-        (
-            "NoRedInk/elm-json-decode-pipeline",
-            "test-fixtures/elm-json-decode-pipeline/src",
-        ),
+        ("elm-community/string-extra", "test-fixtures/string-extra/src"),
+        ("elm-community/dict-extra", "test-fixtures/dict-extra/src"),
+        ("elm-community/array-extra", "test-fixtures/array-extra/src"),
+        ("elm-community/result-extra", "test-fixtures/result-extra/src"),
+        ("elm-community/html-extra", "test-fixtures/html-extra/src"),
+        ("elm-community/json-extra", "test-fixtures/json-extra/src"),
+        ("elm-community/typed-svg", "test-fixtures/typed-svg/src"),
+        // ── NoRedInk/* ──────────────────────────────────────────
+        ("NoRedInk/elm-json-decode-pipeline", "test-fixtures/elm-json-decode-pipeline/src"),
+        ("NoRedInk/elm-sweet-poll", "test-fixtures/elm-sweet-poll/src"),
+        ("NoRedInk/elm-compare", "test-fixtures/elm-compare/src"),
+        ("NoRedInk/elm-string-conversions", "test-fixtures/elm-string-conversions/src"),
+        ("NoRedInk/elm-sortable-table", "test-fixtures/elm-sortable-table/src"),
+        // ── rtfeldman/* ─────────────────────────────────────────
+        ("rtfeldman/elm-css", "test-fixtures/elm-css/src"),
+        ("rtfeldman/elm-hex", "test-fixtures/elm-hex/src"),
+        ("rtfeldman/elm-iso8601-date-strings", "test-fixtures/elm-iso8601-date-strings/src"),
+        // ── Other widely-used packages ──────────────────────────
+        ("mdgriffith/elm-ui", "test-fixtures/elm-ui/src"),
+        ("mdgriffith/elm-animator", "test-fixtures/elm-animator/src"),
+        ("dillonkearns/elm-markdown", "test-fixtures/elm-markdown/src"),
+        ("krisajenkins/remotedata", "test-fixtures/remotedata/src"),
+        ("robinheghan/murmur3", "test-fixtures/murmur3/src"),
+        ("myrho/elm-round", "test-fixtures/elm-round/src"),
+        ("truqu/elm-base64", "test-fixtures/elm-base64/src"),
+        ("folkertdev/elm-flate", "test-fixtures/elm-flate/src"),
+        ("BrianHicks/elm-csv", "test-fixtures/elm-csv/src"),
+        ("zwilias/elm-rosetree", "test-fixtures/elm-rosetree/src"),
+        ("pzp1997/assoc-list", "test-fixtures/assoc-list/src"),
+        ("Chadtech/elm-bool-extra", "test-fixtures/elm-bool-extra/src"),
     ]
 }
 

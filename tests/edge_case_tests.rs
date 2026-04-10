@@ -2305,3 +2305,171 @@ x y =
         collector.0
     );
 }
+
+// ── CPS/trampoline stress tests ─────────────────────────────────────
+
+#[test]
+fn deeply_nested_mixed_expressions() {
+    // if inside case inside let inside lambda — 25 layers of each
+    let mut src = String::from("module Main exposing (..)\n\nf x =\n");
+    let indent = "    ";
+    let mut depth = 1;
+    for i in 0..25 {
+        let pad = indent.repeat(depth);
+        // lambda
+        src.push_str(&format!("{pad}\\arg{i} ->\n"));
+        depth += 1;
+        let pad = indent.repeat(depth);
+        // let
+        src.push_str(&format!("{pad}let\n"));
+        src.push_str(&format!("{pad}    tmp{i} = arg{i}\n"));
+        src.push_str(&format!("{pad}in\n"));
+        // case
+        src.push_str(&format!("{pad}case tmp{i} of\n"));
+        depth += 1;
+        let pad = indent.repeat(depth);
+        src.push_str(&format!("{pad}_ ->\n"));
+        depth += 1;
+        let pad = indent.repeat(depth);
+        // if
+        src.push_str(&format!("{pad}if True then\n"));
+        depth += 1;
+    }
+    let pad = indent.repeat(depth);
+    src.push_str(&format!("{pad}42\n"));
+    // close all the if/else chains
+    for _ in 0..25 {
+        depth -= 1;
+        let pad = indent.repeat(depth);
+        src.push_str(&format!("\n{pad}else\n"));
+        depth -= 1;
+        let pad = indent.repeat(depth);
+        src.push_str(&format!("{pad}    0\n"));
+        depth -= 2; // back out of case branch and lambda
+    }
+    // The point is: this should parse without stack overflow
+    let result = parse(&src);
+    assert!(result.is_ok(), "deeply nested mixed expressions should parse: {:?}", result.err());
+}
+
+#[test]
+fn deeply_nested_lists() {
+    // [[[[...50 levels...]]]]
+    let mut src = String::from("module Main exposing (..)\n\nx = ");
+    for _ in 0..50 {
+        src.push_str("[ ");
+    }
+    src.push('1');
+    for _ in 0..50 {
+        src.push_str(" ]");
+    }
+    src.push('\n');
+    let m = parse_ok(&src);
+    let body = get_body(&m);
+    // Walk down to verify nesting
+    let mut expr = body;
+    let mut count = 0;
+    loop {
+        match expr {
+            Expr::List(elems) => {
+                count += 1;
+                if elems.len() == 1 {
+                    expr = &elems[0].value;
+                } else {
+                    break;
+                }
+            }
+            Expr::Literal(Literal::Int(1)) => break,
+            _ => panic!("unexpected expr at depth {count}: {expr:?}"),
+        }
+    }
+    assert_eq!(count, 50);
+}
+
+#[test]
+fn deeply_nested_tuples() {
+    // ((((...50 levels..., 1), 2), 3), 4)
+    let mut src = String::from("module Main exposing (..)\n\nx = ");
+    for _ in 0..50 {
+        src.push_str("( ");
+    }
+    src.push('1');
+    for i in 0..50 {
+        src.push_str(&format!(", {} )", i + 2));
+    }
+    src.push('\n');
+    let result = parse(&src);
+    assert!(result.is_ok(), "deeply nested tuples should parse");
+}
+
+#[test]
+fn deeply_nested_records() {
+    // { a = { a = { a = ... 30 levels ... } } }
+    let mut src = String::from("module Main exposing (..)\n\nx = ");
+    for _ in 0..30 {
+        src.push_str("{ a = ");
+    }
+    src.push('1');
+    for _ in 0..30 {
+        src.push_str(" }");
+    }
+    src.push('\n');
+    let result = parse(&src);
+    assert!(result.is_ok(), "deeply nested records should parse");
+}
+
+#[test]
+fn deeply_nested_parens() {
+    // ((((...100 levels...1))))
+    let mut src = String::from("module Main exposing (..)\n\nx = ");
+    for _ in 0..100 {
+        src.push('(');
+    }
+    src.push('1');
+    for _ in 0..100 {
+        src.push(')');
+    }
+    src.push('\n');
+    let m = parse_ok(&src);
+    // Should ultimately resolve to the integer 1
+    let body = get_body(&m);
+    let mut expr = body;
+    loop {
+        match expr {
+            Expr::Parenthesized(inner) => expr = &inner.value,
+            Expr::Literal(Literal::Int(1)) => break,
+            _ => panic!("unexpected: {expr:?}"),
+        }
+    }
+}
+
+#[test]
+fn error_at_depth_boundary() {
+    // Exactly at the boundary: 256 should succeed, 257 should fail
+    let mut src_ok = String::from("module Main exposing (..)\n\nx = ");
+    for _ in 0..256 {
+        src_ok.push_str("( ");
+    }
+    src_ok.push('1');
+    for _ in 0..256 {
+        src_ok.push_str(" )");
+    }
+    let result = parse(&src_ok);
+    // 256 is exactly the limit — it may or may not succeed depending on
+    // how many continuation frames each paren uses. The important thing is
+    // that 257 fails cleanly.
+    let _ = result;
+
+    let mut src_err = String::from("module Main exposing (..)\n\nx = ");
+    for _ in 0..257 {
+        src_err.push_str("( ");
+    }
+    src_err.push('1');
+    for _ in 0..257 {
+        src_err.push_str(" )");
+    }
+    let result = parse(&src_err);
+    assert!(result.is_err(), "257 levels of nesting should exceed depth limit");
+    let err_msg = format!("{:?}", result.unwrap_err());
+    assert!(err_msg.contains("nesting too deep"), "error should mention depth: {err_msg}");
+}

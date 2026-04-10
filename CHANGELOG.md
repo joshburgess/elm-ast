@@ -25,7 +25,7 @@ Initial release.
 - Feature gates: `parsing`, `printing`, `visit`, `visit-mut`, `fold`, `serde`, `wasm`
 - `serde` support (`Serialize`/`Deserialize`) for all 28 AST types
 - WASM bindings via `wasm-bindgen`
-- 373 tests across the workspace, including integration tests against 149 real-world `.elm` files from 23 packages
+- 435 tests across the workspace, including property-based tests and integration tests against 291 real-world `.elm` files from 50 packages
 
 ### Tool suite
 

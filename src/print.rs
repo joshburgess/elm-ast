@@ -863,8 +863,6 @@ impl Printer {
             }
 
             // Block expressions in atomic position: parenthesized.
-            // The closing `)` stays inline so subsequent application args
-            // can follow at the right column.
             Expr::IfElse { .. }
             | Expr::CaseOf { .. }
             | Expr::LetIn { .. }
@@ -1020,8 +1018,16 @@ impl Printer {
             }
             self.write_pattern_atomic(&arg.value);
         }
-        self.write(" -> ");
-        self.write_expr(body);
+        if is_multiline(body) {
+            self.write(" ->");
+            self.indent();
+            self.newline_indent();
+            self.write_expr(body);
+            self.dedent();
+        } else {
+            self.write(" -> ");
+            self.write_expr(body);
+        }
     }
 
     // ── Literals ─────────────────────────────────────────────────────
