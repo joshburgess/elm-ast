@@ -1002,13 +1002,14 @@ import Json.Decode as Decode
 #[test]
 fn deeply_nested_expressions() {
     // Build a deeply nested expression: f (f (f (... (f x) ...)))
-    // 50 levels of nesting to stay within test thread stack limits.
+    // 100 levels of nesting — safe because the parser is fully iterative
+    // (CPS/trampoline), so depth is limited only by heap, not stack.
     let mut src = String::from("module Main exposing (..)\n\nresult = ");
-    for _ in 0..50 {
+    for _ in 0..100 {
         src.push_str("identity (");
     }
     src.push_str("42");
-    for _ in 0..50 {
+    for _ in 0..100 {
         src.push(')');
     }
     src.push('\n');
@@ -1020,9 +1021,9 @@ fn deeply_nested_expressions() {
 
 #[test]
 fn deeply_nested_if_else() {
-    // 50 levels of nested if-else.
+    // 100 levels of nested if-else — safe with the iterative parser.
     let mut src = String::from("module Main exposing (..)\n\nresult x = ");
-    for i in 0..50 {
+    for i in 0..100 {
         src.push_str(&format!("if x == {} then {} else ", i, i));
     }
     src.push_str("0\n");
@@ -1032,19 +1033,20 @@ fn deeply_nested_if_else() {
 
 #[test]
 fn depth_limit_returns_error_instead_of_stack_overflow() {
-    // 80 levels of nesting exceeds the 64 depth limit.
-    // The parser should return a clean error, not crash.
+    // 257 levels of nesting exceeds the 256 depth limit.
+    // The iterative parser returns a clean error instead of consuming
+    // unbounded heap memory.
     let mut src = String::from("module Main exposing (..)\n\nresult = ");
-    for _ in 0..80 {
+    for _ in 0..257 {
         src.push_str("identity (");
     }
     src.push_str("42");
-    for _ in 0..80 {
+    for _ in 0..257 {
         src.push(')');
     }
     src.push('\n');
     let result = parse(&src);
-    assert!(result.is_err(), "80-deep nesting should be rejected by depth limit");
+    assert!(result.is_err(), "257-deep nesting should be rejected by depth limit");
     let err = result.unwrap_err();
     assert!(
         err.iter().any(|e| e.message.contains("nesting too deep")),

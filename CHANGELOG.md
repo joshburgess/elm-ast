@@ -14,7 +14,8 @@ Initial release.
 - Complete strongly-typed AST for all Elm 0.19.1 syntax constructs
 - `Spanned<T>` wrapper carrying source location (`Span`) on every node
 - Lexer with support for nestable block comments, multi-line strings, GLSL blocks, unicode escapes, hex literals, and custom operators
-- Pratt parser with indentation-aware layout and error recovery (`parse_recovering()`)
+- Fully iterative expression parser with zero stack recursion: iterative Pratt parsing for operators, CPS continuations for compound expressions, and a trampoline loop — O(1) call-stack depth regardless of nesting
+- Indentation-aware layout and error recovery (`parse_recovering()`)
 - Pretty-printer producing idempotent, elm-format-style output with comment round-tripping (top-level, `let`/`in`, `case`/`of`)
 - `Visit` trait for immutable AST traversal
 - `VisitMut` trait for in-place AST mutation
@@ -24,7 +25,7 @@ Initial release.
 - Feature gates: `parsing`, `printing`, `visit`, `visit-mut`, `fold`, `serde`, `wasm`
 - `serde` support (`Serialize`/`Deserialize`) for all 28 AST types
 - WASM bindings via `wasm-bindgen`
-- 372 tests across the workspace, including integration tests against 149 real-world `.elm` files from 23 packages
+- 373 tests across the workspace, including integration tests against 149 real-world `.elm` files from 23 packages
 
 ### Tool suite
 

@@ -205,9 +205,19 @@ The design follows `syn`'s proven patterns:
 
 The printer uses an approach inspired by [`elm-format`](https://github.com/avh4/elm-format): eagerly detect whether sub-expressions are multi-line, then switch containers to vertical layout when any child is multi-line.
 
+### Fully iterative expression parser
+
+The expression parser uses **zero stack recursion**. Traditional recursive-descent parsers can overflow the call stack on deeply nested input. `elm-ast` eliminates this entirely through three techniques:
+
+1. **Iterative Pratt parsing** -- binary operators use an explicit `Vec<PendingOp>` heap-allocated operator stack instead of recursive descent through precedence levels.
+2. **CPS (continuation-passing style)** -- every compound expression (if/case/let/lambda/paren/tuple/list/record) that would normally call `parse_expr` recursively instead returns a `NeedExpr(continuation)` step, where the continuation is a closure capturing the partial parse state.
+3. **Trampoline loop** -- a top-level loop drives execution: when a compound form needs a sub-expression, its continuation is pushed onto a heap-allocated stack and the loop restarts. When a sub-expression completes, the continuation is popped and invoked.
+
+This guarantees **O(1) call-stack depth** regardless of expression nesting. The continuation stack is bounded by `MAX_EXPR_DEPTH` (256) as a resource guard, not a safety requirement.
+
 ## Test coverage
 
-372 tests across the workspace:
+373 tests across the workspace:
 
 | Suite | Tests |
 |---|---|
@@ -215,7 +225,7 @@ The printer uses an approach inspired by [`elm-format`](https://github.com/avh4/
 | Parser | 71 |
 | Printer | 42 |
 | Visitors | 29 |
-| Edge cases + serde + builders + comments | 97 |
+| Edge cases + serde + builders + comments | 98 |
 | Integration (149 real files, 23 packages) | 3 |
 | elm-unused | 5 |
 | elm-lint | 25 |

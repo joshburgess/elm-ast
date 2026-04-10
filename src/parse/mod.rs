@@ -35,12 +35,12 @@ pub type ParseResult<T> = Result<T, ParseError>;
 /// The parser follows elm/compiler's approach to indentation: it tracks
 /// indentation context using token column positions rather than virtual
 /// INDENT/DEDENT tokens.
-/// Maximum expression nesting depth. Prevents stack overflow on pathological
-/// input. Each expression nesting level consumes ~6 call frames in the parser,
-/// so 64 levels ≈ 384 frames — safe for even small thread stacks (2 MB) in
-/// debug builds. Real Elm files rarely exceed 10–15 levels. This matches the
-/// approach used by serde_json, CPython, and other production parsers.
-pub(crate) const MAX_EXPR_DEPTH: u32 = 64;
+/// Maximum expression nesting depth. Limits the size of the continuation
+/// stack in the iterative (CPS/trampoline) expression parser to prevent
+/// pathological input from consuming unbounded heap memory. Real Elm files
+/// rarely exceed 10–15 levels. Set high because the iterative parser has
+/// no stack-overflow risk — this is purely a resource-usage guard.
+pub(crate) const MAX_EXPR_DEPTH: usize = 256;
 
 pub struct Parser {
     tokens: Vec<Spanned<Token>>,
@@ -49,11 +49,6 @@ pub struct Parser {
     /// indentation-sensitive layout rules are suspended (any column is valid).
     /// This matches the elm/compiler behavior.
     paren_depth: u32,
-    /// Current expression nesting depth. Incremented on each recursive
-    /// `parse_expr` call, decremented on return. If this exceeds
-    /// `MAX_EXPR_DEPTH`, parsing returns an error instead of overflowing
-    /// the call stack.
-    pub(crate) expr_depth: u32,
     /// Comments collected as a side-channel during parsing.
     /// `skip_whitespace` saves comments here instead of silently discarding them,
     /// so that `parse_module` can include them in the final AST.
@@ -67,7 +62,6 @@ impl Parser {
             tokens,
             pos: 0,
             paren_depth: 0,
-            expr_depth: 0,
             collected_comments: Vec::new(),
         }
     }
