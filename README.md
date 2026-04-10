@@ -1,6 +1,6 @@
 # elm-ast
 
-A `syn`-quality Rust library for parsing and constructing Elm 0.19.1 ASTs, plus a suite of developer tools built on top.
+A [`syn`](https://github.com/dtolnay/syn)-inspired Rust library for parsing and constructing Elm 0.19.1 ASTs, plus a suite of developer tools built on top.
 
 ## Overview
 
