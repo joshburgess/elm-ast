@@ -91,14 +91,20 @@ fn check_expr(expr: &Spanned<Expr>, errors: &mut Vec<LintError>) {
 
     // Also recurse into non-let expressions to find nested lets.
     match &expr.value {
-        Expr::IfElse { branches, else_branch } => {
+        Expr::IfElse {
+            branches,
+            else_branch,
+        } => {
             for (c, b) in branches {
                 check_expr(c, errors);
                 check_expr(b, errors);
             }
             check_expr(else_branch, errors);
         }
-        Expr::CaseOf { expr: subject, branches } => {
+        Expr::CaseOf {
+            expr: subject,
+            branches,
+        } => {
             check_expr(subject, errors);
             for b in branches {
                 check_expr(&b.body, errors);
@@ -125,10 +131,7 @@ fn check_expr(expr: &Spanned<Expr>, errors: &mut Vec<LintError>) {
     }
 }
 
-fn collect_pattern_names(
-    _pat: &Pattern,
-    _out: &mut Vec<(String, elm_ast_rs::span::Span)>,
-) {
+fn collect_pattern_names(_pat: &Pattern, _out: &mut Vec<(String, elm_ast_rs::span::Span)>) {
     // Destructuring patterns in let blocks — handled minimally for now.
     // A full implementation would extract all variable names from the pattern.
 }
@@ -147,14 +150,20 @@ fn collect_refs_expr(expr: &Expr, refs: &mut HashSet<String>) {
             collect_refs_expr(&left.value, refs);
             collect_refs_expr(&right.value, refs);
         }
-        Expr::IfElse { branches, else_branch } => {
+        Expr::IfElse {
+            branches,
+            else_branch,
+        } => {
             for (c, b) in branches {
                 collect_refs_expr(&c.value, refs);
                 collect_refs_expr(&b.value, refs);
             }
             collect_refs_expr(&else_branch.value, refs);
         }
-        Expr::CaseOf { expr: subject, branches } => {
+        Expr::CaseOf {
+            expr: subject,
+            branches,
+        } => {
             collect_refs_expr(&subject.value, refs);
             for b in branches {
                 collect_refs_expr(&b.body.value, refs);

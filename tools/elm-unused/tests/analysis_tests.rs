@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 // We need to access the library modules from the binary crate.
 // Since elm-unused is a binary, we'll replicate the test by directly
 // using elm-ast-rs and the analysis logic inline.
@@ -24,10 +22,10 @@ struct IdentCollector(Vec<String>);
 
 impl Visit for IdentCollector {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
-        if let Expr::FunctionOrValue { module_name, name } = &expr.value {
-            if module_name.is_empty() {
-                self.0.push(name.clone());
-            }
+        if let Expr::FunctionOrValue { module_name, name } = &expr.value
+            && module_name.is_empty()
+        {
+            self.0.push(name.clone());
         }
         visit::walk_expr(self, expr);
     }

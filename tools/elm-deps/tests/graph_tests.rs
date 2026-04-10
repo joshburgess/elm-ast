@@ -1,23 +1,17 @@
+use elm_deps::graph::{build_graph, find_cycles};
 use std::collections::HashMap;
-use elm_deps::graph::{find_cycles, build_graph};
 
 #[test]
 fn no_cycles_in_linear_graph() {
-    let graph: HashMap<&str, Vec<&str>> = HashMap::from([
-        ("A", vec!["B"]),
-        ("B", vec!["C"]),
-        ("C", vec![]),
-    ]);
+    let graph: HashMap<&str, Vec<&str>> =
+        HashMap::from([("A", vec!["B"]), ("B", vec!["C"]), ("C", vec![])]);
     let cycles = find_cycles(&graph);
     assert!(cycles.is_empty());
 }
 
 #[test]
 fn detects_simple_cycle() {
-    let graph: HashMap<&str, Vec<&str>> = HashMap::from([
-        ("A", vec!["B"]),
-        ("B", vec!["A"]),
-    ]);
+    let graph: HashMap<&str, Vec<&str>> = HashMap::from([("A", vec!["B"]), ("B", vec!["A"])]);
     let cycles = find_cycles(&graph);
     assert_eq!(cycles.len(), 1);
     // Cycle should contain A and B.
@@ -28,11 +22,8 @@ fn detects_simple_cycle() {
 
 #[test]
 fn detects_triangle_cycle() {
-    let graph: HashMap<&str, Vec<&str>> = HashMap::from([
-        ("A", vec!["B"]),
-        ("B", vec!["C"]),
-        ("C", vec!["A"]),
-    ]);
+    let graph: HashMap<&str, Vec<&str>> =
+        HashMap::from([("A", vec!["B"]), ("B", vec!["C"]), ("C", vec!["A"])]);
     let cycles = find_cycles(&graph);
     assert_eq!(cycles.len(), 1);
 }
@@ -40,10 +31,7 @@ fn detects_triangle_cycle() {
 #[test]
 fn no_duplicate_cycles() {
     // A -> B -> A is the same cycle as B -> A -> B.
-    let graph: HashMap<&str, Vec<&str>> = HashMap::from([
-        ("A", vec!["B"]),
-        ("B", vec!["A"]),
-    ]);
+    let graph: HashMap<&str, Vec<&str>> = HashMap::from([("A", vec!["B"]), ("B", vec!["A"])]);
     let cycles = find_cycles(&graph);
     assert_eq!(cycles.len(), 1);
 }
@@ -69,9 +57,7 @@ fn empty_graph() {
 
 #[test]
 fn self_cycle() {
-    let graph: HashMap<&str, Vec<&str>> = HashMap::from([
-        ("A", vec!["A"]),
-    ]);
+    let graph: HashMap<&str, Vec<&str>> = HashMap::from([("A", vec!["A"])]);
     let cycles = find_cycles(&graph);
     assert_eq!(cycles.len(), 1);
 }
@@ -79,7 +65,10 @@ fn self_cycle() {
 #[test]
 fn build_graph_filters_internal() {
     let modules = vec![
-        ("Main".to_string(), vec!["Html".to_string(), "Utils".to_string()]),
+        (
+            "Main".to_string(),
+            vec!["Html".to_string(), "Utils".to_string()],
+        ),
         ("Utils".to_string(), vec!["String".to_string()]),
     ];
     let (graph, project) = build_graph(&modules);

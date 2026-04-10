@@ -28,7 +28,11 @@ struct Visitor(Vec<LintError>);
 
 impl Visit for Visitor {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
-        if let Expr::IfElse { branches, else_branch } = &expr.value {
+        if let Expr::IfElse {
+            branches,
+            else_branch,
+        } = &expr.value
+        {
             if branches.len() == 1 {
                 let then_val = is_bool_literal(&branches[0].1.value);
                 let else_val = is_bool_literal(&else_branch.value);
@@ -60,12 +64,13 @@ impl Visit for Visitor {
 
 fn is_bool_literal(expr: &Expr) -> Option<bool> {
     match expr {
-        Expr::FunctionOrValue { module_name, name } if module_name.is_empty() => match name.as_str()
-        {
-            "True" => Some(true),
-            "False" => Some(false),
-            _ => None,
-        },
+        Expr::FunctionOrValue { module_name, name } if module_name.is_empty() => {
+            match name.as_str() {
+                "True" => Some(true),
+                "False" => Some(false),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }

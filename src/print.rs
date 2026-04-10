@@ -422,11 +422,7 @@ impl Printer {
         }
     }
 
-    fn write_record_type_fields(
-        &mut self,
-        fields: &[Spanned<RecordField>],
-        base: Option<&str>,
-    ) {
+    fn write_record_type_fields(&mut self, fields: &[Spanned<RecordField>], base: Option<&str>) {
         if fields.is_empty() && base.is_none() {
             self.write("{}");
             return;
@@ -813,11 +809,7 @@ impl Printer {
         self.write_expr(&setter.value.value);
     }
 
-    fn write_if_expr(
-        &mut self,
-        branches: &[(Spanned<Expr>, Spanned<Expr>)],
-        else_branch: &Expr,
-    ) {
+    fn write_if_expr(&mut self, branches: &[(Spanned<Expr>, Spanned<Expr>)], else_branch: &Expr) {
         // Single-line when all branches are simple non-block expressions.
         let all_simple = branches.len() == 1
             && branches
@@ -986,11 +978,18 @@ impl Printer {
 fn is_multiline(expr: &Expr) -> bool {
     match expr {
         // Block expressions are always multi-line.
-        Expr::IfElse { branches, else_branch, .. } => {
+        Expr::IfElse {
+            branches,
+            else_branch,
+            ..
+        } => {
             // Single-line if: only when simple condition + simple branches
             if branches.len() == 1 {
                 let (c, b) = &branches[0];
-                if !is_multiline(&c.value) && !is_multiline(&b.value) && !is_multiline(&else_branch.value) {
+                if !is_multiline(&c.value)
+                    && !is_multiline(&b.value)
+                    && !is_multiline(&else_branch.value)
+                {
                     return false;
                 }
             }

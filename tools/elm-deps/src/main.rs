@@ -210,10 +210,8 @@ fn print_stats(graph: &HashMap<&str, Vec<&str>>, _project_modules: &HashSet<Stri
     let total_edges: usize = graph.values().map(|v| v.len()).sum();
 
     // Modules with most imports (afferent coupling).
-    let mut import_counts: Vec<(&str, usize)> = graph
-        .iter()
-        .map(|(m, deps)| (*m, deps.len()))
-        .collect();
+    let mut import_counts: Vec<(&str, usize)> =
+        graph.iter().map(|(m, deps)| (*m, deps.len())).collect();
     import_counts.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
 
     // Modules most depended on (efferent coupling).
@@ -249,10 +247,7 @@ fn print_stats(graph: &HashMap<&str, Vec<&str>>, _project_modules: &HashSet<Stri
         );
     }
     println!("  {} leaf modules (no internal imports)", leaves.len());
-    println!(
-        "  {} root modules (not imported by others)",
-        roots.len()
-    );
+    println!("  {} root modules (not imported by others)", roots.len());
 
     if !import_counts.is_empty() {
         println!();
@@ -294,7 +289,14 @@ fn find_cycles<'a>(graph: &HashMap<&'a str, Vec<&'a str>>) -> Vec<Vec<&'a str>> 
 
     for module in modules {
         if !visited.contains(*module) {
-            dfs(module, graph, &mut visited, &mut on_stack, &mut path, &mut cycles);
+            dfs(
+                module,
+                graph,
+                &mut visited,
+                &mut on_stack,
+                &mut path,
+                &mut cycles,
+            );
         }
     }
 

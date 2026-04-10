@@ -23,7 +23,9 @@ fn make_project(files: Vec<(&str, &str)>) -> Project {
             }
         })
         .collect();
-    Project { files: project_files }
+    Project {
+        files: project_files,
+    }
 }
 
 fn printed(project: &Project, module_name: &str) -> String {
@@ -174,16 +176,10 @@ y = 2
     assert_eq!(changes, 2);
 
     let a = printed(&project, "A");
-    let a_imports: Vec<&str> = a
-        .lines()
-        .filter(|l| l.starts_with("import "))
-        .collect();
+    let a_imports: Vec<&str> = a.lines().filter(|l| l.starts_with("import ")).collect();
     assert_eq!(a_imports, vec!["import A", "import M", "import Z"]);
 
     let b = printed(&project, "B");
-    let b_imports: Vec<&str> = b
-        .lines()
-        .filter(|l| l.starts_with("import "))
-        .collect();
+    let b_imports: Vec<&str> = b.lines().filter(|l| l.starts_with("import ")).collect();
     assert_eq!(b_imports, vec!["import B", "import D", "import X"]);
 }

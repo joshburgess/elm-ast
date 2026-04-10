@@ -62,10 +62,7 @@ pub fn analyze(modules: &HashMap<String, ModuleInfo>) -> Vec<Finding> {
         // ── Unused imports ───────────────────────────────────────
         for imp in &info.imports {
             let imp_module = imp.module_name.join(".");
-            let imp_alias = imp
-                .alias
-                .as_deref()
-                .unwrap_or(&imp_module);
+            let imp_alias = imp.alias.as_deref().unwrap_or(&imp_module);
 
             // Check if any qualified reference uses this module/alias.
             let qualified_used = info
@@ -113,8 +110,8 @@ pub fn analyze(modules: &HashMap<String, ModuleInfo>) -> Vec<Finding> {
         // ── Unused internal functions ────────────────────────────
         for name in &info.defined_values {
             let is_used_internally = info.used_values.contains(name);
-            let is_exported = info.exposing.exposes_all
-                || info.exposing.exposed_values.contains(name);
+            let is_exported =
+                info.exposing.exposes_all || info.exposing.exposed_values.contains(name);
 
             if !is_used_internally && !is_exported {
                 findings.push(Finding {
@@ -164,11 +161,14 @@ pub fn analyze(modules: &HashMap<String, ModuleInfo>) -> Vec<Finding> {
         // ── Unused types ─────────────────────────────────────────
         for type_name in &info.defined_types {
             let is_used_internally = info.used_types.contains(type_name);
-            let is_exported = info.exposing.exposes_all
-                || info.exposing.exposed_types.contains(type_name);
+            let is_exported =
+                info.exposing.exposes_all || info.exposing.exposed_types.contains(type_name);
             let is_used_externally = modules.values().any(|other| {
                 other.used_types.contains(type_name)
-                    || other.used_qualified_types.iter().any(|(_, n)| n == type_name)
+                    || other
+                        .used_qualified_types
+                        .iter()
+                        .any(|(_, n)| n == type_name)
             });
 
             if !is_used_internally && !is_exported && !is_used_externally {

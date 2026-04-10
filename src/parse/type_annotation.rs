@@ -135,7 +135,10 @@ fn parse_type_atomic(p: &mut Parser) -> ParseResult<Spanned<TypeAnnotation>> {
         // Record type: `{ name : String }` or `{ a | name : String }`
         Token::LeftBrace => parse_record_type(p),
 
-        _ => Err(p.error(format!("expected type, found {}", super::describe(p.peek())))),
+        _ => Err(p.error(format!(
+            "expected type, found {}",
+            super::describe(p.peek())
+        ))),
     }
 }
 
@@ -249,9 +252,6 @@ fn parse_qualified_upper(p: &mut Parser) -> ParseResult<(Vec<String>, Spanned<St
 fn can_start_atomic_type(tok: &Token) -> bool {
     matches!(
         tok,
-        Token::LowerName(_)
-            | Token::UpperName(_)
-            | Token::LeftParen
-            | Token::LeftBrace
+        Token::LowerName(_) | Token::UpperName(_) | Token::LeftParen | Token::LeftBrace
     )
 }

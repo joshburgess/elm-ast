@@ -109,15 +109,9 @@ pub fn extract_comments(tokens: &[Spanned<Token>]) -> Vec<Spanned<Comment>> {
     tokens
         .iter()
         .filter_map(|tok| match &tok.value {
-            Token::LineComment(text) => {
-                Some(Spanned::new(tok.span, Comment::Line(text.clone())))
-            }
-            Token::BlockComment(text) => {
-                Some(Spanned::new(tok.span, Comment::Block(text.clone())))
-            }
-            Token::DocComment(text) => {
-                Some(Spanned::new(tok.span, Comment::Doc(text.clone())))
-            }
+            Token::LineComment(text) => Some(Spanned::new(tok.span, Comment::Line(text.clone()))),
+            Token::BlockComment(text) => Some(Spanned::new(tok.span, Comment::Block(text.clone()))),
+            Token::DocComment(text) => Some(Spanned::new(tok.span, Comment::Doc(text.clone()))),
             _ => None,
         })
         .collect()
@@ -153,9 +147,7 @@ pub fn associate_comments(
 
         let leading: Vec<Spanned<Comment>> = all_comments
             .iter()
-            .filter(|c| {
-                c.span.start.line > prev_start_line && c.span.start.line < decl_start_line
-            })
+            .filter(|c| c.span.start.line > prev_start_line && c.span.start.line < decl_start_line)
             .cloned()
             .collect();
 

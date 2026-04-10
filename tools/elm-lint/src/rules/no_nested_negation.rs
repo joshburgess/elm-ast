@@ -44,11 +44,7 @@ impl Visit for NegVisitor {
         // Also check `not (not x)` pattern.
         if let Expr::Application(args) = &expr.value {
             if args.len() == 2 {
-                if let Expr::FunctionOrValue {
-                    module_name,
-                    name,
-                } = &args[0].value
-                {
+                if let Expr::FunctionOrValue { module_name, name } = &args[0].value {
                     if module_name.is_empty() && name == "not" {
                         if let Expr::Parenthesized(inner) = &args[1].value {
                             if let Expr::Application(inner_args) = &inner.value {

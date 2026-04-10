@@ -4,8 +4,8 @@
 //! where source locations don't matter.
 
 use crate::declaration::{CustomType, Declaration, TypeAlias, ValueConstructor};
-use crate::expr::{Expr, Function, FunctionImplementation, RecordSetter, Signature};
 use crate::exposing::Exposing;
+use crate::expr::{Expr, Function, FunctionImplementation, RecordSetter, Signature};
 use crate::file::ElmModule;
 use crate::import::Import;
 use crate::literal::Literal;
@@ -66,11 +66,7 @@ pub fn app(func: Spanned<Expr>, args: Vec<Spanned<Expr>>) -> Spanned<Expr> {
 }
 
 /// Create a binary operator application: `a + b`
-pub fn binop(
-    op: impl Into<String>,
-    left: Spanned<Expr>,
-    right: Spanned<Expr>,
-) -> Spanned<Expr> {
+pub fn binop(op: impl Into<String>, left: Spanned<Expr>, right: Spanned<Expr>) -> Spanned<Expr> {
     spanned(Expr::OperatorApplication {
         operator: op.into(),
         direction: crate::operator::InfixDirection::Left,
@@ -165,7 +161,10 @@ pub fn precord(fields: Vec<impl Into<String>>) -> Spanned<Pattern> {
 // ── Type annotations ─────────────────────────────────────────────────
 
 /// Create a named type: `Int`, `String`, `Maybe a`
-pub fn tname(name: impl Into<String>, args: Vec<Spanned<TypeAnnotation>>) -> Spanned<TypeAnnotation> {
+pub fn tname(
+    name: impl Into<String>,
+    args: Vec<Spanned<TypeAnnotation>>,
+) -> Spanned<TypeAnnotation> {
     spanned(TypeAnnotation::Typed {
         module_name: Vec::new(),
         name: spanned(name.into()),
@@ -179,7 +178,10 @@ pub fn tvar(name: impl Into<String>) -> Spanned<TypeAnnotation> {
 }
 
 /// Create a function type: `a -> b`
-pub fn tfunc(from: Spanned<TypeAnnotation>, to: Spanned<TypeAnnotation>) -> Spanned<TypeAnnotation> {
+pub fn tfunc(
+    from: Spanned<TypeAnnotation>,
+    to: Spanned<TypeAnnotation>,
+) -> Spanned<TypeAnnotation> {
     spanned(TypeAnnotation::FunctionType {
         from: Box::new(from),
         to: Box::new(to),
@@ -271,10 +273,7 @@ pub fn custom_type(
 // ── Module ───────────────────────────────────────────────────────────
 
 /// Create a module with the given name and declarations.
-pub fn module(
-    name: Vec<impl Into<String>>,
-    declarations: Vec<Spanned<Declaration>>,
-) -> ElmModule {
+pub fn module(name: Vec<impl Into<String>>, declarations: Vec<Spanned<Declaration>>) -> ElmModule {
     ElmModule {
         header: spanned(ModuleHeader::Normal {
             name: spanned(name.into_iter().map(|s| s.into()).collect()),

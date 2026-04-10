@@ -49,7 +49,9 @@ fn normal_module_exposing_explicit() {
                 assert_eq!(items.len(), 3);
                 assert!(matches!(v(&items[0]), ExposedItem::Function(n) if n == "main"));
                 assert!(matches!(v(&items[1]), ExposedItem::Function(n) if n == "view"));
-                assert!(matches!(v(&items[2]), ExposedItem::TypeExpose { name, open } if name == "Msg" && open.is_some()));
+                assert!(
+                    matches!(v(&items[2]), ExposedItem::TypeExpose { name, open } if name == "Msg" && open.is_some())
+                );
             }
             _ => panic!("expected Explicit exposing"),
         },
@@ -76,9 +78,7 @@ fn port_module() {
 
 #[test]
 fn effect_module() {
-    let m = parse_ok(
-        "effect module Task where { command = MyCmd } exposing (Task, perform)",
-    );
+    let m = parse_ok("effect module Task where { command = MyCmd } exposing (Task, perform)");
     match v(&m.header) {
         ModuleHeader::Effect {
             command,
@@ -107,8 +107,14 @@ fn simple_import() {
 fn import_with_alias() {
     let m = parse_ok("module Main exposing (..)\n\nimport Json.Decode as Decode");
     let imp = v(&m.imports[0]);
-    assert_eq!(imp.module_name.value, vec!["Json".to_string(), "Decode".to_string()]);
-    assert_eq!(imp.alias.as_ref().unwrap().value, vec!["Decode".to_string()]);
+    assert_eq!(
+        imp.module_name.value,
+        vec!["Json".to_string(), "Decode".to_string()]
+    );
+    assert_eq!(
+        imp.alias.as_ref().unwrap().value,
+        vec!["Decode".to_string()]
+    );
 }
 
 #[test]
@@ -183,7 +189,9 @@ add x y = x
             // Int -> Int -> Int  =  Int -> (Int -> Int)
             match &sig.value.type_annotation.value {
                 TypeAnnotation::FunctionType { from, to } => {
-                    assert!(matches!(&from.value, TypeAnnotation::Typed { name, .. } if name.value == "Int"));
+                    assert!(
+                        matches!(&from.value, TypeAnnotation::Typed { name, .. } if name.value == "Int")
+                    );
                     assert!(matches!(&to.value, TypeAnnotation::FunctionType { .. }));
                 }
                 _ => panic!("expected FunctionType"),
@@ -252,7 +260,9 @@ pair = ( 1, \"hello\" )
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => {
             let sig = func.signature.as_ref().unwrap();
-            assert!(matches!(&sig.value.type_annotation.value, TypeAnnotation::Tupled(elems) if elems.len() == 2));
+            assert!(
+                matches!(&sig.value.type_annotation.value, TypeAnnotation::Tupled(elems) if elems.len() == 2)
+            );
         }
         _ => panic!("expected FunctionDeclaration"),
     }
@@ -353,7 +363,10 @@ x = 42
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => {
-            assert!(matches!(&func.declaration.value.body.value, Expr::Literal(Literal::Int(42))));
+            assert!(matches!(
+                &func.declaration.value.body.value,
+                Expr::Literal(Literal::Int(42))
+            ));
         }
         _ => panic!("expected FunctionDeclaration"),
     }
@@ -369,7 +382,9 @@ x = \"hello\"
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => {
-            assert!(matches!(&func.declaration.value.body.value, Expr::Literal(Literal::String(s)) if s == "hello"));
+            assert!(
+                matches!(&func.declaration.value.body.value, Expr::Literal(Literal::String(s)) if s == "hello")
+            );
         }
         _ => panic!("expected FunctionDeclaration"),
     }
@@ -385,21 +400,21 @@ x = 1 + 2 * 3
 ";
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
-        Declaration::FunctionDeclaration(func) => {
-            match &func.declaration.value.body.value {
-                Expr::OperatorApplication {
-                    operator,
-                    left,
-                    right,
-                    ..
-                } => {
-                    assert_eq!(operator, "+");
-                    assert!(matches!(&left.value, Expr::Literal(Literal::Int(1))));
-                    assert!(matches!(&right.value, Expr::OperatorApplication { operator, .. } if operator == "*"));
-                }
-                other => panic!("expected OperatorApplication, got {other:?}"),
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::OperatorApplication {
+                operator,
+                left,
+                right,
+                ..
+            } => {
+                assert_eq!(operator, "+");
+                assert!(matches!(&left.value, Expr::Literal(Literal::Int(1))));
+                assert!(
+                    matches!(&right.value, Expr::OperatorApplication { operator, .. } if operator == "*")
+                );
             }
-        }
+            other => panic!("expected OperatorApplication, got {other:?}"),
+        },
         _ => panic!("expected FunctionDeclaration"),
     }
 }
@@ -435,14 +450,12 @@ x = add 1 2
 ";
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
-        Declaration::FunctionDeclaration(func) => {
-            match &func.declaration.value.body.value {
-                Expr::Application(args) => {
-                    assert_eq!(args.len(), 3);
-                }
-                other => panic!("expected Application, got {other:?}"),
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::Application(args) => {
+                assert_eq!(args.len(), 3);
             }
-        }
+            other => panic!("expected Application, got {other:?}"),
+        },
         _ => panic!("expected FunctionDeclaration"),
     }
 }
@@ -456,14 +469,15 @@ x = if True then 1 else 0
 ";
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
-        Declaration::FunctionDeclaration(func) => {
-            match &func.declaration.value.body.value {
-                Expr::IfElse { branches, else_branch } => {
-                    assert_eq!(branches.len(), 1);
-                }
-                other => panic!("expected IfElse, got {other:?}"),
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::IfElse {
+                branches,
+                else_branch: _,
+            } => {
+                assert_eq!(branches.len(), 1);
             }
-        }
+            other => panic!("expected IfElse, got {other:?}"),
+        },
         _ => panic!("expected FunctionDeclaration"),
     }
 }
@@ -477,14 +491,12 @@ x = \\a b -> a
 ";
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
-        Declaration::FunctionDeclaration(func) => {
-            match &func.declaration.value.body.value {
-                Expr::Lambda { args, .. } => {
-                    assert_eq!(args.len(), 2);
-                }
-                other => panic!("expected Lambda, got {other:?}"),
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::Lambda { args, .. } => {
+                assert_eq!(args.len(), 2);
             }
-        }
+            other => panic!("expected Lambda, got {other:?}"),
+        },
         _ => panic!("expected FunctionDeclaration"),
     }
 }
@@ -498,14 +510,12 @@ x = [ 1, 2, 3 ]
 ";
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
-        Declaration::FunctionDeclaration(func) => {
-            match &func.declaration.value.body.value {
-                Expr::List(elements) => {
-                    assert_eq!(elements.len(), 3);
-                }
-                other => panic!("expected List, got {other:?}"),
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::List(elements) => {
+                assert_eq!(elements.len(), 3);
             }
-        }
+            other => panic!("expected List, got {other:?}"),
+        },
         _ => panic!("expected FunctionDeclaration"),
     }
 }
@@ -519,16 +529,14 @@ x = { name = "Alice", age = 30 }
 "#;
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
-        Declaration::FunctionDeclaration(func) => {
-            match &func.declaration.value.body.value {
-                Expr::Record(fields) => {
-                    assert_eq!(fields.len(), 2);
-                    assert_eq!(v(&fields[0].value.field), "name");
-                    assert_eq!(v(&fields[1].value.field), "age");
-                }
-                other => panic!("expected Record, got {other:?}"),
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::Record(fields) => {
+                assert_eq!(fields.len(), 2);
+                assert_eq!(v(&fields[0].value.field), "name");
+                assert_eq!(v(&fields[1].value.field), "age");
             }
-        }
+            other => panic!("expected Record, got {other:?}"),
+        },
         _ => panic!("expected FunctionDeclaration"),
     }
 }
@@ -542,15 +550,13 @@ x = { model | count = 0 }
 ";
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
-        Declaration::FunctionDeclaration(func) => {
-            match &func.declaration.value.body.value {
-                Expr::RecordUpdate { base, updates } => {
-                    assert_eq!(v(base), "model");
-                    assert_eq!(updates.len(), 1);
-                }
-                other => panic!("expected RecordUpdate, got {other:?}"),
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::RecordUpdate { base, updates } => {
+                assert_eq!(v(base), "model");
+                assert_eq!(updates.len(), 1);
             }
-        }
+            other => panic!("expected RecordUpdate, got {other:?}"),
+        },
         _ => panic!("expected FunctionDeclaration"),
     }
 }
@@ -565,7 +571,9 @@ x = ( 1, 2 )
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => {
-            assert!(matches!(&func.declaration.value.body.value, Expr::Tuple(elems) if elems.len() == 2));
+            assert!(
+                matches!(&func.declaration.value.body.value, Expr::Tuple(elems) if elems.len() == 2)
+            );
         }
         _ => panic!("expected FunctionDeclaration"),
     }
@@ -597,7 +605,9 @@ x = (+)
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => {
-            assert!(matches!(&func.declaration.value.body.value, Expr::PrefixOperator(op) if op == "+"));
+            assert!(
+                matches!(&func.declaration.value.body.value, Expr::PrefixOperator(op) if op == "+")
+            );
         }
         _ => panic!("expected FunctionDeclaration"),
     }
@@ -613,7 +623,10 @@ x = -1
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => {
-            assert!(matches!(&func.declaration.value.body.value, Expr::Negation(_)));
+            assert!(matches!(
+                &func.declaration.value.body.value,
+                Expr::Negation(_)
+            ));
         }
         _ => panic!("expected FunctionDeclaration"),
     }
@@ -632,14 +645,15 @@ x =
 ";
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
-        Declaration::FunctionDeclaration(func) => {
-            match &func.declaration.value.body.value {
-                Expr::LetIn { declarations, body } => {
-                    assert_eq!(declarations.len(), 1);
-                }
-                other => panic!("expected LetIn, got {other:?}"),
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::LetIn {
+                declarations,
+                body: _,
+            } => {
+                assert_eq!(declarations.len(), 1);
             }
-        }
+            other => panic!("expected LetIn, got {other:?}"),
+        },
         _ => panic!("expected FunctionDeclaration"),
     }
 }
@@ -658,14 +672,12 @@ x =
 ";
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
-        Declaration::FunctionDeclaration(func) => {
-            match &func.declaration.value.body.value {
-                Expr::CaseOf { branches, .. } => {
-                    assert_eq!(branches.len(), 2);
-                }
-                other => panic!("expected CaseOf, got {other:?}"),
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::CaseOf { branches, .. } => {
+                assert_eq!(branches.len(), 2);
             }
-        }
+            other => panic!("expected CaseOf, got {other:?}"),
+        },
         _ => panic!("expected FunctionDeclaration"),
     }
 }
@@ -683,7 +695,10 @@ f _ = 1
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => {
             assert_eq!(func.declaration.value.args.len(), 1);
-            assert!(matches!(&func.declaration.value.args[0].value, Pattern::Anything));
+            assert!(matches!(
+                &func.declaration.value.args[0].value,
+                Pattern::Anything
+            ));
         }
         _ => panic!("expected FunctionDeclaration"),
     }
@@ -703,15 +718,17 @@ x =
 ";
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
-        Declaration::FunctionDeclaration(func) => {
-            match &func.declaration.value.body.value {
-                Expr::CaseOf { branches, .. } => {
-                    assert!(matches!(&branches[0].pattern.value, Pattern::Constructor { name, args, .. } if name == "Just" && args.len() == 1));
-                    assert!(matches!(&branches[1].pattern.value, Pattern::Constructor { name, args, .. } if name == "Nothing" && args.is_empty()));
-                }
-                _ => panic!("expected CaseOf"),
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
+            Expr::CaseOf { branches, .. } => {
+                assert!(
+                    matches!(&branches[0].pattern.value, Pattern::Constructor { name, args, .. } if name == "Just" && args.len() == 1)
+                );
+                assert!(
+                    matches!(&branches[1].pattern.value, Pattern::Constructor { name, args, .. } if name == "Nothing" && args.is_empty())
+                );
             }
-        }
+            _ => panic!("expected CaseOf"),
+        },
         _ => panic!("expected FunctionDeclaration"),
     }
 }
@@ -725,16 +742,14 @@ f { name, age } = name
 ";
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
-        Declaration::FunctionDeclaration(func) => {
-            match &func.declaration.value.args[0].value {
-                Pattern::Record(fields) => {
-                    assert_eq!(fields.len(), 2);
-                    assert_eq!(v(&fields[0]), "name");
-                    assert_eq!(v(&fields[1]), "age");
-                }
-                other => panic!("expected Record pattern, got {other:?}"),
+        Declaration::FunctionDeclaration(func) => match &func.declaration.value.args[0].value {
+            Pattern::Record(fields) => {
+                assert_eq!(fields.len(), 2);
+                assert_eq!(v(&fields[0]), "name");
+                assert_eq!(v(&fields[1]), "age");
             }
-        }
+            other => panic!("expected Record pattern, got {other:?}"),
+        },
         _ => panic!("expected FunctionDeclaration"),
     }
 }
@@ -749,7 +764,9 @@ f ( a, b ) = a
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => {
-            assert!(matches!(&func.declaration.value.args[0].value, Pattern::Tuple(elems) if elems.len() == 2));
+            assert!(
+                matches!(&func.declaration.value.args[0].value, Pattern::Tuple(elems) if elems.len() == 2)
+            );
         }
         _ => panic!("expected FunctionDeclaration"),
     }
@@ -792,11 +809,20 @@ update msg model =
     assert_eq!(m.declarations.len(), 3);
 
     // type Msg
-    assert!(matches!(v(&m.declarations[0]), Declaration::CustomTypeDeclaration(_)));
+    assert!(matches!(
+        v(&m.declarations[0]),
+        Declaration::CustomTypeDeclaration(_)
+    ));
     // type alias Model
-    assert!(matches!(v(&m.declarations[1]), Declaration::AliasDeclaration(_)));
+    assert!(matches!(
+        v(&m.declarations[1]),
+        Declaration::AliasDeclaration(_)
+    ));
     // update function
-    assert!(matches!(v(&m.declarations[2]), Declaration::FunctionDeclaration(_)));
+    assert!(matches!(
+        v(&m.declarations[2]),
+        Declaration::FunctionDeclaration(_)
+    ));
 }
 
 #[test]

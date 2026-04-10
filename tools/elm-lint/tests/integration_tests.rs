@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use elm_ast_rs::parse;
-use elm_lint::rule::{LintContext, Rule};
+use elm_lint::rule::LintContext;
 use elm_lint::rules;
 
 fn find_elm_files(dir: &str) -> Vec<PathBuf> {
@@ -72,7 +72,10 @@ fn all_rules_no_crash_on_real_files() {
         total_files > 0,
         "no fixture files found — clone test-fixtures first"
     );
-    eprintln!("Ran all {0} rules on {total_files} files without crashes", all_rules.len());
+    eprintln!(
+        "Ran all {0} rules on {total_files} files without crashes",
+        all_rules.len()
+    );
 }
 
 /// Each rule should produce at least one finding on SOME file.
@@ -104,14 +107,8 @@ fn each_rule_fires_on_something() {
             "NoIfTrueFalse",
             "module T exposing (..)\n\nx = if y then True else False",
         ),
-        (
-            "NoUnnecessaryParens",
-            "module T exposing (..)\n\nx = (1)",
-        ),
-        (
-            "NoRedundantCons",
-            "module T exposing (..)\n\nx = 1 :: []",
-        ),
+        ("NoUnnecessaryParens", "module T exposing (..)\n\nx = (1)"),
+        ("NoRedundantCons", "module T exposing (..)\n\nx = 1 :: []"),
         (
             "NoAlwaysIdentity",
             "module T exposing (..)\n\nx = always identity",

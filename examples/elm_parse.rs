@@ -19,9 +19,11 @@ fn main() {
             }
             #[cfg(not(feature = "serde"))]
             {
-                println!("module: {} imports, {} declarations",
+                println!(
+                    "module: {} imports, {} declarations",
                     module.imports.len(),
-                    module.declarations.len());
+                    module.declarations.len()
+                );
                 println!("(enable --features serde for JSON output)");
             }
         }

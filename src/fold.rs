@@ -79,10 +79,7 @@ pub trait Fold {
         fold_pattern(self, pattern)
     }
 
-    fn fold_type_annotation(
-        &mut self,
-        ty: Spanned<TypeAnnotation>,
-    ) -> Spanned<TypeAnnotation> {
+    fn fold_type_annotation(&mut self, ty: Spanned<TypeAnnotation>) -> Spanned<TypeAnnotation> {
         fold_type_annotation(self, ty)
     }
 
@@ -90,10 +87,7 @@ pub trait Fold {
         fold_record_field(self, field)
     }
 
-    fn fold_let_declaration(
-        &mut self,
-        decl: Spanned<LetDeclaration>,
-    ) -> Spanned<LetDeclaration> {
+    fn fold_let_declaration(&mut self, decl: Spanned<LetDeclaration>) -> Spanned<LetDeclaration> {
         fold_let_declaration(self, decl)
     }
 
@@ -122,7 +116,11 @@ pub trait Fold {
 
 pub fn fold_module<F: Fold + ?Sized>(f: &mut F, module: ElmModule) -> ElmModule {
     let header = f.fold_module_header(module.header);
-    let imports = module.imports.into_iter().map(|i| f.fold_import(i)).collect();
+    let imports = module
+        .imports
+        .into_iter()
+        .map(|i| f.fold_import(i))
+        .collect();
     let declarations = module
         .declarations
         .into_iter()
@@ -196,7 +194,12 @@ pub fn fold_function_implementation<F: Fold + ?Sized>(
     let span = imp.span;
     let value = FunctionImplementation {
         name: imp.value.name.map(|n| f.fold_ident(n)),
-        args: imp.value.args.into_iter().map(|a| f.fold_pattern(a)).collect(),
+        args: imp
+            .value
+            .args
+            .into_iter()
+            .map(|a| f.fold_pattern(a))
+            .collect(),
         body: f.fold_expr(imp.value.body),
     };
     Spanned::new(span, value)
@@ -295,13 +298,9 @@ pub fn fold_expr<F: Fold + ?Sized>(f: &mut F, expr: Spanned<Expr>) -> Spanned<Ex
 
         Expr::Negation(inner) => Expr::Negation(Box::new(f.fold_expr(*inner))),
 
-        Expr::Tuple(elems) => {
-            Expr::Tuple(elems.into_iter().map(|e| f.fold_expr(e)).collect())
-        }
+        Expr::Tuple(elems) => Expr::Tuple(elems.into_iter().map(|e| f.fold_expr(e)).collect()),
 
-        Expr::List(elems) => {
-            Expr::List(elems.into_iter().map(|e| f.fold_expr(e)).collect())
-        }
+        Expr::List(elems) => Expr::List(elems.into_iter().map(|e| f.fold_expr(e)).collect()),
 
         Expr::Parenthesized(inner) => Expr::Parenthesized(Box::new(f.fold_expr(*inner))),
 
@@ -313,9 +312,15 @@ pub fn fold_expr<F: Fold + ?Sized>(f: &mut F, expr: Spanned<Expr>) -> Spanned<Ex
             body: Box::new(f.fold_expr(*body)),
         },
 
-        Expr::CaseOf { expr: subject, branches } => Expr::CaseOf {
+        Expr::CaseOf {
+            expr: subject,
+            branches,
+        } => Expr::CaseOf {
             expr: Box::new(f.fold_expr(*subject)),
-            branches: branches.into_iter().map(|b| f.fold_case_branch(b)).collect(),
+            branches: branches
+                .into_iter()
+                .map(|b| f.fold_case_branch(b))
+                .collect(),
         },
 
         Expr::Lambda { args, body } => Expr::Lambda {
@@ -323,13 +328,19 @@ pub fn fold_expr<F: Fold + ?Sized>(f: &mut F, expr: Spanned<Expr>) -> Spanned<Ex
             body: Box::new(f.fold_expr(*body)),
         },
 
-        Expr::Record(fields) => {
-            Expr::Record(fields.into_iter().map(|s| f.fold_record_setter(s)).collect())
-        }
+        Expr::Record(fields) => Expr::Record(
+            fields
+                .into_iter()
+                .map(|s| f.fold_record_setter(s))
+                .collect(),
+        ),
 
         Expr::RecordUpdate { base, updates } => Expr::RecordUpdate {
             base,
-            updates: updates.into_iter().map(|s| f.fold_record_setter(s)).collect(),
+            updates: updates
+                .into_iter()
+                .map(|s| f.fold_record_setter(s))
+                .collect(),
         },
 
         Expr::RecordAccess { record, field } => Expr::RecordAccess {
@@ -343,9 +354,7 @@ pub fn fold_expr<F: Fold + ?Sized>(f: &mut F, expr: Spanned<Expr>) -> Spanned<Ex
 pub fn fold_pattern<F: Fold + ?Sized>(f: &mut F, pattern: Spanned<Pattern>) -> Spanned<Pattern> {
     let span = pattern.span;
     let value = match pattern.value {
-        Pattern::Anything | Pattern::Unit | Pattern::Hex(_) | Pattern::Literal(_) => {
-            pattern.value
-        }
+        Pattern::Anything | Pattern::Unit | Pattern::Hex(_) | Pattern::Literal(_) => pattern.value,
 
         Pattern::Var(name) => Pattern::Var(f.fold_ident(name)),
 
@@ -374,14 +383,15 @@ pub fn fold_pattern<F: Fold + ?Sized>(f: &mut F, pattern: Spanned<Pattern>) -> S
             tail: Box::new(f.fold_pattern(*tail)),
         },
 
-        Pattern::As { pattern: inner, name } => Pattern::As {
+        Pattern::As {
+            pattern: inner,
+            name,
+        } => Pattern::As {
             pattern: Box::new(f.fold_pattern(*inner)),
             name,
         },
 
-        Pattern::Parenthesized(inner) => {
-            Pattern::Parenthesized(Box::new(f.fold_pattern(*inner)))
-        }
+        Pattern::Parenthesized(inner) => Pattern::Parenthesized(Box::new(f.fold_pattern(*inner))),
     };
     Spanned::new(span, value)
 }
@@ -401,7 +411,10 @@ pub fn fold_type_annotation<F: Fold + ?Sized>(
         } => TypeAnnotation::Typed {
             module_name,
             name,
-            args: args.into_iter().map(|a| f.fold_type_annotation(a)).collect(),
+            args: args
+                .into_iter()
+                .map(|a| f.fold_type_annotation(a))
+                .collect(),
         },
 
         TypeAnnotation::Tupled(elems) => TypeAnnotation::Tupled(

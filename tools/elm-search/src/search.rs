@@ -40,19 +40,16 @@ fn search_returns_type(module: &ElmModule, type_name: &str) -> Vec<Match> {
     let mut matches = Vec::new();
     for decl in &module.declarations {
         if let Declaration::FunctionDeclaration(func) = &decl.value
-            && let Some(sig) = &func.signature {
-                let return_type = get_return_type(&sig.value.type_annotation.value);
-                if type_contains(return_type, type_name) {
-                    matches.push(Match {
-                        span: sig.value.name.span,
-                        context: format!(
-                            "{} : ... -> {}",
-                            sig.value.name.value,
-                            type_name
-                        ),
-                    });
-                }
+            && let Some(sig) = &func.signature
+        {
+            let return_type = get_return_type(&sig.value.type_annotation.value);
+            if type_contains(return_type, type_name) {
+                matches.push(Match {
+                    span: sig.value.name.span,
+                    context: format!("{} : ... -> {}", sig.value.name.value, type_name),
+                });
             }
+        }
     }
     matches
 }
@@ -62,15 +59,13 @@ fn search_uses_type(module: &ElmModule, type_name: &str) -> Vec<Match> {
     for decl in &module.declarations {
         if let Declaration::FunctionDeclaration(func) = &decl.value
             && let Some(sig) = &func.signature
-                && type_contains(&sig.value.type_annotation.value, type_name) {
-                    matches.push(Match {
-                        span: sig.value.name.span,
-                        context: format!(
-                            "{} uses type {type_name}",
-                            sig.value.name.value
-                        ),
-                    });
-                }
+            && type_contains(&sig.value.type_annotation.value, type_name)
+        {
+            matches.push(Match {
+                span: sig.value.name.span,
+                context: format!("{} uses type {type_name}", sig.value.name.value),
+            });
+        }
     }
     matches
 }
@@ -127,10 +122,7 @@ impl Visit for RecordUpdateVisitor {
                 if update.value.field.value == self.field {
                     self.matches.push(Match {
                         span: expr.span,
-                        context: format!(
-                            "{{ {} | {} = ... }}",
-                            base.value, self.field
-                        ),
+                        context: format!("{{ {} | {} = ... }}", base.value, self.field),
                     });
                     break;
                 }
@@ -193,10 +185,7 @@ fn search_unused_args(module: &ElmModule) -> Vec<Match> {
                     if name != "_" && !used.contains(&name) {
                         matches.push(Match {
                             span: arg.span,
-                            context: format!(
-                                "{}: argument `{name}` is never used",
-                                imp.name.value
-                            ),
+                            context: format!("{}: argument `{name}` is never used", imp.name.value),
                         });
                     }
                 }
@@ -223,12 +212,13 @@ struct LambdaArityVisitor {
 impl Visit for LambdaArityVisitor {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         if let Expr::Lambda { args, .. } = &expr.value
-            && args.len() >= self.min_arity {
-                self.matches.push(Match {
-                    span: expr.span,
-                    context: format!("lambda with {} args", args.len()),
-                });
-            }
+            && args.len() >= self.min_arity
+        {
+            self.matches.push(Match {
+                span: expr.span,
+                context: format!("lambda with {} args", args.len()),
+            });
+        }
         visit::walk_expr(self, expr);
     }
 }
@@ -251,17 +241,17 @@ impl Visit for UsesVisitor {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         if let Expr::FunctionOrValue { module_name, name } = &expr.value
             && name == &self.name
-            {
-                let full = if module_name.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{}.{name}", module_name.join("."))
-                };
-                self.matches.push(Match {
-                    span: expr.span,
-                    context: full,
-                });
-            }
+        {
+            let full = if module_name.is_empty() {
+                name.clone()
+            } else {
+                format!("{}.{name}", module_name.join("."))
+            };
+            self.matches.push(Match {
+                span: expr.span,
+                context: full,
+            });
+        }
         visit::walk_expr(self, expr);
     }
 }
@@ -352,9 +342,7 @@ fn type_contains(ty: &TypeAnnotation, name: &str) -> bool {
             name: type_name,
             args,
             ..
-        } => {
-            type_name.value == name || args.iter().any(|a| type_contains(&a.value, name))
-        }
+        } => type_name.value == name || args.iter().any(|a| type_contains(&a.value, name)),
         TypeAnnotation::FunctionType { from, to } => {
             type_contains(&from.value, name) || type_contains(&to.value, name)
         }
@@ -372,11 +360,18 @@ fn type_contains(ty: &TypeAnnotation, name: &str) -> bool {
 fn pattern_mentions_constructor(pat: &Pattern, name: &str) -> bool {
     match pat {
         Pattern::Constructor {
-            name: ctor_name, args, ..
-        } => ctor_name == name || args.iter().any(|a| pattern_mentions_constructor(&a.value, name)),
-        Pattern::Tuple(elems) | Pattern::List(elems) => {
-            elems.iter().any(|e| pattern_mentions_constructor(&e.value, name))
+            name: ctor_name,
+            args,
+            ..
+        } => {
+            ctor_name == name
+                || args
+                    .iter()
+                    .any(|a| pattern_mentions_constructor(&a.value, name))
         }
+        Pattern::Tuple(elems) | Pattern::List(elems) => elems
+            .iter()
+            .any(|e| pattern_mentions_constructor(&e.value, name)),
         Pattern::Cons { head, tail } => {
             pattern_mentions_constructor(&head.value, name)
                 || pattern_mentions_constructor(&tail.value, name)
@@ -392,19 +387,24 @@ fn pattern_var_names(pat: &Pattern) -> Vec<String> {
     match pat {
         Pattern::Var(name) => vec![name.clone()],
         Pattern::Anything => vec!["_".into()],
-        Pattern::Tuple(elems) | Pattern::List(elems) => {
-            elems.iter().flat_map(|e| pattern_var_names(&e.value)).collect()
-        }
-        Pattern::Constructor { args, .. } => {
-            args.iter().flat_map(|a| pattern_var_names(&a.value)).collect()
-        }
+        Pattern::Tuple(elems) | Pattern::List(elems) => elems
+            .iter()
+            .flat_map(|e| pattern_var_names(&e.value))
+            .collect(),
+        Pattern::Constructor { args, .. } => args
+            .iter()
+            .flat_map(|a| pattern_var_names(&a.value))
+            .collect(),
         Pattern::Record(fields) => fields.iter().map(|f| f.value.clone()).collect(),
         Pattern::Cons { head, tail } => {
             let mut names = pattern_var_names(&head.value);
             names.extend(pattern_var_names(&tail.value));
             names
         }
-        Pattern::As { pattern: inner, name } => {
+        Pattern::As {
+            pattern: inner,
+            name,
+        } => {
             let mut names = pattern_var_names(&inner.value);
             names.push(name.value.clone());
             names
@@ -428,14 +428,20 @@ fn collect_used_names(expr: &Expr, names: &mut HashSet<String>) {
             collect_used_names(&left.value, names);
             collect_used_names(&right.value, names);
         }
-        Expr::IfElse { branches, else_branch } => {
+        Expr::IfElse {
+            branches,
+            else_branch,
+        } => {
             for (c, b) in branches {
                 collect_used_names(&c.value, names);
                 collect_used_names(&b.value, names);
             }
             collect_used_names(&else_branch.value, names);
         }
-        Expr::CaseOf { expr: subject, branches } => {
+        Expr::CaseOf {
+            expr: subject,
+            branches,
+        } => {
             collect_used_names(&subject.value, names);
             for b in branches {
                 collect_used_names(&b.body.value, names);

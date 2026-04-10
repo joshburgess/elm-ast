@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use elm_ast_rs::declaration::Declaration;
 use elm_ast_rs::expr::Expr;
@@ -33,8 +33,14 @@ fn all_fixture_dirs() -> Vec<(&'static str, &'static str)> {
         ("elm-explorations/markdown", "test-fixtures/markdown/src"),
         ("elm-community/list-extra", "test-fixtures/list-extra/src"),
         ("elm-community/maybe-extra", "test-fixtures/maybe-extra/src"),
-        ("elm-community/string-extra", "test-fixtures/string-extra/src"),
-        ("NoRedInk/elm-json-decode-pipeline", "test-fixtures/elm-json-decode-pipeline/src"),
+        (
+            "elm-community/string-extra",
+            "test-fixtures/string-extra/src",
+        ),
+        (
+            "NoRedInk/elm-json-decode-pipeline",
+            "test-fixtures/elm-json-decode-pipeline/src",
+        ),
     ]
 }
 
@@ -65,8 +71,8 @@ fn collect_elm_files(dir: &PathBuf, files: &mut Vec<PathBuf>) {
 // ── Helpers ──────────────────────────────────────────────────────────
 
 fn try_parse_file(path: &PathBuf) -> Result<ElmModule, String> {
-    let source = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let source =
+        fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
 
     parse(&source).map_err(|errors| {
         let error_msgs: Vec<String> = errors.iter().map(|e| format!("  {e}")).collect();
@@ -79,12 +85,11 @@ fn try_parse_file(path: &PathBuf) -> Result<ElmModule, String> {
 }
 
 fn try_round_trip_file(path: &PathBuf) -> Result<(), String> {
-    let source = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let source =
+        fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
 
-    let ast1 = parse(&source).map_err(|errors| {
-        format!("first parse failed for {}", path.display())
-    })?;
+    let ast1 =
+        parse(&source).map_err(|_errors| format!("first parse failed for {}", path.display()))?;
 
     let printed = print::print(&ast1);
 
@@ -105,15 +110,13 @@ fn try_round_trip_file(path: &PathBuf) -> Result<(), String> {
 }
 
 fn try_idempotent_print(path: &PathBuf) -> Result<(), String> {
-    let source = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let source =
+        fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
 
     let ast1 = parse(&source).map_err(|_| format!("parse failed for {}", path.display()))?;
     let print1 = print::print(&ast1);
 
-    let ast2 = parse(&print1).map_err(|_| {
-        format!("reparse failed for {}", path.display())
-    })?;
+    let ast2 = parse(&print1).map_err(|_| format!("reparse failed for {}", path.display()))?;
     let print2 = print::print(&ast2);
 
     if print1 != print2 {
@@ -146,7 +149,7 @@ fn try_idempotent_print(path: &PathBuf) -> Result<(), String> {
 
 // ── Deep AST equality (ignoring spans) ───────────────────────────────
 
-fn assert_module_eq(a: &ElmModule, b: &ElmModule, path: &PathBuf) -> Result<(), String> {
+fn assert_module_eq(a: &ElmModule, b: &ElmModule, path: &Path) -> Result<(), String> {
     if a.imports.len() != b.imports.len() {
         return Err(format!(
             "import count mismatch for {}: {} vs {}",
@@ -198,7 +201,10 @@ fn decl_eq(a: &Declaration, b: &Declaration) -> bool {
             fa.declaration.value.name.value == fb.declaration.value.name.value
                 && fa.declaration.value.args.len() == fb.declaration.value.args.len()
                 && fa.signature.is_some() == fb.signature.is_some()
-                && expr_eq(&fa.declaration.value.body.value, &fb.declaration.value.body.value)
+                && expr_eq(
+                    &fa.declaration.value.body.value,
+                    &fb.declaration.value.body.value,
+                )
         }
         (Declaration::AliasDeclaration(aa), Declaration::AliasDeclaration(ab)) => {
             aa.name.value == ab.name.value
@@ -209,10 +215,14 @@ fn decl_eq(a: &Declaration, b: &Declaration) -> bool {
             ca.name.value == cb.name.value
                 && ca.generics.len() == cb.generics.len()
                 && ca.constructors.len() == cb.constructors.len()
-                && ca.constructors.iter().zip(cb.constructors.iter()).all(|(a, b)| {
-                    a.value.name.value == b.value.name.value
-                        && a.value.args.len() == b.value.args.len()
-                })
+                && ca
+                    .constructors
+                    .iter()
+                    .zip(cb.constructors.iter())
+                    .all(|(a, b)| {
+                        a.value.name.value == b.value.name.value
+                            && a.value.args.len() == b.value.args.len()
+                    })
         }
         (Declaration::PortDeclaration(sa), Declaration::PortDeclaration(sb)) => {
             sa.name.value == sb.name.value
@@ -262,7 +272,10 @@ fn expr_eq(a: &Expr, b: &Expr) -> bool {
         ) => oa == ob && expr_eq(&la.value, &lb.value) && expr_eq(&ra.value, &rb.value),
         (Expr::Application(aa), Expr::Application(ab)) => {
             aa.len() == ab.len()
-                && aa.iter().zip(ab.iter()).all(|(a, b)| expr_eq(&a.value, &b.value))
+                && aa
+                    .iter()
+                    .zip(ab.iter())
+                    .all(|(a, b)| expr_eq(&a.value, &b.value))
         }
         (
             Expr::IfElse {
@@ -283,18 +296,16 @@ fn expr_eq(a: &Expr, b: &Expr) -> bool {
         (Expr::Negation(a), Expr::Negation(b)) => expr_eq(&a.value, &b.value),
         (Expr::Tuple(aa), Expr::Tuple(ab)) | (Expr::List(aa), Expr::List(ab)) => {
             aa.len() == ab.len()
-                && aa.iter().zip(ab.iter()).all(|(a, b)| expr_eq(&a.value, &b.value))
+                && aa
+                    .iter()
+                    .zip(ab.iter())
+                    .all(|(a, b)| expr_eq(&a.value, &b.value))
         }
         (Expr::Parenthesized(a), Expr::Parenthesized(b)) => expr_eq(&a.value, &b.value),
         // For deep comparison of case/let/lambda/record, check structural shape.
-        (
-            Expr::CaseOf {
-                branches: ba, ..
-            },
-            Expr::CaseOf {
-                branches: bb, ..
-            },
-        ) => ba.len() == bb.len(),
+        (Expr::CaseOf { branches: ba, .. }, Expr::CaseOf { branches: bb, .. }) => {
+            ba.len() == bb.len()
+        }
         (
             Expr::LetIn {
                 declarations: da, ..
@@ -303,13 +314,18 @@ fn expr_eq(a: &Expr, b: &Expr) -> bool {
                 declarations: db, ..
             },
         ) => da.len() == db.len(),
-        (Expr::Lambda { args: aa, .. }, Expr::Lambda { args: ab, .. }) => {
-            aa.len() == ab.len()
-        }
+        (Expr::Lambda { args: aa, .. }, Expr::Lambda { args: ab, .. }) => aa.len() == ab.len(),
         (Expr::Record(fa), Expr::Record(fb)) => fa.len() == fb.len(),
-        (Expr::RecordUpdate { base: ba, updates: ua }, Expr::RecordUpdate { base: bb, updates: ub }) => {
-            ba.value == bb.value && ua.len() == ub.len()
-        }
+        (
+            Expr::RecordUpdate {
+                base: ba,
+                updates: ua,
+            },
+            Expr::RecordUpdate {
+                base: bb,
+                updates: ub,
+            },
+        ) => ba.value == bb.value && ua.len() == ub.len(),
         (Expr::RecordAccess { field: fa, .. }, Expr::RecordAccess { field: fb, .. }) => {
             fa.value == fb.value
         }
@@ -333,21 +349,25 @@ fn pattern_eq(a: &Pattern, b: &Pattern) -> bool {
         (Pattern::Hex(a), Pattern::Hex(b)) => a == b,
         (Pattern::Tuple(aa), Pattern::Tuple(ab)) | (Pattern::List(aa), Pattern::List(ab)) => {
             aa.len() == ab.len()
-                && aa.iter().zip(ab.iter()).all(|(a, b)| pattern_eq(&a.value, &b.value))
+                && aa
+                    .iter()
+                    .zip(ab.iter())
+                    .all(|(a, b)| pattern_eq(&a.value, &b.value))
         }
         (
-            Pattern::Constructor { name: na, args: aa, .. },
-            Pattern::Constructor { name: nb, args: ab, .. },
+            Pattern::Constructor {
+                name: na, args: aa, ..
+            },
+            Pattern::Constructor {
+                name: nb, args: ab, ..
+            },
         ) => na == nb && aa.len() == ab.len(),
         (Pattern::Record(fa), Pattern::Record(fb)) => {
-            fa.len() == fb.len()
-                && fa.iter().zip(fb.iter()).all(|(a, b)| a.value == b.value)
+            fa.len() == fb.len() && fa.iter().zip(fb.iter()).all(|(a, b)| a.value == b.value)
         }
         (Pattern::Cons { .. }, Pattern::Cons { .. }) => true,
         (Pattern::As { name: na, .. }, Pattern::As { name: nb, .. }) => na.value == nb.value,
-        (Pattern::Parenthesized(a), Pattern::Parenthesized(b)) => {
-            pattern_eq(&a.value, &b.value)
-        }
+        (Pattern::Parenthesized(a), Pattern::Parenthesized(b)) => pattern_eq(&a.value, &b.value),
         (Pattern::Parenthesized(inner), other) | (other, Pattern::Parenthesized(inner)) => {
             pattern_eq(&inner.value, other)
         }
@@ -360,27 +380,46 @@ fn type_eq(a: &TypeAnnotation, b: &TypeAnnotation) -> bool {
         (TypeAnnotation::GenericType(a), TypeAnnotation::GenericType(b)) => a == b,
         (TypeAnnotation::Unit, TypeAnnotation::Unit) => true,
         (
-            TypeAnnotation::Typed { name: na, args: aa, .. },
-            TypeAnnotation::Typed { name: nb, args: ab, .. },
+            TypeAnnotation::Typed {
+                name: na, args: aa, ..
+            },
+            TypeAnnotation::Typed {
+                name: nb, args: ab, ..
+            },
         ) => {
             na.value == nb.value
                 && aa.len() == ab.len()
-                && aa.iter().zip(ab.iter()).all(|(a, b)| type_eq(&a.value, &b.value))
+                && aa
+                    .iter()
+                    .zip(ab.iter())
+                    .all(|(a, b)| type_eq(&a.value, &b.value))
         }
         (TypeAnnotation::Tupled(aa), TypeAnnotation::Tupled(ab)) => {
             aa.len() == ab.len()
-                && aa.iter().zip(ab.iter()).all(|(a, b)| type_eq(&a.value, &b.value))
+                && aa
+                    .iter()
+                    .zip(ab.iter())
+                    .all(|(a, b)| type_eq(&a.value, &b.value))
         }
         (TypeAnnotation::Record(fa), TypeAnnotation::Record(fb)) => {
             fa.len() == fb.len()
                 && fa.iter().zip(fb.iter()).all(|(a, b)| {
                     a.value.name.value == b.value.name.value
-                        && type_eq(&a.value.type_annotation.value, &b.value.type_annotation.value)
+                        && type_eq(
+                            &a.value.type_annotation.value,
+                            &b.value.type_annotation.value,
+                        )
                 })
         }
         (
-            TypeAnnotation::GenericRecord { base: ba, fields: fa },
-            TypeAnnotation::GenericRecord { base: bb, fields: fb },
+            TypeAnnotation::GenericRecord {
+                base: ba,
+                fields: fa,
+            },
+            TypeAnnotation::GenericRecord {
+                base: bb,
+                fields: fb,
+            },
         ) => ba.value == bb.value && fa.len() == fb.len(),
         (
             TypeAnnotation::FunctionType { from: fa, to: ta },

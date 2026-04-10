@@ -2,7 +2,7 @@ use elm_ast_rs::{parse, print};
 use elm_refactor::commands;
 
 /// Parse source, apply a transformation to the module, print back.
-fn transform(source: &str, f: impl FnOnce(&mut elm_ast_rs::file::ElmModule)) -> String {
+fn _transform(source: &str, f: impl FnOnce(&mut elm_ast_rs::file::ElmModule)) -> String {
     let mut module = parse(source).unwrap_or_else(|e| panic!("parse failed: {e:?}"));
     f(&mut module);
     print(&module)
@@ -30,7 +30,12 @@ x = 1
     let import_names: Vec<&str> = printed
         .lines()
         .filter(|l| l.starts_with("import "))
-        .map(|l| l.trim_start_matches("import ").split_whitespace().next().unwrap())
+        .map(|l| {
+            l.trim_start_matches("import ")
+                .split_whitespace()
+                .next()
+                .unwrap()
+        })
         .collect();
     assert_eq!(import_names, vec!["Array", "Basics", "Dict", "Html"]);
 }

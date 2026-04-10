@@ -243,9 +243,7 @@ port sendMessage : String -> Cmd msg
 
 #[test]
 fn round_trip_effect_module() {
-    round_trip(
-        "effect module Task where { command = MyCmd } exposing (Task, perform)",
-    );
+    round_trip("effect module Task where { command = MyCmd } exposing (Task, perform)");
 }
 
 #[test]

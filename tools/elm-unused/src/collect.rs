@@ -251,8 +251,9 @@ impl Visit for RefCollector {
 
     fn visit_pattern(&mut self, pattern: &Spanned<Pattern>) {
         if let Pattern::Constructor {
-                module_name, name, ..
-            } = &pattern.value {
+            module_name, name, ..
+        } = &pattern.value
+        {
             if module_name.is_empty() {
                 self.used_constructors.insert(name.clone());
             } else {
@@ -265,8 +266,9 @@ impl Visit for RefCollector {
 
     fn visit_type_annotation(&mut self, ty: &Spanned<TypeAnnotation>) {
         if let TypeAnnotation::Typed {
-                module_name, name, ..
-            } = &ty.value {
+            module_name, name, ..
+        } = &ty.value
+        {
             if module_name.is_empty() {
                 self.used_types.insert(name.value.clone());
             } else {

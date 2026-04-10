@@ -12,7 +12,14 @@ pub fn find_cycles<'a>(graph: &HashMap<&'a str, Vec<&'a str>>) -> Vec<Vec<&'a st
 
     for module in modules {
         if !visited.contains(*module) {
-            dfs(module, graph, &mut visited, &mut on_stack, &mut path, &mut cycles);
+            dfs(
+                module,
+                graph,
+                &mut visited,
+                &mut on_stack,
+                &mut path,
+                &mut cycles,
+            );
         }
     }
 
@@ -43,7 +50,9 @@ fn dfs<'a>(
         for dep in deps {
             if !visited.contains(dep) {
                 dfs(dep, graph, visited, on_stack, path, cycles);
-            } else if on_stack.contains(dep) && let Some(start) = path.iter().position(|n| n == dep) {
+            } else if on_stack.contains(dep)
+                && let Some(start) = path.iter().position(|n| n == dep)
+            {
                 let mut cycle: Vec<&str> = path[start..].to_vec();
                 cycle.push(dep);
                 cycles.push(cycle);
@@ -73,9 +82,7 @@ fn normalize_cycle<'a>(cycle: &[&'a str]) -> Vec<&'a str> {
 }
 
 /// Build a dependency graph from parsed Elm modules.
-pub fn build_graph(
-    modules: &[(String, Vec<String>)],
-) -> (HashMap<&str, Vec<&str>>, HashSet<&str>) {
+pub fn build_graph(modules: &[(String, Vec<String>)]) -> (HashMap<&str, Vec<&str>>, HashSet<&str>) {
     let project_modules: HashSet<&str> = modules.iter().map(|(n, _)| n.as_str()).collect();
     let graph: HashMap<&str, Vec<&str>> = modules
         .iter()

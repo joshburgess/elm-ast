@@ -75,7 +75,10 @@ fn upper_identifiers() {
     assert_eq!(lex("Maybe"), vec![Token::UpperName("Maybe".into())]);
     assert_eq!(lex("Html"), vec![Token::UpperName("Html".into())]);
     assert_eq!(lex("Cmd"), vec![Token::UpperName("Cmd".into())]);
-    assert_eq!(lex("MyModule_V2"), vec![Token::UpperName("MyModule_V2".into())]);
+    assert_eq!(
+        lex("MyModule_V2"),
+        vec![Token::UpperName("MyModule_V2".into())]
+    );
 }
 
 // ── Delimiters ───────────────────────────────────────────────────────
@@ -152,13 +155,13 @@ fn hex_literals() {
 
 #[test]
 fn float_literals() {
-    assert_eq!(lex("3.14"), vec![Token::Literal(Literal::Float(3.14))]);
+    #[allow(clippy::approx_constant)]
+    {
+        assert_eq!(lex("3.14"), vec![Token::Literal(Literal::Float(3.14))]);
+    }
     assert_eq!(lex("0.0"), vec![Token::Literal(Literal::Float(0.0))]);
     assert_eq!(lex("1.0e10"), vec![Token::Literal(Literal::Float(1.0e10))]);
-    assert_eq!(
-        lex("2.5E-3"),
-        vec![Token::Literal(Literal::Float(2.5e-3))]
-    );
+    assert_eq!(lex("2.5E-3"), vec![Token::Literal(Literal::Float(2.5e-3))]);
 }
 
 // ── Char literals ────────────────────────────────────────────────────
@@ -181,14 +184,8 @@ fn char_escape_sequences() {
 
 #[test]
 fn char_unicode_escape() {
-    assert_eq!(
-        lex("'\\u{0041}'"),
-        vec![Token::Literal(Literal::Char('A'))]
-    );
-    assert_eq!(
-        lex("'\\u{03BB}'"),
-        vec![Token::Literal(Literal::Char('λ'))]
-    );
+    assert_eq!(lex("'\\u{0041}'"), vec![Token::Literal(Literal::Char('A'))]);
+    assert_eq!(lex("'\\u{03BB}'"), vec![Token::Literal(Literal::Char('λ'))]);
 }
 
 // ── String literals ──────────────────────────────────────────────────
@@ -225,7 +222,9 @@ fn string_escape_sequences() {
 fn multiline_string() {
     assert_eq!(
         lex(r#""""hello world""""#),
-        vec![Token::Literal(Literal::MultilineString("hello world".into()))]
+        vec![Token::Literal(Literal::MultilineString(
+            "hello world".into()
+        ))]
     );
 }
 
@@ -281,7 +280,9 @@ fn block_comment() {
 fn nested_block_comment() {
     assert_eq!(
         lex("{- outer {- inner -} still outer -}"),
-        vec![Token::BlockComment(" outer {- inner -} still outer ".into())]
+        vec![Token::BlockComment(
+            " outer {- inner -} still outer ".into()
+        )]
     );
 }
 
@@ -589,10 +590,7 @@ fn pipeline_expression() {
 #[test]
 fn record_access_function() {
     let tokens = lex(".name");
-    assert_eq!(
-        tokens,
-        vec![Token::Dot, Token::LowerName("name".into())]
-    );
+    assert_eq!(tokens, vec![Token::Dot, Token::LowerName("name".into())]);
 }
 
 // ── Error recovery ───────────────────────────────────────────────────
@@ -644,10 +642,7 @@ fn underscore_standalone() {
 fn consecutive_operators() {
     // Two separate operators separated by space
     let tokens = lex("+ -");
-    assert_eq!(
-        tokens,
-        vec![Token::Operator("+".into()), Token::Minus]
-    );
+    assert_eq!(tokens, vec![Token::Operator("+".into()), Token::Minus]);
 }
 
 #[test]
@@ -768,10 +763,7 @@ fn negative_number() {
     // In Elm, `-42` is parsed as negation of 42, not a negative literal.
     // The lexer should emit Minus + Int.
     let tokens = lex("-42");
-    assert_eq!(
-        tokens,
-        vec![Token::Minus, Token::Literal(Literal::Int(42))]
-    );
+    assert_eq!(tokens, vec![Token::Minus, Token::Literal(Literal::Int(42))]);
 }
 
 #[test]

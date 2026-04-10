@@ -3,9 +3,9 @@ use elm_ast_rs::declaration::Declaration;
 use elm_ast_rs::expr::Expr;
 use elm_ast_rs::file::{associate_comments, extract_comments};
 use elm_ast_rs::literal::Literal;
-use elm_ast_rs::{parse, parse_recovering, Lexer};
 use elm_ast_rs::pattern::Pattern;
 use elm_ast_rs::type_annotation::TypeAnnotation;
+use elm_ast_rs::{Lexer, parse, parse_recovering};
 
 fn parse_ok(source: &str) -> elm_ast_rs::file::ElmModule {
     match parse(source) {
@@ -50,7 +50,10 @@ x =
 ";
     let m = parse_ok(src);
     match get_body(&m) {
-        Expr::IfElse { branches, else_branch } => {
+        Expr::IfElse {
+            branches,
+            else_branch,
+        } => {
             // The first branch is a, the else is a nested if.
             // Our parser represents chained if-else as nested IfElse.
             assert_eq!(branches.len(), 1);
@@ -279,7 +282,10 @@ x = ()
     match &m.declarations[0].value {
         Declaration::FunctionDeclaration(f) => {
             let sig = f.signature.as_ref().unwrap();
-            assert!(matches!(&sig.value.type_annotation.value, TypeAnnotation::Unit));
+            assert!(matches!(
+                &sig.value.type_annotation.value,
+                TypeAnnotation::Unit
+            ));
             assert!(matches!(&f.declaration.value.body.value, Expr::Unit));
         }
         _ => panic!("expected function"),
@@ -476,8 +482,14 @@ port messageReceiver : (String -> msg) -> Sub msg
 ";
     let m = parse_ok(src);
     assert_eq!(m.declarations.len(), 2);
-    assert!(matches!(&m.declarations[0].value, Declaration::PortDeclaration(_)));
-    assert!(matches!(&m.declarations[1].value, Declaration::PortDeclaration(_)));
+    assert!(matches!(
+        &m.declarations[0].value,
+        Declaration::PortDeclaration(_)
+    ));
+    assert!(matches!(
+        &m.declarations[1].value,
+        Declaration::PortDeclaration(_)
+    ));
     round_trip(src);
 }
 
@@ -527,15 +539,13 @@ f x =
 ";
     let m = parse_ok(src);
     match get_body(&m) {
-        Expr::CaseOf { branches, .. } => {
-            match &branches[0].pattern.value {
-                Pattern::Constructor { name, args, .. } => {
-                    assert_eq!(name, "Node");
-                    assert_eq!(args.len(), 5);
-                }
-                other => panic!("expected Constructor, got {other:?}"),
+        Expr::CaseOf { branches, .. } => match &branches[0].pattern.value {
+            Pattern::Constructor { name, args, .. } => {
+                assert_eq!(name, "Node");
+                assert_eq!(args.len(), 5);
             }
-        }
+            other => panic!("expected Constructor, got {other:?}"),
+        },
         _ => panic!("expected CaseOf"),
     }
     round_trip(src);
@@ -618,10 +628,22 @@ run config msg =
 ";
     let m = parse_ok(src);
     assert_eq!(m.declarations.len(), 4);
-    assert!(matches!(&m.declarations[0].value, Declaration::CustomTypeDeclaration(_)));
-    assert!(matches!(&m.declarations[1].value, Declaration::AliasDeclaration(_)));
-    assert!(matches!(&m.declarations[2].value, Declaration::PortDeclaration(_)));
-    assert!(matches!(&m.declarations[3].value, Declaration::FunctionDeclaration(_)));
+    assert!(matches!(
+        &m.declarations[0].value,
+        Declaration::CustomTypeDeclaration(_)
+    ));
+    assert!(matches!(
+        &m.declarations[1].value,
+        Declaration::AliasDeclaration(_)
+    ));
+    assert!(matches!(
+        &m.declarations[2].value,
+        Declaration::PortDeclaration(_)
+    ));
+    assert!(matches!(
+        &m.declarations[3].value,
+        Declaration::FunctionDeclaration(_)
+    ));
     round_trip(src);
 }
 
@@ -647,7 +669,7 @@ good2 = 2
     assert!(!errors.is_empty(), "should have errors");
     // Should have recovered at least one good declaration
     assert!(
-        m.declarations.len() >= 1,
+        !m.declarations.is_empty(),
         "should have at least 1 declaration, got {}",
         m.declarations.len()
     );
@@ -762,8 +784,11 @@ fn builder_constructs_valid_module() {
     let m = builder::module(
         vec!["Main"],
         vec![
-            builder::func("add", vec![builder::pvar("x"), builder::pvar("y")],
-                builder::binop("+", builder::var("x"), builder::var("y"))),
+            builder::func(
+                "add",
+                vec![builder::pvar("x"), builder::pvar("y")],
+                builder::binop("+", builder::var("x"), builder::var("y")),
+            ),
             builder::custom_type(
                 "Msg",
                 Vec::<String>::new(),
@@ -790,11 +815,7 @@ fn builder_constructs_valid_module() {
 
 #[test]
 fn builder_expressions() {
-    let expr = builder::if_else(
-        builder::var("x"),
-        builder::int(1),
-        builder::int(0),
-    );
+    let expr = builder::if_else(builder::var("x"), builder::int(1), builder::int(0));
     let output = format!("{}", expr.value);
     assert!(output.contains("if x then 1 else 0"));
 }

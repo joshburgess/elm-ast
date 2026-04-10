@@ -31,7 +31,10 @@ impl Visit for AlwaysVisitor {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         // `always identity` → `identity`
         if let Expr::Application(args) = &expr.value {
-            if args.len() == 2 && is_name(&args[0].value, "always") && is_name(&args[1].value, "identity") {
+            if args.len() == 2
+                && is_name(&args[0].value, "always")
+                && is_name(&args[1].value, "identity")
+            {
                 self.0.push(LintError {
                     rule: "NoAlwaysIdentity",
                     message: "`always identity` is equivalent to `identity`".into(),
@@ -43,12 +46,20 @@ impl Visit for AlwaysVisitor {
 
         // `identity >> f` or `f >> identity` → `f`
         // `identity << f` or `f << identity` → `f`
-        if let Expr::OperatorApplication { operator, left, right, .. } = &expr.value {
+        if let Expr::OperatorApplication {
+            operator,
+            left,
+            right,
+            ..
+        } = &expr.value
+        {
             if operator == ">>" || operator == "<<" {
                 if is_name(&left.value, "identity") || is_name(&right.value, "identity") {
                     self.0.push(LintError {
                         rule: "NoAlwaysIdentity",
-                        message: format!("Composing with `identity` using `{operator}` has no effect"),
+                        message: format!(
+                            "Composing with `identity` using `{operator}` has no effect"
+                        ),
                         span: expr.span,
                         fix: None,
                     });

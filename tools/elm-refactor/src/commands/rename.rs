@@ -40,9 +40,11 @@ pub fn rename(project: &mut Project, module: &str, from: &str, to: &str) -> usiz
             // Check if this module imports the name via exposing.
             let imports_exposed = file.module.imports.iter().any(|imp| {
                 imp.value.module_name.value.join(".") == module
-                    && imp.value.exposing.as_ref().is_some_and(|exp| {
-                        import_exposes_name(&exp.value, from)
-                    })
+                    && imp
+                        .value
+                        .exposing
+                        .as_ref()
+                        .is_some_and(|exp| import_exposes_name(&exp.value, from))
             });
 
             // If the name was exposed, also rename unqualified references.

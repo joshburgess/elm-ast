@@ -1,5 +1,7 @@
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: roundtrip_debug <file.elm>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: roundtrip_debug <file.elm>");
     let source = std::fs::read_to_string(&path).expect("failed to read file");
     let ast = elm_ast_rs::parse(&source).expect("failed to parse");
     let printed = elm_ast_rs::print::print(&ast);
@@ -19,9 +21,10 @@ fn main() {
                 let start = line.saturating_sub(3);
                 let end = (line + 2).min(lines.len());
                 println!("\n--- context around line {line} ---");
-                for i in start..end {
-                    let marker = if i + 1 == line { ">>>" } else { "   " };
-                    println!("{marker} {:>4}: {}", i + 1, lines[i]);
+                for (i, ln) in lines[start..end].iter().enumerate() {
+                    let line_num = start + i;
+                    let marker = if line_num + 1 == line { ">>>" } else { "   " };
+                    println!("{marker} {:>4}: {}", line_num + 1, ln);
                 }
             }
         }

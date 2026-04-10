@@ -42,11 +42,12 @@ impl Visit for BoolCaseVisitor {
                 let pats: Vec<&str> = branches
                     .iter()
                     .filter_map(|b| match &b.pattern.value {
-                        Pattern::Constructor { module_name, name, args, .. }
-                            if args.is_empty() && module_name.is_empty() =>
-                        {
-                            Some(name.as_str())
-                        }
+                        Pattern::Constructor {
+                            module_name,
+                            name,
+                            args,
+                            ..
+                        } if args.is_empty() && module_name.is_empty() => Some(name.as_str()),
                         _ => None,
                     })
                     .collect();

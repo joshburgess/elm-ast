@@ -130,10 +130,7 @@ fn parse_unary_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
         // Since we already consumed it here in unary position, parse it as negation.
         let operand = parse_application(p)?;
         let expr = Expr::Negation(Box::new(operand));
-        return Ok(Spanned::new(
-            minus_span.merge(p.span_from(start)),
-            expr,
-        ));
+        return Ok(Spanned::new(minus_span.merge(p.span_from(start)), expr));
     }
 
     parse_application(p)
@@ -199,10 +196,7 @@ fn parse_atomic_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
         // ── Uppercase name (constructor or qualified ref) ────────
         Token::UpperName(_) => {
             let (module_name, name) = parse_qualified_value(p)?;
-            Ok(p.spanned_from(
-                start,
-                Expr::FunctionOrValue { module_name, name },
-            ))
+            Ok(p.spanned_from(start, Expr::FunctionOrValue { module_name, name }))
         }
 
         // ── Prefix operator: `(+)`, `(::)` ──────────────────────
@@ -249,10 +243,7 @@ fn parse_atomic_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
                     return match p.peek() {
                         Token::RightParen => {
                             p.advance();
-                            Ok(p.spanned_from(
-                                start,
-                                Expr::Parenthesized(Box::new(neg_spanned)),
-                            ))
+                            Ok(p.spanned_from(start, Expr::Parenthesized(Box::new(neg_spanned))))
                         }
                         Token::Comma => {
                             let mut elements = vec![neg_spanned];
@@ -463,10 +454,7 @@ fn parse_case_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
         let pat = parse_pattern(p)?;
         p.expect(&Token::Arrow)?;
         let body = parse_expr(p)?;
-        branches.push(CaseBranch {
-            pattern: pat,
-            body,
-        });
+        branches.push(CaseBranch { pattern: pat, body });
     }
 
     if branches.is_empty() {
@@ -570,7 +558,13 @@ fn parse_signature(p: &mut Parser) -> ParseResult<Spanned<Signature>> {
     let name = p.expect_lower_name()?;
     p.expect(&Token::Colon)?;
     let type_annotation = parse_type(p)?;
-    Ok(p.spanned_from(start, Signature { name, type_annotation }))
+    Ok(p.spanned_from(
+        start,
+        Signature {
+            name,
+            type_annotation,
+        },
+    ))
 }
 
 fn parse_let_function_impl(

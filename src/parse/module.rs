@@ -81,7 +81,7 @@ fn parse_module_header(p: &mut Parser) -> ParseResult<Spanned<ModuleHeader>> {
                         return Err(p.error_at(
                             key.span,
                             format!("unexpected effect module key: {}", key.value),
-                        ))
+                        ));
                     }
                 }
 

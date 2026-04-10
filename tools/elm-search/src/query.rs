@@ -119,7 +119,11 @@ pub fn parse_query(input: &str) -> Result<Query, String> {
                 "record" => ExprKindQuery::Record,
                 "list" => ExprKindQuery::List,
                 "tuple" => ExprKindQuery::Tuple,
-                _ => return Err(format!("Unknown expr kind: {arg}. Try: let, case, if, lambda, record, list, tuple")),
+                _ => {
+                    return Err(format!(
+                        "Unknown expr kind: {arg}. Try: let, case, if, lambda, record, list, tuple"
+                    ));
+                }
             };
             Ok(Query::ExprKind(kind))
         }

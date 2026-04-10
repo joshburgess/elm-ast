@@ -10,20 +10,14 @@ struct IdentCollector {
 
 impl Visit for IdentCollector {
     fn visit_expr(&mut self, expr: &Spanned<elm_ast_rs::expr::Expr>) {
-        match &expr.value {
-            elm_ast_rs::expr::Expr::FunctionOrValue { module_name, name } => {
-                let qualified = if module_name.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{}.{}", module_name.join("."), name)
-                };
-                self.idents.push((
-                    qualified,
-                    expr.span.start.line,
-                    expr.span.start.column,
-                ));
-            }
-            _ => {}
+        if let elm_ast_rs::expr::Expr::FunctionOrValue { module_name, name } = &expr.value {
+            let qualified = if module_name.is_empty() {
+                name.clone()
+            } else {
+                format!("{}.{}", module_name.join("."), name)
+            };
+            self.idents
+                .push((qualified, expr.span.start.line, expr.span.start.column));
         }
         walk_expr(self, expr);
     }
@@ -50,7 +44,11 @@ fn main() {
     collector.visit_module(&module);
 
     // Deduplicate and sort.
-    let mut unique: Vec<&str> = collector.idents.iter().map(|(n, _, _)| n.as_str()).collect();
+    let mut unique: Vec<&str> = collector
+        .idents
+        .iter()
+        .map(|(n, _, _)| n.as_str())
+        .collect();
     unique.sort();
     unique.dedup();
 

@@ -97,10 +97,7 @@ fn case_on_just_finds_results_in_core() {
 fn unused_args_finds_results_in_core() {
     let count = search_fixtures("unused-args");
     // elm/core has a few unused args in kernel-backed modules.
-    assert!(
-        count > 0,
-        "should find unused args in elm/core"
-    );
+    assert!(count > 0, "should find unused args in elm/core");
 }
 
 #[test]

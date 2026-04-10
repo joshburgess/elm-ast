@@ -313,7 +313,10 @@ impl<'src> Lexer<'src> {
                 self.advance();
                 // If followed by alphanumeric, it's part of an identifier (error in Elm,
                 // but we lex it as a lower name for error recovery).
-                if self.peek().is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                if self
+                    .peek()
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
                     let text_start = start.offset;
                     while self
                         .peek()
@@ -561,8 +564,9 @@ impl<'src> Lexer<'src> {
         let code_point = u32::from_str_radix(hex_text, 16)
             .map_err(|_| self.make_error(start, "invalid unicode escape"))?;
 
-        char::from_u32(code_point)
-            .ok_or_else(|| self.make_error(start, format!("invalid unicode code point: {hex_text}")))
+        char::from_u32(code_point).ok_or_else(|| {
+            self.make_error(start, format!("invalid unicode code point: {hex_text}"))
+        })
     }
 
     // ── String literals ──────────────────────────────────────────────
@@ -585,10 +589,7 @@ impl<'src> Lexer<'src> {
                 }
                 Some(b'"') => {
                     self.advance();
-                    return Ok(self.make_span(
-                        start,
-                        Token::Literal(Literal::String(value)),
-                    ));
+                    return Ok(self.make_span(start, Token::Literal(Literal::String(value))));
                 }
                 Some(b'\\') => {
                     let ch = self.lex_escape_char()?;
@@ -620,10 +621,9 @@ impl<'src> Lexer<'src> {
                         && self.peek_at(self.offset + 2) == Some(b'"')
                     {
                         self.advance_n(3);
-                        return Ok(self.make_span(
-                            start,
-                            Token::Literal(Literal::MultilineString(value)),
-                        ));
+                        return Ok(
+                            self.make_span(start, Token::Literal(Literal::MultilineString(value)))
+                        );
                     } else {
                         value.push('"');
                         self.advance();

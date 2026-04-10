@@ -1,0 +1,69 @@
+[submodule "test-fixtures/core"]
+	path = test-fixtures/core
+	url = https://github.com/elm/core.git
+[submodule "test-fixtures/html"]
+	path = test-fixtures/html
+	url = https://github.com/elm/html.git
+[submodule "test-fixtures/browser"]
+	path = test-fixtures/browser
+	url = https://github.com/elm/browser.git
+[submodule "test-fixtures/json"]
+	path = test-fixtures/json
+	url = https://github.com/elm/json.git
+[submodule "test-fixtures/http"]
+	path = test-fixtures/http
+	url = https://github.com/elm/http.git
+[submodule "test-fixtures/url"]
+	path = test-fixtures/url
+	url = https://github.com/elm/url.git
+[submodule "test-fixtures/parser"]
+	path = test-fixtures/parser
+	url = https://github.com/elm/parser.git
+[submodule "test-fixtures/virtual-dom"]
+	path = test-fixtures/virtual-dom
+	url = https://github.com/elm/virtual-dom.git
+[submodule "test-fixtures/bytes"]
+	path = test-fixtures/bytes
+	url = https://github.com/elm/bytes.git
+[submodule "test-fixtures/file"]
+	path = test-fixtures/file
+	url = https://github.com/elm/file.git
+[submodule "test-fixtures/time"]
+	path = test-fixtures/time
+	url = https://github.com/elm/time.git
+[submodule "test-fixtures/regex"]
+	path = test-fixtures/regex
+	url = https://github.com/elm/regex.git
+[submodule "test-fixtures/random"]
+	path = test-fixtures/random
+	url = https://github.com/elm/random.git
+[submodule "test-fixtures/elm-css"]
+	path = test-fixtures/elm-css
+	url = https://github.com/rtfeldman/elm-css.git
+[submodule "test-fixtures/elm-ui"]
+	path = test-fixtures/elm-ui
+	url = https://github.com/mdgriffith/elm-ui.git
+[submodule "test-fixtures/svg"]
+	path = test-fixtures/svg
+	url = https://github.com/elm/svg.git
+[submodule "test-fixtures/compiler"]
+	path = test-fixtures/compiler
+	url = https://github.com/elm/compiler.git
+[submodule "test-fixtures/test"]
+	path = test-fixtures/test
+	url = https://github.com/elm-explorations/test.git
+[submodule "test-fixtures/markdown"]
+	path = test-fixtures/markdown
+	url = https://github.com/elm-explorations/markdown.git
+[submodule "test-fixtures/list-extra"]
+	path = test-fixtures/list-extra
+	url = https://github.com/elm-community/list-extra.git
+[submodule "test-fixtures/maybe-extra"]
+	path = test-fixtures/maybe-extra
+	url = https://github.com/elm-community/maybe-extra.git
+[submodule "test-fixtures/string-extra"]
+	path = test-fixtures/string-extra
+	url = https://github.com/elm-community/string-extra.git
+[submodule "test-fixtures/elm-json-decode-pipeline"]
+	path = test-fixtures/elm-json-decode-pipeline
+	url = https://github.com/NoRedInk/elm-json-decode-pipeline.git

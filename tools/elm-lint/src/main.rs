@@ -24,7 +24,8 @@ fn main() {
             "--rules" => {
                 i += 1;
                 if i < args.len() {
-                    enabled_rules = Some(args[i].split(',').map(|s| s.trim().to_string()).collect());
+                    enabled_rules =
+                        Some(args[i].split(',').map(|s| s.trim().to_string()).collect());
                 }
             }
             "--help" | "-h" => {

@@ -70,13 +70,7 @@ pub fn parse_declaration(p: &mut Parser) -> ParseResult<Spanned<Declaration>> {
             let pattern = parse_pattern(p)?;
             p.expect(&Token::Equals)?;
             let body = parse_expr(p)?;
-            Ok(p.spanned_from(
-                start,
-                Declaration::Destructuring {
-                    pattern,
-                    body,
-                },
-            ))
+            Ok(p.spanned_from(start, Declaration::Destructuring { pattern, body }))
         }
 
         _ => Err(p.error(format!(
@@ -167,10 +161,7 @@ fn parse_function_no_signature(
     })
 }
 
-fn parse_type_alias(
-    p: &mut Parser,
-    doc: Option<Spanned<String>>,
-) -> ParseResult<TypeAlias> {
+fn parse_type_alias(p: &mut Parser, doc: Option<Spanned<String>>) -> ParseResult<TypeAlias> {
     let name = p.expect_upper_name()?;
 
     // Parse generic type parameters.
@@ -200,10 +191,7 @@ fn parse_type_alias(
     })
 }
 
-fn parse_custom_type(
-    p: &mut Parser,
-    doc: Option<Spanned<String>>,
-) -> ParseResult<CustomType> {
+fn parse_custom_type(p: &mut Parser, doc: Option<Spanned<String>>) -> ParseResult<CustomType> {
     let name = p.expect_upper_name()?;
 
     // Parse generic type parameters.
@@ -341,9 +329,6 @@ fn can_start_pattern(tok: &Token) -> bool {
 fn can_start_atomic_type(tok: &Token) -> bool {
     matches!(
         tok,
-        Token::LowerName(_)
-            | Token::UpperName(_)
-            | Token::LeftParen
-            | Token::LeftBrace
+        Token::LowerName(_) | Token::UpperName(_) | Token::LeftParen | Token::LeftBrace
     )
 }

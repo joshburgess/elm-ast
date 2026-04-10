@@ -119,13 +119,9 @@ pub fn walk_module_mut<V: VisitMut + ?Sized>(v: &mut V, module: &mut ElmModule) 
     }
 }
 
-pub fn walk_module_header_mut<V: VisitMut + ?Sized>(
-    v: &mut V,
-    header: &mut Spanned<ModuleHeader>,
-) {
+pub fn walk_module_header_mut<V: VisitMut + ?Sized>(v: &mut V, header: &mut Spanned<ModuleHeader>) {
     match &mut header.value {
-        ModuleHeader::Normal { exposing, .. }
-        | ModuleHeader::Port { exposing, .. } => {
+        ModuleHeader::Normal { exposing, .. } | ModuleHeader::Port { exposing, .. } => {
             v.visit_exposing_mut(exposing);
         }
         ModuleHeader::Effect { exposing, .. } => {
@@ -217,9 +213,7 @@ pub fn walk_expr_mut<V: VisitMut + ?Sized>(v: &mut V, expr: &mut Spanned<Expr>) 
 
         Expr::PrefixOperator(op) => v.visit_ident_mut(op),
 
-        Expr::OperatorApplication {
-            left, right, ..
-        } => {
+        Expr::OperatorApplication { left, right, .. } => {
             v.visit_expr_mut(left);
             v.visit_expr_mut(right);
         }
@@ -268,7 +262,10 @@ pub fn walk_expr_mut<V: VisitMut + ?Sized>(v: &mut V, expr: &mut Spanned<Expr>) 
             v.visit_expr_mut(body);
         }
 
-        Expr::CaseOf { expr: subject, branches } => {
+        Expr::CaseOf {
+            expr: subject,
+            branches,
+        } => {
             v.visit_expr_mut(subject);
             for branch in branches {
                 v.visit_case_branch_mut(branch);
@@ -331,7 +328,10 @@ pub fn walk_pattern_mut<V: VisitMut + ?Sized>(v: &mut V, pattern: &mut Spanned<P
             v.visit_pattern_mut(tail);
         }
 
-        Pattern::As { pattern: inner, name } => {
+        Pattern::As {
+            pattern: inner,
+            name,
+        } => {
             v.visit_pattern_mut(inner);
             v.visit_ident_mut(&mut name.value);
         }
@@ -340,10 +340,7 @@ pub fn walk_pattern_mut<V: VisitMut + ?Sized>(v: &mut V, pattern: &mut Spanned<P
     }
 }
 
-pub fn walk_type_annotation_mut<V: VisitMut + ?Sized>(
-    v: &mut V,
-    ty: &mut Spanned<TypeAnnotation>,
-) {
+pub fn walk_type_annotation_mut<V: VisitMut + ?Sized>(v: &mut V, ty: &mut Spanned<TypeAnnotation>) {
     match &mut ty.value {
         TypeAnnotation::GenericType(_) | TypeAnnotation::Unit => {}
 
@@ -378,10 +375,7 @@ pub fn walk_type_annotation_mut<V: VisitMut + ?Sized>(
     }
 }
 
-pub fn walk_record_field_mut<V: VisitMut + ?Sized>(
-    v: &mut V,
-    field: &mut Spanned<RecordField>,
-) {
+pub fn walk_record_field_mut<V: VisitMut + ?Sized>(v: &mut V, field: &mut Spanned<RecordField>) {
     v.visit_type_annotation_mut(&mut field.value.type_annotation);
 }
 
@@ -403,9 +397,6 @@ pub fn walk_case_branch_mut<V: VisitMut + ?Sized>(v: &mut V, branch: &mut CaseBr
     v.visit_expr_mut(&mut branch.body);
 }
 
-pub fn walk_record_setter_mut<V: VisitMut + ?Sized>(
-    v: &mut V,
-    setter: &mut Spanned<RecordSetter>,
-) {
+pub fn walk_record_setter_mut<V: VisitMut + ?Sized>(v: &mut V, setter: &mut Spanned<RecordSetter>) {
     v.visit_expr_mut(&mut setter.value.value);
 }

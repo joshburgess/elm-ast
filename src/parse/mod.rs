@@ -1,8 +1,8 @@
-pub mod type_annotation;
-pub mod pattern;
-pub mod expr;
 pub mod declaration;
+pub mod expr;
 pub mod module;
+pub mod pattern;
+pub mod type_annotation;
 
 use crate::node::Spanned;
 use crate::span::{Position, Span};
@@ -117,10 +117,7 @@ impl Parser {
     pub fn skip_whitespace(&mut self) {
         while matches!(
             self.peek(),
-            Token::Newline
-                | Token::LineComment(_)
-                | Token::BlockComment(_)
-                | Token::DocComment(_)
+            Token::Newline | Token::LineComment(_) | Token::BlockComment(_) | Token::DocComment(_)
         ) {
             self.advance();
         }
@@ -141,7 +138,11 @@ impl Parser {
         if self.peek() == expected {
             Ok(self.advance())
         } else {
-            Err(self.error(format!("expected {}, found {}", describe(expected), describe(self.peek()))))
+            Err(self.error(format!(
+                "expected {}, found {}",
+                describe(expected),
+                describe(self.peek())
+            )))
         }
     }
 

@@ -100,7 +100,9 @@ fn print_help() {
     eprintln!("  lambda <N>           Lambdas with N or more arguments");
     eprintln!("  uses <name>          All references to a function/value");
     eprintln!("  def <pattern>        Definitions matching a name (substring)");
-    eprintln!("  expr <kind>          Expressions by kind: let, case, if, lambda, record, list, tuple");
+    eprintln!(
+        "  expr <kind>          Expressions by kind: let, case, if, lambda, record, list, tuple"
+    );
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  elm-search returns Maybe");

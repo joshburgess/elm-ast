@@ -138,8 +138,7 @@ pub fn walk_module<V: Visit + ?Sized>(v: &mut V, module: &ElmModule) {
 
 pub fn walk_module_header<V: Visit + ?Sized>(v: &mut V, header: &Spanned<ModuleHeader>) {
     match &header.value {
-        ModuleHeader::Normal { exposing, .. }
-        | ModuleHeader::Port { exposing, .. } => {
+        ModuleHeader::Normal { exposing, .. } | ModuleHeader::Port { exposing, .. } => {
             v.visit_exposing(exposing);
         }
         ModuleHeader::Effect { exposing, .. } => {
@@ -228,9 +227,7 @@ pub fn walk_expr<V: Visit + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
 
         Expr::PrefixOperator(op) => v.visit_ident(op),
 
-        Expr::OperatorApplication {
-            left, right, ..
-        } => {
+        Expr::OperatorApplication { left, right, .. } => {
             v.visit_expr(left);
             v.visit_expr(right);
         }
@@ -279,7 +276,10 @@ pub fn walk_expr<V: Visit + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
             v.visit_expr(body);
         }
 
-        Expr::CaseOf { expr: subject, branches } => {
+        Expr::CaseOf {
+            expr: subject,
+            branches,
+        } => {
             v.visit_expr(subject);
             for branch in branches {
                 v.visit_case_branch(branch);
@@ -342,7 +342,10 @@ pub fn walk_pattern<V: Visit + ?Sized>(v: &mut V, pattern: &Spanned<Pattern>) {
             v.visit_pattern(tail);
         }
 
-        Pattern::As { pattern: inner, name } => {
+        Pattern::As {
+            pattern: inner,
+            name,
+        } => {
             v.visit_pattern(inner);
             v.visit_ident(&name.value);
         }
