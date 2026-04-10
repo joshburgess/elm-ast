@@ -3,6 +3,7 @@ use crate::expr::{
 };
 use crate::node::Spanned;
 use crate::operator::InfixDirection;
+use crate::span::Position;
 use crate::token::Token;
 
 use super::pattern::parse_pattern;
@@ -14,16 +15,37 @@ use super::{ParseResult, Parser};
 /// This is the top-level expression parser. It handles binary operators
 /// with Pratt parsing.
 pub fn parse_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
-    parse_binary_expr(p, 0)
+    p.expr_depth += 1;
+    if p.expr_depth > super::MAX_EXPR_DEPTH {
+        p.expr_depth -= 1;
+        return Err(p.error("expression nesting too deep (limit: 64)"));
+    }
+    let result = parse_binary_expr(p);
+    p.expr_depth -= 1;
+    result
 }
 
-/// Pratt parser for binary operators.
+/// Iterative Pratt parser for binary operators.
 ///
-/// Elm's operators have precedences 0–9. We use the standard Pratt technique
-/// where `min_bp` is the minimum binding power (precedence) for this call.
-fn parse_binary_expr(p: &mut Parser, min_bp: u8) -> ParseResult<Spanned<Expr>> {
-    let start = p.current_pos();
+/// Elm's operators have precedences 0–9. Instead of the traditional recursive
+/// Pratt technique (where parsing the right operand recurses with a higher
+/// minimum binding power), we use an explicit heap-allocated operator stack.
+/// This eliminates O(precedence-levels) stack frames per expression.
+///
+/// The algorithm: when we encounter an operator, we fold (reduce) any pending
+/// operators on the stack whose right binding power is strictly greater than the
+/// new operator's left binding power — those operators' right operands are now
+/// complete. Then we push the new operator and parse the next atom.
+fn parse_binary_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
+    struct PendingOp {
+        left: Spanned<Expr>,
+        op: String,
+        assoc: InfixDirection,
+        right_bp: u8,
+    }
+
     let mut left = parse_unary_expr(p)?;
+    let mut pending: Vec<PendingOp> = Vec::new();
 
     loop {
         p.skip_whitespace();
@@ -34,19 +56,45 @@ fn parse_binary_expr(p: &mut Parser, min_bp: u8) -> ParseResult<Spanned<Expr>> {
         };
 
         let (left_bp, right_bp) = binding_power(prec, &assoc);
-        if left_bp < min_bp {
-            break;
+
+        // Fold pending operators whose right operand is now complete:
+        // a stacked operator is complete when its right binding power
+        // exceeds the new operator's left binding power.
+        while let Some(top) = pending.last() {
+            if top.right_bp > left_bp {
+                let top = pending.pop().unwrap();
+                let start = top.left.span.start;
+                let expr = Expr::OperatorApplication {
+                    operator: top.op,
+                    direction: top.assoc,
+                    left: Box::new(top.left),
+                    right: Box::new(left),
+                };
+                left = p.spanned_from(start, expr);
+            } else {
+                break;
+            }
         }
 
         p.advance(); // consume the operator token
 
-        let right = parse_binary_expr(p, right_bp)?;
+        pending.push(PendingOp {
+            left,
+            op,
+            assoc,
+            right_bp,
+        });
+        left = parse_unary_expr(p)?;
+    }
 
+    // Fold all remaining pending operators.
+    while let Some(top) = pending.pop() {
+        let start = top.left.span.start;
         let expr = Expr::OperatorApplication {
-            operator: op,
-            direction: assoc,
-            left: Box::new(left),
-            right: Box::new(right),
+            operator: top.op,
+            direction: top.assoc,
+            left: Box::new(top.left),
+            right: Box::new(left),
         };
         left = p.spanned_from(start, expr);
     }
@@ -381,34 +429,55 @@ fn parse_record_access_chain(
 // ── Compound expressions ─────────────────────────────────────────────
 
 fn parse_if_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
-    let start = p.current_pos();
-    p.expect(&Token::If)?;
+    // Iterative loop for chained `if ... then ... else if ... then ... else`.
+    // Collects all branches, then folds from right to left to build nested
+    // IfElse nodes matching the recursive AST structure without recursion.
+    struct IfBranch {
+        start: Position,
+        condition: Spanned<Expr>,
+        then_branch: Spanned<Expr>,
+    }
 
-    let mut branches = Vec::new();
-    let condition = parse_expr(p)?;
-    p.expect(&Token::Then)?;
-    let then_branch = parse_expr(p)?;
-    branches.push((condition, then_branch));
+    let mut chain: Vec<IfBranch> = Vec::new();
 
-    p.expect(&Token::Else)?;
+    loop {
+        let start = p.current_pos();
+        p.expect(&Token::If)?;
 
-    // Chained if-else:  `else if ... then ... else ...`
-    p.skip_whitespace();
-    let else_branch = if matches!(p.peek(), Token::If) {
-        // Recurse: the `else if` becomes a nested if-else expression.
-        // But we flatten into branches for our AST.
-        parse_if_expr(p)?
-    } else {
-        parse_expr(p)?
-    };
+        let condition = parse_expr(p)?;
+        p.expect(&Token::Then)?;
+        let then_branch = parse_expr(p)?;
+        chain.push(IfBranch {
+            start,
+            condition,
+            then_branch,
+        });
 
-    Ok(p.spanned_from(
-        start,
-        Expr::IfElse {
-            branches,
-            else_branch: Box::new(else_branch),
-        },
-    ))
+        p.expect(&Token::Else)?;
+        p.skip_whitespace();
+
+        if !matches!(p.peek(), Token::If) {
+            break;
+        }
+    }
+
+    let else_branch = parse_expr(p)?;
+
+    // Fold from right to left: the last branch wraps the else_branch,
+    // the second-to-last wraps that, etc. This produces the same nested
+    // IfElse structure as the recursive version.
+    let mut result = else_branch;
+    for branch in chain.into_iter().rev() {
+        result = p.spanned_from(
+            branch.start,
+            Expr::IfElse {
+                branches: vec![(branch.condition, branch.then_branch)],
+                else_branch: Box::new(result),
+            },
+        );
+    }
+
+    Ok(result)
 }
 
 fn parse_case_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
@@ -451,7 +520,12 @@ fn parse_case_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
             break;
         }
 
-        let pat = parse_pattern(p)?;
+        // Attach any comments before this branch to the pattern.
+        let branch_comments = p.take_pending_comments();
+        let mut pat = parse_pattern(p)?;
+        if !branch_comments.is_empty() {
+            pat.comments = branch_comments;
+        }
         p.expect(&Token::Arrow)?;
         let body = parse_expr(p)?;
         branches.push(CaseBranch { pattern: pat, body });
@@ -495,9 +569,15 @@ fn parse_let_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
             break;
         }
 
+        // Attach any comments before this let declaration.
+        let let_decl_comments = p.take_pending_comments();
         let decl_start = p.current_pos();
         let decl = parse_let_declaration(p, decl_col)?;
-        declarations.push(p.spanned_from(decl_start, decl));
+        let mut spanned_decl = p.spanned_from(decl_start, decl);
+        if !let_decl_comments.is_empty() {
+            spanned_decl.comments = let_decl_comments;
+        }
+        declarations.push(spanned_decl);
     }
 
     p.expect(&Token::In)?;

@@ -1002,13 +1002,13 @@ import Json.Decode as Decode
 #[test]
 fn deeply_nested_expressions() {
     // Build a deeply nested expression: f (f (f (... (f x) ...)))
-    // 100 levels of nesting
+    // 50 levels of nesting to stay within test thread stack limits.
     let mut src = String::from("module Main exposing (..)\n\nresult = ");
-    for _ in 0..100 {
+    for _ in 0..50 {
         src.push_str("identity (");
     }
     src.push_str("42");
-    for _ in 0..100 {
+    for _ in 0..50 {
         src.push(')');
     }
     src.push('\n');
@@ -1020,7 +1020,7 @@ fn deeply_nested_expressions() {
 
 #[test]
 fn deeply_nested_if_else() {
-    // 50 levels of nested if-else
+    // 50 levels of nested if-else.
     let mut src = String::from("module Main exposing (..)\n\nresult x = ");
     for i in 0..50 {
         src.push_str(&format!("if x == {} then {} else ", i, i));
@@ -1028,6 +1028,29 @@ fn deeply_nested_if_else() {
     src.push_str("0\n");
     let m = parse_ok(&src);
     assert_eq!(m.declarations.len(), 1);
+}
+
+#[test]
+fn depth_limit_returns_error_instead_of_stack_overflow() {
+    // 80 levels of nesting exceeds the 64 depth limit.
+    // The parser should return a clean error, not crash.
+    let mut src = String::from("module Main exposing (..)\n\nresult = ");
+    for _ in 0..80 {
+        src.push_str("identity (");
+    }
+    src.push_str("42");
+    for _ in 0..80 {
+        src.push(')');
+    }
+    src.push('\n');
+    let result = parse(&src);
+    assert!(result.is_err(), "80-deep nesting should be rejected by depth limit");
+    let err = result.unwrap_err();
+    assert!(
+        err.iter().any(|e| e.message.contains("nesting too deep")),
+        "error should mention depth limit, got: {:?}",
+        err
+    );
 }
 
 // ── Builder API (additional) ────────────────────────────────────────
@@ -2049,4 +2072,234 @@ fn display_module() {
     let output = format!("{m}");
     assert!(output.contains("module Main exposing"), "module display: {output}");
     assert!(output.contains("x ="), "module display: {output}");
+}
+
+// ── Expression-level comment preservation ─────────────────────────────
+
+#[test]
+fn let_in_comment_between_declarations() {
+    let src = "\
+module Main exposing (..)
+
+
+x =
+    let
+        a =
+            1
+
+        -- comment between let bindings
+        b =
+            2
+    in
+    a + b
+";
+    let m = parse_ok(src);
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("-- comment between let bindings"),
+        "comment inside let-in should be preserved, got:\n{output}"
+    );
+}
+
+#[test]
+fn case_comment_between_branches() {
+    let src = "\
+module Main exposing (..)
+
+
+x y =
+    case y of
+        True ->
+            1
+
+        -- comment before False branch
+        False ->
+            2
+";
+    let m = parse_ok(src);
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("-- comment before False branch"),
+        "comment between case branches should be preserved, got:\n{output}"
+    );
+}
+
+#[test]
+fn let_in_comment_round_trip() {
+    let src = "\
+module Main exposing (..)
+
+
+x =
+    let
+        a =
+            1
+
+        -- helper value
+        b =
+            2
+    in
+    a + b
+";
+    let m = parse_ok(src);
+    let output1 = elm_ast::print::print(&m);
+    assert!(output1.contains("-- helper value"), "first print should contain comment");
+    let m2 = parse_ok(&output1);
+    let output2 = elm_ast::print::print(&m2);
+    assert_eq!(output1, output2, "let-in comment should survive round-trip");
+}
+
+#[test]
+fn case_comment_round_trip() {
+    let src = "\
+module Main exposing (..)
+
+
+x y =
+    case y of
+        True ->
+            1
+
+        -- handle false case
+        False ->
+            2
+";
+    let m = parse_ok(src);
+    let output1 = elm_ast::print::print(&m);
+    assert!(output1.contains("-- handle false case"), "first print should contain comment");
+    let m2 = parse_ok(&output1);
+    let output2 = elm_ast::print::print(&m2);
+    assert_eq!(output1, output2, "case comment should survive round-trip");
+}
+
+#[test]
+fn let_in_block_comment_preserved() {
+    let src = "\
+module Main exposing (..)
+
+
+x =
+    let
+        {- block comment in let -}
+        a =
+            1
+    in
+    a
+";
+    let m = parse_ok(src);
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("{- block comment in let -}"),
+        "block comment inside let-in should be preserved, got:\n{output}"
+    );
+}
+
+#[test]
+fn case_multiple_comments_between_branches() {
+    let src = "\
+module Main exposing (..)
+
+
+x y =
+    case y of
+        1 ->
+            True
+
+        -- first comment
+        -- second comment
+        _ ->
+            False
+";
+    let m = parse_ok(src);
+    let output = elm_ast::print::print(&m);
+    assert!(
+        output.contains("-- first comment"),
+        "first comment between case branches should be preserved, got:\n{output}"
+    );
+    assert!(
+        output.contains("-- second comment"),
+        "second comment between case branches should be preserved, got:\n{output}"
+    );
+}
+
+#[test]
+fn visit_comments_on_let_declarations() {
+    use elm_ast::visit::Visit;
+    use elm_ast::comment::Comment;
+
+    let src = "\
+module Main exposing (..)
+
+
+x =
+    let
+        a =
+            1
+
+        -- comment on b
+        b =
+            2
+    in
+    a + b
+";
+    let m = parse_ok(src);
+
+    struct CommentCollector(Vec<String>);
+    impl Visit for CommentCollector {
+        fn visit_comment(&mut self, comment: &Spanned<Comment>) {
+            match &comment.value {
+                Comment::Line(text) => self.0.push(text.clone()),
+                Comment::Block(text) => self.0.push(text.clone()),
+                Comment::Doc(text) => self.0.push(text.clone()),
+            }
+        }
+    }
+
+    let mut collector = CommentCollector(vec![]);
+    collector.visit_module(&m);
+    assert!(
+        collector.0.iter().any(|c| c.contains("comment on b")),
+        "visitor should find comment attached to let declaration, got: {:?}",
+        collector.0
+    );
+}
+
+#[test]
+fn visit_comments_on_case_branch_patterns() {
+    use elm_ast::visit::Visit;
+    use elm_ast::comment::Comment;
+
+    let src = "\
+module Main exposing (..)
+
+
+x y =
+    case y of
+        True ->
+            1
+
+        -- false branch comment
+        False ->
+            2
+";
+    let m = parse_ok(src);
+
+    struct CommentCollector(Vec<String>);
+    impl Visit for CommentCollector {
+        fn visit_comment(&mut self, comment: &Spanned<Comment>) {
+            match &comment.value {
+                Comment::Line(text) => self.0.push(text.clone()),
+                Comment::Block(text) => self.0.push(text.clone()),
+                Comment::Doc(text) => self.0.push(text.clone()),
+            }
+        }
+    }
+
+    let mut collector = CommentCollector(vec![]);
+    collector.visit_module(&m);
+    assert!(
+        collector.0.iter().any(|c| c.contains("false branch comment")),
+        "visitor should find comment on case branch pattern, got: {:?}",
+        collector.0
+    );
 }

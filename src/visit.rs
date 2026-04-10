@@ -218,6 +218,10 @@ pub fn walk_value_constructor<V: Visit + ?Sized>(v: &mut V, ctor: &Spanned<Value
 }
 
 pub fn walk_expr<V: Visit + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
+    // Visit node-attached comments (expression-level comment preservation).
+    for c in &expr.comments {
+        v.visit_comment(c);
+    }
     match &expr.value {
         Expr::Unit | Expr::GLSLExpression(_) | Expr::RecordAccessFunction(_) => {}
 
@@ -312,6 +316,9 @@ pub fn walk_expr<V: Visit + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
 }
 
 pub fn walk_pattern<V: Visit + ?Sized>(v: &mut V, pattern: &Spanned<Pattern>) {
+    for c in &pattern.comments {
+        v.visit_comment(c);
+    }
     match &pattern.value {
         Pattern::Anything | Pattern::Unit | Pattern::Hex(_) => {}
 
@@ -394,6 +401,9 @@ pub fn walk_record_field<V: Visit + ?Sized>(v: &mut V, field: &Spanned<RecordFie
 }
 
 pub fn walk_let_declaration<V: Visit + ?Sized>(v: &mut V, decl: &Spanned<LetDeclaration>) {
+    for c in &decl.comments {
+        v.visit_comment(c);
+    }
     match &decl.value {
         LetDeclaration::Function(func) => v.visit_function(func),
         LetDeclaration::Destructuring { pattern, body } => {

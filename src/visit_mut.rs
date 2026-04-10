@@ -204,6 +204,9 @@ pub fn walk_value_constructor_mut<V: VisitMut + ?Sized>(
 }
 
 pub fn walk_expr_mut<V: VisitMut + ?Sized>(v: &mut V, expr: &mut Spanned<Expr>) {
+    for c in &mut expr.comments {
+        v.visit_comment_mut(c);
+    }
     match &mut expr.value {
         Expr::Unit | Expr::GLSLExpression(_) | Expr::RecordAccessFunction(_) => {}
 
@@ -298,6 +301,9 @@ pub fn walk_expr_mut<V: VisitMut + ?Sized>(v: &mut V, expr: &mut Spanned<Expr>) 
 }
 
 pub fn walk_pattern_mut<V: VisitMut + ?Sized>(v: &mut V, pattern: &mut Spanned<Pattern>) {
+    for c in &mut pattern.comments {
+        v.visit_comment_mut(c);
+    }
     match &mut pattern.value {
         Pattern::Anything | Pattern::Unit | Pattern::Hex(_) => {}
 
@@ -383,6 +389,9 @@ pub fn walk_let_declaration_mut<V: VisitMut + ?Sized>(
     v: &mut V,
     decl: &mut Spanned<LetDeclaration>,
 ) {
+    for c in &mut decl.comments {
+        v.visit_comment_mut(c);
+    }
     match &mut decl.value {
         LetDeclaration::Function(func) => v.visit_function_mut(func),
         LetDeclaration::Destructuring { pattern, body } => {

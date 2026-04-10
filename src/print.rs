@@ -647,6 +647,15 @@ impl Printer {
         self.write_expr_inner(expr);
     }
 
+    /// Emit leading comments attached to a node.
+    fn write_leading_comments(&mut self, comments: &[Spanned<Comment>]) {
+        for c in comments {
+            self.write_comment(&c.value);
+            self.newline();
+            self.write_indent();
+        }
+    }
+
     /// The core expression dispatcher.
     fn write_expr_inner(&mut self, expr: &Expr) {
         match expr {
@@ -656,10 +665,12 @@ impl Printer {
                 right,
                 ..
             } => {
+                self.write_leading_comments(&left.comments);
                 self.write_expr_operand(&left.value, operator, true);
                 self.write_char(' ');
                 self.write(operator);
                 self.write_char(' ');
+                self.write_leading_comments(&right.comments);
                 self.write_expr_operand(&right.value, operator, false);
             }
             Expr::IfElse {
@@ -951,10 +962,14 @@ impl Printer {
         self.indent();
         for branch in branches {
             self.newline_indent();
+            // Emit leading comments on the branch pattern.
+            self.write_leading_comments(&branch.pattern.comments);
             self.write_pattern(&branch.pattern.value);
             self.write(" ->");
             self.indent();
             self.newline_indent();
+            // Emit leading comments on the branch body.
+            self.write_leading_comments(&branch.body.comments);
             self.write_expr(&branch.body.value);
             self.dedent();
         }
@@ -966,6 +981,8 @@ impl Printer {
         self.indent();
         for decl in declarations {
             self.newline_indent();
+            // Emit leading comments on this let declaration.
+            self.write_leading_comments(&decl.comments);
             self.write_let_declaration(&decl.value);
         }
         self.dedent();

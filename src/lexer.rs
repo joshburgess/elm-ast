@@ -108,24 +108,18 @@ impl<'src> Lexer<'src> {
     }
 
     fn make_span(&self, start: Position, value: Token) -> Spanned<Token> {
-        Spanned {
-            span: Span {
+        Spanned::new(
+            Span {
                 start,
                 end: self.current_pos(),
             },
             value,
-        }
+        )
     }
 
     fn make_span_here(&self, value: Token) -> Spanned<Token> {
         let pos = self.current_pos();
-        Spanned {
-            span: Span {
-                start: pos,
-                end: pos,
-            },
-            value,
-        }
+        Spanned::new(Span { start: pos, end: pos }, value)
     }
 
     fn make_error(&self, start: Position, message: impl Into<String>) -> LexError {

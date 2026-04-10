@@ -137,7 +137,7 @@ The printer produces idempotent output: `print(parse(print(parse(src)))) == prin
 
 Top-level comments (line comments `--` and block comments `{- -}` between declarations) are captured during parsing and round-tripped through the printer. Comments are placed immediately before the declaration they precede.
 
-**Limitations:** Comments inside expressions (e.g., within a `let` block or on a specific line of a case branch) are not yet preserved. Doc comments (`{-| -}`) are attached to their declarations and always round-trip correctly.
+Comments inside `let`/`in` blocks and `case`/`of` branches are attached to their respective AST nodes and round-trip correctly. Doc comments (`{-| -}`) are attached to their declarations and always round-trip correctly.
 
 ## Visitors
 
@@ -207,7 +207,7 @@ The printer uses an approach inspired by [`elm-format`](https://github.com/avh4/
 
 ## Test coverage
 
-350 tests across the workspace:
+372 tests across the workspace:
 
 | Suite | Tests |
 |---|---|
@@ -215,7 +215,7 @@ The printer uses an approach inspired by [`elm-format`](https://github.com/avh4/
 | Parser | 71 |
 | Printer | 42 |
 | Visitors | 29 |
-| Edge cases + serde + builders + comments | 78 |
+| Edge cases + serde + builders + comments | 97 |
 | Integration (149 real files, 23 packages) | 3 |
 | elm-unused | 5 |
 | elm-lint | 25 |
