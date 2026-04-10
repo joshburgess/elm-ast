@@ -23,8 +23,6 @@ fold = []
 visit-mut = []
 serde = ["dep:serde"]
 wasm = ["dep:wasm-bindgen", "dep:serde_json", "parsing", "printing"]
-extra-traits = []
-
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
