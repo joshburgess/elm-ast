@@ -53,13 +53,15 @@ fn arb_expr(depth: u32) -> impl Strategy<Value = elm_ast::node::Spanned<elm_ast:
             // list
             prop::collection::vec(arb_expr(depth - 1), 0..4).prop_map(list),
             // tuple (2 or 3 elements)
-            (arb_expr(depth - 1), arb_expr(depth - 1))
-                .prop_map(|(a, b)| tuple(vec![a, b])),
+            (arb_expr(depth - 1), arb_expr(depth - 1)).prop_map(|(a, b)| tuple(vec![a, b])),
             // binop
-            (arb_expr(depth - 1), arb_expr(depth - 1))
-                .prop_map(|(a, b)| binop("+", a, b)),
+            (arb_expr(depth - 1), arb_expr(depth - 1)).prop_map(|(a, b)| binop("+", a, b)),
             // if
-            (arb_expr(depth - 1), arb_expr(depth - 1), arb_expr(depth - 1))
+            (
+                arb_expr(depth - 1),
+                arb_expr(depth - 1),
+                arb_expr(depth - 1)
+            )
                 .prop_map(|(c, t, e)| if_else(c, t, e)),
             // lambda
             (arb_ident(), arb_expr(depth - 1))

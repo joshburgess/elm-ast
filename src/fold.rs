@@ -246,7 +246,11 @@ pub fn fold_value_constructor<F: Fold + ?Sized>(
 
 pub fn fold_expr<F: Fold + ?Sized>(f: &mut F, expr: Spanned<Expr>) -> Spanned<Expr> {
     let span = expr.span;
-    let comments: Vec<_> = expr.comments.into_iter().map(|c| f.fold_comment(c)).collect();
+    let comments: Vec<_> = expr
+        .comments
+        .into_iter()
+        .map(|c| f.fold_comment(c))
+        .collect();
     let value = match expr.value {
         Expr::Unit | Expr::GLSLExpression(_) | Expr::RecordAccessFunction(_) => expr.value,
 
@@ -354,7 +358,11 @@ pub fn fold_expr<F: Fold + ?Sized>(f: &mut F, expr: Spanned<Expr>) -> Spanned<Ex
 
 pub fn fold_pattern<F: Fold + ?Sized>(f: &mut F, pattern: Spanned<Pattern>) -> Spanned<Pattern> {
     let span = pattern.span;
-    let comments: Vec<_> = pattern.comments.into_iter().map(|c| f.fold_comment(c)).collect();
+    let comments: Vec<_> = pattern
+        .comments
+        .into_iter()
+        .map(|c| f.fold_comment(c))
+        .collect();
     let value = match pattern.value {
         Pattern::Anything | Pattern::Unit | Pattern::Hex(_) | Pattern::Literal(_) => pattern.value,
 
@@ -466,7 +474,11 @@ pub fn fold_let_declaration<F: Fold + ?Sized>(
     decl: Spanned<LetDeclaration>,
 ) -> Spanned<LetDeclaration> {
     let span = decl.span;
-    let comments: Vec<_> = decl.comments.into_iter().map(|c| f.fold_comment(c)).collect();
+    let comments: Vec<_> = decl
+        .comments
+        .into_iter()
+        .map(|c| f.fold_comment(c))
+        .collect();
     let value = match decl.value {
         LetDeclaration::Function(func) => {
             LetDeclaration::Function(Box::new(f.fold_function(*func)))

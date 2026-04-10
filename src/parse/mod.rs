@@ -90,7 +90,6 @@ impl Parser {
         self.paren_depth > 0
     }
 
-
     // ── Position & peeking ───────────────────────────────────────────
 
     /// The current token (without advancing).

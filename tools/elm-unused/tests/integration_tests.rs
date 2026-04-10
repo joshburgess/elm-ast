@@ -176,7 +176,10 @@ fn analyze_finds_findings_per_package() {
 
     // Verify findings have all the expected fields populated.
     for f in &findings {
-        assert!(!f.module_name.is_empty(), "finding should have a module name");
+        assert!(
+            !f.module_name.is_empty(),
+            "finding should have a module name"
+        );
         assert!(!f.name.is_empty(), "finding should have a name");
     }
 
@@ -224,8 +227,8 @@ fn analyze_finds_findings_per_package() {
 #[test]
 fn collect_extracts_definitions_and_references() {
     // elm/core's List module should have well-known definitions.
-    let source = fs::read_to_string("../../test-fixtures/core/src/List.elm")
-        .expect("List.elm should exist");
+    let source =
+        fs::read_to_string("../../test-fixtures/core/src/List.elm").expect("List.elm should exist");
     let module = parse(&source).expect("List.elm should parse");
     let info = collect_module_info(&module);
 
@@ -246,10 +249,7 @@ fn collect_extracts_definitions_and_references() {
     );
 
     // Should have imports.
-    assert!(
-        !info.imports.is_empty(),
-        "List module should have imports"
-    );
+    assert!(!info.imports.is_empty(), "List module should have imports");
 
     // Should have used values (references to other functions).
     assert!(

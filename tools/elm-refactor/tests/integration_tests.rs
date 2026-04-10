@@ -167,7 +167,11 @@ fn sort_imports_output_reparses() {
             failures.push(format!(
                 "{}: {}",
                 file.module_name,
-                errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", ")
+                errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
     }
@@ -217,7 +221,11 @@ fn qualify_imports_output_reparses() {
             failures.push(format!(
                 "{}: {}",
                 file.module_name,
-                errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", ")
+                errors
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
     }

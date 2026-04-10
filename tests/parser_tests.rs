@@ -1019,16 +1019,14 @@ module Main exposing (..)
 ";
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
-        Declaration::Destructuring { pattern, .. } => {
-            match &pattern.value {
-                Pattern::Record(fields) => {
-                    assert_eq!(fields.len(), 2);
-                    assert_eq!(v(&fields[0]), "name");
-                    assert_eq!(v(&fields[1]), "age");
-                }
-                _ => panic!("expected Record pattern"),
+        Declaration::Destructuring { pattern, .. } => match &pattern.value {
+            Pattern::Record(fields) => {
+                assert_eq!(fields.len(), 2);
+                assert_eq!(v(&fields[0]), "name");
+                assert_eq!(v(&fields[1]), "age");
             }
-        }
+            _ => panic!("expected Record pattern"),
+        },
         _ => panic!("expected Destructuring"),
     }
 }
@@ -1108,9 +1106,11 @@ fn glsl_lexer_token() {
     let lexer = elm_ast::Lexer::new("[glsl| some shader code |]");
     let (tokens, errors) = lexer.tokenize();
     assert!(errors.is_empty(), "unexpected lex errors: {errors:?}");
-    assert!(tokens
-        .iter()
-        .any(|t| matches!(&t.value, elm_ast::Token::Glsl(_))));
+    assert!(
+        tokens
+            .iter()
+            .any(|t| matches!(&t.value, elm_ast::Token::Glsl(_)))
+    );
 }
 
 // ── Error cases ──────────────────────────────────────────────────────
@@ -1342,9 +1342,7 @@ x = (1 + 2) * 3
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
-            Expr::OperatorApplication {
-                operator, left, ..
-            } => {
+            Expr::OperatorApplication { operator, left, .. } => {
                 assert_eq!(operator, "*");
                 assert!(matches!(&left.value, Expr::Parenthesized(_)));
             }
@@ -1456,7 +1454,10 @@ x = ( (1, 2), (3, 4) )
 
 #[test]
 fn prefix_operators_all() {
-    for op in &["+", "-", "*", "/", "//", "++", "::", "&&", "||", "==", "/=", "<", ">", "<=", ">=", "^", "|>", "<|", ">>", "<<"] {
+    for op in &[
+        "+", "-", "*", "/", "//", "++", "::", "&&", "||", "==", "/=", "<", ">", "<=", ">=", "^",
+        "|>", "<|", ">>", "<<",
+    ] {
         let src = format!("module Main exposing (..)\n\nx = ({op})");
         let m = parse_ok(&src);
         match v(&m.declarations[0]) {
@@ -1504,7 +1505,9 @@ x = model.user.name
         Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
             Expr::RecordAccess { record, field } => {
                 assert_eq!(&field.value, "name");
-                assert!(matches!(&record.value, Expr::RecordAccess { field, .. } if field.value == "user"));
+                assert!(
+                    matches!(&record.value, Expr::RecordAccess { field, .. } if field.value == "user")
+                );
             }
             other => panic!("expected RecordAccess, got {other:?}"),
         },
@@ -1756,7 +1759,9 @@ x xs =
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
             Expr::CaseOf { branches, .. } => {
-                assert!(matches!(&branches[0].pattern.value, Pattern::List(elems) if elems.len() == 3));
+                assert!(
+                    matches!(&branches[0].pattern.value, Pattern::List(elems) if elems.len() == 3)
+                );
             }
             other => panic!("expected CaseOf, got {other:?}"),
         },

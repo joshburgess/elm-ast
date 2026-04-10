@@ -214,14 +214,14 @@ fn every_rule_fires_on_real_code() {
     // Rules that might not fire on well-written real code are exempt.
     // These are checked via synthetic snippets in each_rule_fires_on_something.
     let exempt = [
-        "NoDebug",              // well-maintained packages don't ship Debug.log
-        "NoBooleanCase",        // uncommon pattern
-        "NoIfTrueFalse",        // uncommon pattern
-        "NoRedundantCons",      // uncommon pattern
-        "NoAlwaysIdentity",     // uncommon pattern
-        "NoEmptyLet",           // uncommon pattern
-        "NoEmptyRecordUpdate",  // uncommon pattern
-        "NoNestedNegation",     // uncommon pattern
+        "NoDebug",               // well-maintained packages don't ship Debug.log
+        "NoBooleanCase",         // uncommon pattern
+        "NoIfTrueFalse",         // uncommon pattern
+        "NoRedundantCons",       // uncommon pattern
+        "NoAlwaysIdentity",      // uncommon pattern
+        "NoEmptyLet",            // uncommon pattern
+        "NoEmptyRecordUpdate",   // uncommon pattern
+        "NoNestedNegation",      // uncommon pattern
         "NoWildcardPatternLast", // uncommon in well-written code
     ];
 
@@ -235,7 +235,11 @@ fn every_rule_fires_on_real_code() {
     eprintln!("Rule fire counts across 291 real files:");
     for rule in &all_rules {
         let count = hits.get(rule.name()).copied().unwrap_or(0);
-        let marker = if exempt.contains(&rule.name()) { " (exempt)" } else { "" };
+        let marker = if exempt.contains(&rule.name()) {
+            " (exempt)"
+        } else {
+            ""
+        };
         eprintln!("  {}: {}{}", rule.name(), count, marker);
     }
 

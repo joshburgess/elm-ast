@@ -12,11 +12,15 @@ use super::{ParseResult, Parser};
 
 // ── CPS types ────────────────────────────────────────────────────────
 
+/// A boxed continuation: given the parser and a completed sub-expression,
+/// produce the next step.
+type Cont = Box<dyn FnOnce(&mut Parser, Spanned<Expr>) -> ParseResult<Step>>;
+
 /// A step in the CPS trampoline. Either we have a finished expression,
 /// or we need a sub-expression and have a continuation to resume with.
 enum Step {
     Done(Spanned<Expr>),
-    NeedExpr(Box<dyn FnOnce(&mut Parser, Spanned<Expr>) -> ParseResult<Step>>),
+    NeedExpr(Cont),
 }
 
 // ── Helper structs ───────────────────────────────────────────────────
@@ -54,8 +58,7 @@ enum RecordContext {
 /// This guarantees O(1) call-stack depth regardless of expression
 /// nesting. The continuation stack size is bounded by `MAX_EXPR_DEPTH`.
 pub fn parse_expr(p: &mut Parser) -> ParseResult<Spanned<Expr>> {
-    let mut stack: Vec<Box<dyn FnOnce(&mut Parser, Spanned<Expr>) -> ParseResult<Step>>> =
-        Vec::new();
+    let mut stack: Vec<Cont> = Vec::new();
 
     'outer: loop {
         let step = parse_binary_expr_cps(p)?;
@@ -172,11 +175,7 @@ fn binary_loop(
 }
 
 /// Wrapper: when a compound form produces its operand, resume the binary loop.
-fn binary_after_operand(
-    p: &mut Parser,
-    step: Step,
-    pending: Vec<PendingOp>,
-) -> ParseResult<Step> {
+fn binary_after_operand(p: &mut Parser, step: Step, pending: Vec<PendingOp>) -> ParseResult<Step> {
     match step {
         Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
             let step = cont(p, sub_expr)?;
@@ -917,9 +916,7 @@ fn parse_paren_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
             p.skip_whitespace();
             if matches!(p.peek(), Token::RightParen) {
                 p.advance();
-                return Ok(Step::Done(
-                    p.spanned_from(start, Expr::PrefixOperator(op)),
-                ));
+                return Ok(Step::Done(p.spanned_from(start, Expr::PrefixOperator(op))));
             }
             return Err(p.error("expected `)` after operator in prefix expression"));
         }
@@ -948,11 +945,7 @@ fn parse_paren_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
     })))
 }
 
-fn paren_after_first(
-    p: &mut Parser,
-    start: Position,
-    first: Spanned<Expr>,
-) -> ParseResult<Step> {
+fn paren_after_first(p: &mut Parser, start: Position, first: Spanned<Expr>) -> ParseResult<Step> {
     p.skip_whitespace();
     match p.peek() {
         Token::Comma => {
@@ -1054,12 +1047,7 @@ fn parse_record_expr_cps(p: &mut Parser) -> ParseResult<Step> {
             p.skip_whitespace();
             if matches!(p.peek(), Token::Pipe) {
                 p.advance(); // consume `|`
-                return record_parse_setter(
-                    p,
-                    start,
-                    Vec::new(),
-                    RecordContext::Update(base_name),
-                );
+                return record_parse_setter(p, start, Vec::new(), RecordContext::Update(base_name));
             }
             // Not a record update — backtrack.
             p.pos = save_pos;
@@ -1109,9 +1097,9 @@ fn record_after_value(
     } else {
         p.expect(&Token::RightBrace)?;
         match context {
-            RecordContext::Plain => Ok(Step::Done(
-                p.spanned_from(rec_start, Expr::Record(setters)),
-            )),
+            RecordContext::Plain => {
+                Ok(Step::Done(p.spanned_from(rec_start, Expr::Record(setters))))
+            }
             RecordContext::Update(base) => Ok(Step::Done(p.spanned_from(
                 rec_start,
                 Expr::RecordUpdate {

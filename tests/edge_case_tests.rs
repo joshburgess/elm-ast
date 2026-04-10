@@ -1046,7 +1046,10 @@ fn depth_limit_returns_error_instead_of_stack_overflow() {
     }
     src.push('\n');
     let result = parse(&src);
-    assert!(result.is_err(), "257-deep nesting should be rejected by depth limit");
+    assert!(
+        result.is_err(),
+        "257-deep nesting should be rejected by depth limit"
+    );
     let err = result.unwrap_err();
     assert!(
         err.iter().any(|e| e.message.contains("nesting too deep")),
@@ -1654,14 +1657,7 @@ fn binops_construct_and_print() {
     });
 
     // Build a module containing this expression
-    let m = builder::module(
-        vec!["Main"],
-        vec![builder::func(
-            "x",
-            vec![],
-            binops_expr,
-        )],
-    );
+    let m = builder::module(vec!["Main"], vec![builder::func("x", vec![], binops_expr)]);
 
     let output = elm_ast::print::print(&m);
     // The printer wraps BinOps in parens when in atomic position
@@ -1690,10 +1686,7 @@ fn binops_visitor_traversal() {
         final_operand: Box::new(Spanned::dummy(Expr::Literal(Literal::Int(3)))),
     });
 
-    let m = builder::module(
-        vec!["Main"],
-        vec![builder::func("x", vec![], binops_expr)],
-    );
+    let m = builder::module(vec!["Main"], vec![builder::func("x", vec![], binops_expr)]);
 
     struct LiteralCounter(usize);
     impl Visit for LiteralCounter {
@@ -1704,7 +1697,10 @@ fn binops_visitor_traversal() {
 
     let mut counter = LiteralCounter(0);
     counter.visit_module(&m);
-    assert_eq!(counter.0, 3, "should visit all 3 operand literals in BinOps");
+    assert_eq!(
+        counter.0, 3,
+        "should visit all 3 operand literals in BinOps"
+    );
 }
 
 #[test]
@@ -1719,10 +1715,7 @@ fn binops_fold_traversal() {
         final_operand: Box::new(Spanned::dummy(Expr::Literal(Literal::Int(20)))),
     });
 
-    let m = builder::module(
-        vec!["Main"],
-        vec![builder::func("x", vec![], binops_expr)],
-    );
+    let m = builder::module(vec!["Main"], vec![builder::func("x", vec![], binops_expr)]);
 
     // Fold that doubles all integers
     struct IntDoubler;
@@ -1746,7 +1739,10 @@ fn binops_fold_traversal() {
             } => {
                 // First operand should be 20 (10 * 2)
                 assert!(
-                    matches!(&operands_and_operators[0].0.value, Expr::Literal(Literal::Int(20))),
+                    matches!(
+                        &operands_and_operators[0].0.value,
+                        Expr::Literal(Literal::Int(20))
+                    ),
                     "first operand should be 20"
                 );
                 // Final operand should be 40 (20 * 2)
@@ -1768,7 +1764,10 @@ fn builder_app() {
     let expr = builder::app(builder::var("f"), vec![builder::int(1), builder::int(2)]);
     let m = builder::module(vec!["Main"], vec![builder::func("x", vec![], expr)]);
     let output = elm_ast::print::print(&m);
-    assert!(output.contains("f 1 2"), "app should print as `f 1 2`. Got:\n{output}");
+    assert!(
+        output.contains("f 1 2"),
+        "app should print as `f 1 2`. Got:\n{output}"
+    );
     parse_ok(&output);
 }
 
@@ -1780,7 +1779,10 @@ fn builder_lambda() {
     );
     let m = builder::module(vec!["Main"], vec![builder::func("x", vec![], expr)]);
     let output = elm_ast::print::print(&m);
-    assert!(output.contains("\\a b ->"), "lambda should print args. Got:\n{output}");
+    assert!(
+        output.contains("\\a b ->"),
+        "lambda should print args. Got:\n{output}"
+    );
     parse_ok(&output);
 }
 
@@ -1789,7 +1791,10 @@ fn builder_list() {
     let expr = builder::list(vec![builder::int(1), builder::int(2), builder::int(3)]);
     let m = builder::module(vec!["Main"], vec![builder::func("x", vec![], expr)]);
     let output = elm_ast::print::print(&m);
-    assert!(output.contains("[ 1, 2, 3 ]"), "list should format. Got:\n{output}");
+    assert!(
+        output.contains("[ 1, 2, 3 ]"),
+        "list should format. Got:\n{output}"
+    );
     parse_ok(&output);
 }
 
@@ -1798,7 +1803,10 @@ fn builder_tuple() {
     let expr = builder::tuple(vec![builder::int(1), builder::string("hello")]);
     let m = builder::module(vec!["Main"], vec![builder::func("x", vec![], expr)]);
     let output = elm_ast::print::print(&m);
-    assert!(output.contains("( 1, \"hello\" )"), "tuple should format. Got:\n{output}");
+    assert!(
+        output.contains("( 1, \"hello\" )"),
+        "tuple should format. Got:\n{output}"
+    );
     parse_ok(&output);
 }
 
@@ -1810,8 +1818,14 @@ fn builder_record() {
     ]);
     let m = builder::module(vec!["Main"], vec![builder::func("x", vec![], expr)]);
     let output = elm_ast::print::print(&m);
-    assert!(output.contains("name ="), "record should have field names. Got:\n{output}");
-    assert!(output.contains("\"Alice\""), "record should have values. Got:\n{output}");
+    assert!(
+        output.contains("name ="),
+        "record should have field names. Got:\n{output}"
+    );
+    assert!(
+        output.contains("\"Alice\""),
+        "record should have values. Got:\n{output}"
+    );
     parse_ok(&output);
 }
 
@@ -1846,8 +1860,14 @@ greet name = \"Hello, \" ++ name
     let output = elm_ast::print::print(&m);
     let m2 = parse_ok(&output);
     assert_eq!(m2.declarations.len(), 2);
-    assert!(output.contains("z + y"), "should have renamed x to z. Got:\n{output}");
-    assert!(!output.contains("x +"), "should not have original x in body. Got:\n{output}");
+    assert!(
+        output.contains("z + y"),
+        "should have renamed x to z. Got:\n{output}"
+    );
+    assert!(
+        !output.contains("x +"),
+        "should not have original x in body. Got:\n{output}"
+    );
 
     // Second round-trip: print again and verify idempotent
     let output2 = elm_ast::print::print(&m2);
@@ -1941,7 +1961,10 @@ update msg model =
     // The deserialized AST should print identically to the original
     let output1 = elm_ast::print::print(&m);
     let output2 = elm_ast::print::print(&m2);
-    assert_eq!(output1, output2, "serde round-trip should preserve print output");
+    assert_eq!(
+        output1, output2,
+        "serde round-trip should preserve print output"
+    );
 }
 
 #[test]
@@ -1994,7 +2017,10 @@ add x y = x + y
     let printed = elm_ast::print::print(&m2);
     let m3 = parse_ok(&printed);
     let printed2 = elm_ast::print::print(&m3);
-    assert_eq!(printed, printed2, "parse→serialize→deserialize→print→parse→print should be idempotent");
+    assert_eq!(
+        printed, printed2,
+        "parse→serialize→deserialize→print→parse→print should be idempotent"
+    );
 }
 
 // ── Display impls: independent tests ────────────────────────────────
@@ -2002,7 +2028,10 @@ add x y = x + y
 #[test]
 fn display_expr_literal() {
     assert_eq!(format!("{}", Expr::Literal(Literal::Int(42))), "42");
-    assert_eq!(format!("{}", Expr::Literal(Literal::String("hi".into()))), "\"hi\"");
+    assert_eq!(
+        format!("{}", Expr::Literal(Literal::String("hi".into()))),
+        "\"hi\""
+    );
     assert_eq!(format!("{}", Expr::Literal(Literal::Char('a'))), "'a'");
     assert_eq!(format!("{}", Expr::Unit), "()");
 }
@@ -2029,7 +2058,10 @@ fn display_expr_list() {
         Spanned::dummy(Expr::Literal(Literal::Int(2))),
     ]);
     let output = format!("{list}");
-    assert!(output.contains("1") && output.contains("2"), "list display: {output}");
+    assert!(
+        output.contains("1") && output.contains("2"),
+        "list display: {output}"
+    );
 }
 
 #[test]
@@ -2037,18 +2069,12 @@ fn display_pattern_variants() {
     assert_eq!(format!("{}", Pattern::Anything), "_");
     assert_eq!(format!("{}", Pattern::Var("x".into())), "x");
     assert_eq!(format!("{}", Pattern::Unit), "()");
-    assert_eq!(
-        format!("{}", Pattern::Literal(Literal::Int(42))),
-        "42"
-    );
+    assert_eq!(format!("{}", Pattern::Literal(Literal::Int(42))), "42");
 }
 
 #[test]
 fn display_type_annotation_variants() {
-    assert_eq!(
-        format!("{}", TypeAnnotation::GenericType("a".into())),
-        "a"
-    );
+    assert_eq!(format!("{}", TypeAnnotation::GenericType("a".into())), "a");
     assert_eq!(format!("{}", TypeAnnotation::Unit), "()");
 
     let typed = TypeAnnotation::Typed {
@@ -2072,7 +2098,10 @@ fn display_declaration() {
 fn display_module() {
     let m = parse_ok("module Main exposing (..)\n\nx = 1");
     let output = format!("{m}");
-    assert!(output.contains("module Main exposing"), "module display: {output}");
+    assert!(
+        output.contains("module Main exposing"),
+        "module display: {output}"
+    );
     assert!(output.contains("x ="), "module display: {output}");
 }
 
@@ -2145,7 +2174,10 @@ x =
 ";
     let m = parse_ok(src);
     let output1 = elm_ast::print::print(&m);
-    assert!(output1.contains("-- helper value"), "first print should contain comment");
+    assert!(
+        output1.contains("-- helper value"),
+        "first print should contain comment"
+    );
     let m2 = parse_ok(&output1);
     let output2 = elm_ast::print::print(&m2);
     assert_eq!(output1, output2, "let-in comment should survive round-trip");
@@ -2168,7 +2200,10 @@ x y =
 ";
     let m = parse_ok(src);
     let output1 = elm_ast::print::print(&m);
-    assert!(output1.contains("-- handle false case"), "first print should contain comment");
+    assert!(
+        output1.contains("-- handle false case"),
+        "first print should contain comment"
+    );
     let m2 = parse_ok(&output1);
     let output2 = elm_ast::print::print(&m2);
     assert_eq!(output1, output2, "case comment should survive round-trip");
@@ -2226,8 +2261,8 @@ x y =
 
 #[test]
 fn visit_comments_on_let_declarations() {
-    use elm_ast::visit::Visit;
     use elm_ast::comment::Comment;
+    use elm_ast::visit::Visit;
 
     let src = "\
 module Main exposing (..)
@@ -2268,8 +2303,8 @@ x =
 
 #[test]
 fn visit_comments_on_case_branch_patterns() {
-    use elm_ast::visit::Visit;
     use elm_ast::comment::Comment;
+    use elm_ast::visit::Visit;
 
     let src = "\
 module Main exposing (..)
@@ -2300,7 +2335,10 @@ x y =
     let mut collector = CommentCollector(vec![]);
     collector.visit_module(&m);
     assert!(
-        collector.0.iter().any(|c| c.contains("false branch comment")),
+        collector
+            .0
+            .iter()
+            .any(|c| c.contains("false branch comment")),
         "visitor should find comment on case branch pattern, got: {:?}",
         collector.0
     );
@@ -2349,7 +2387,11 @@ fn deeply_nested_mixed_expressions() {
     }
     // The point is: this should parse without stack overflow
     let result = parse(&src);
-    assert!(result.is_ok(), "deeply nested mixed expressions should parse: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "deeply nested mixed expressions should parse: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -2469,8 +2511,13 @@ fn error_at_depth_boundary() {
         src_err.push_str(" )");
     }
     let result = parse(&src_err);
-    assert!(result.is_err(), "257 levels of nesting should exceed depth limit");
+    assert!(
+        result.is_err(),
+        "257 levels of nesting should exceed depth limit"
+    );
     let err_msg = format!("{:?}", result.unwrap_err());
-    assert!(err_msg.contains("nesting too deep"), "error should mention depth: {err_msg}");
+    assert!(
+        err_msg.contains("nesting too deep"),
+        "error should mention depth: {err_msg}"
+    );
 }
-
