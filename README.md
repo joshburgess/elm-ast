@@ -55,7 +55,7 @@ add x y = x + y
 "#;
 
 // Parse
-let module = parse(source).unwrap();
+let module = parse(source)?;
 
 // Inspect
 println!("{} declarations", module.declarations.len());
@@ -190,9 +190,9 @@ println!("{m}"); // prints valid Elm
 With the `serde` feature, all AST types support JSON serialization:
 
 ```rust
-let module = elm_ast::parse(source).unwrap();
-let json = serde_json::to_string_pretty(&module).unwrap();
-let module2: elm_ast::ElmModule = serde_json::from_str(&json).unwrap();
+let module = elm_ast::parse(source)?;
+let json = serde_json::to_string_pretty(&module)?;
+let module2: elm_ast::ElmModule = serde_json::from_str(&json)?;
 ```
 
 ## Architecture
