@@ -6,6 +6,7 @@ pub mod no_confusing_prefix_operator;
 pub mod no_debug;
 pub mod no_deprecated;
 pub mod no_duplicate_ports;
+pub mod no_unused_dependencies;
 pub mod no_empty_let;
 pub mod no_empty_list_concat;
 pub mod no_empty_record_update;
@@ -117,5 +118,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(no_unsafe_ports::NoUnsafePorts),
         // Config-driven rules.
         Box::new(no_inconsistent_aliases::NoInconsistentAliases::default()),
+        // Project-level: elm.json dependency check.
+        Box::new(no_unused_dependencies::NoUnusedDependencies),
     ]
 }

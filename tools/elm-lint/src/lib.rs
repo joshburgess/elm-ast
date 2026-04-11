@@ -2,6 +2,7 @@
 
 pub mod collect;
 pub mod config;
+pub mod elm_json;
 pub mod fix;
 pub mod output;
 pub mod rule;

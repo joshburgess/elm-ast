@@ -9,6 +9,7 @@ use elm_ast::module_header::ModuleHeader;
 use elm_ast::parse::ParseError;
 use elm_lint::collect::{self, ModuleInfo};
 use elm_lint::config::Config;
+use elm_lint::elm_json;
 use elm_lint::rule::{LintError, ProjectContext, Rule};
 use elm_lint::rules;
 
@@ -146,7 +147,10 @@ impl ServerState {
 
         all_names.sort();
         self.all_module_names = all_names;
-        self.project_context = Some(ProjectContext::build(module_infos));
+
+        let elm_json_info = elm_json::load_elm_json(&self.workspace_root).ok();
+        self.project_context =
+            Some(ProjectContext::build_with_elm_json(module_infos, elm_json_info));
     }
 
     /// Get the active rules, respecting config disable settings.

@@ -4,6 +4,7 @@ use elm_ast::file::ElmModule;
 use elm_ast::span::Span;
 
 use crate::collect::{ImportExposingInfo, ModuleInfo};
+use crate::elm_json::ElmJsonInfo;
 
 /// A structured auto-fix: one or more source edits that resolve a lint error.
 #[derive(Debug, Clone)]
@@ -81,11 +82,21 @@ pub struct ProjectContext {
     pub imported_from: HashMap<String, HashSet<String>>,
     /// For each module name, the set of module names that import it.
     pub importers: HashMap<String, HashSet<String>>,
+    /// Parsed elm.json info (dependencies), if available.
+    pub elm_json: Option<ElmJsonInfo>,
 }
 
 impl ProjectContext {
     /// Build a `ProjectContext` from a map of module names to their collected info.
     pub fn build(modules: HashMap<String, ModuleInfo>) -> Self {
+        Self::build_with_elm_json(modules, None)
+    }
+
+    /// Build a `ProjectContext` with optional elm.json info.
+    pub fn build_with_elm_json(
+        modules: HashMap<String, ModuleInfo>,
+        elm_json: Option<ElmJsonInfo>,
+    ) -> Self {
         let mut imported_from: HashMap<String, HashSet<String>> = HashMap::new();
         let mut importers: HashMap<String, HashSet<String>> = HashMap::new();
 
@@ -130,6 +141,7 @@ impl ProjectContext {
             modules,
             imported_from,
             importers,
+            elm_json,
         }
     }
 }

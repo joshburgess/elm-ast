@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use elm_ast::parse;
 use elm_lint::collect::collect_module_info;
+use elm_lint::elm_json::ElmJsonInfo;
 use elm_lint::fix::apply_fixes;
 use elm_lint::rule::{LintContext, LintError, ProjectContext, Rule};
 use elm_lint::rules;
@@ -1952,4 +1953,175 @@ fn cognitive_complexity_respects_config() {
         &rule,
     );
     assert_eq!(errors, 1);
+}
+
+// ── NoUnusedDependencies ────────────────────────────────────────────
+
+fn lint_project_with_elm_json(
+    sources: &[(&str, &str)],
+    elm_json: ElmJsonInfo,
+    rule: &dyn Rule,
+) -> Vec<(String, String)> {
+    let mut parsed = Vec::new();
+    let mut module_infos = HashMap::new();
+
+    for (file_path, source) in sources {
+        let module =
+            parse(source).unwrap_or_else(|e| panic!("parse failed for {file_path}: {e:?}"));
+        let info = collect_module_info(&module);
+        let mod_name = info.module_name.join(".");
+        module_infos.insert(mod_name.clone(), info);
+        parsed.push((file_path.to_string(), mod_name, module, source.to_string()));
+    }
+
+    let project_context = ProjectContext::build_with_elm_json(module_infos, Some(elm_json));
+    let project_modules: Vec<String> = project_context.modules.keys().cloned().collect();
+
+    let mut results = Vec::new();
+    for (file_path, mod_name, module, source) in &parsed {
+        let ctx = LintContext {
+            module,
+            source,
+            file_path,
+            project_modules: &project_modules,
+            module_info: project_context.modules.get(mod_name),
+            project: Some(&project_context),
+        };
+        for error in rule.check(&ctx) {
+            results.push((file_path.clone(), error.message));
+        }
+    }
+    results
+}
+
+#[test]
+fn no_unused_dependencies_flags_unused() {
+    let mut deps = HashMap::new();
+    deps.insert("elm/core".to_string(), "1.0.5".to_string());
+    deps.insert("elm/json".to_string(), "1.1.3".to_string());
+    deps.insert("elm/html".to_string(), "1.0.0".to_string());
+
+    let elm_json = ElmJsonInfo {
+        direct_deps: deps,
+        is_application: true,
+    };
+
+    // Only imports Html, not Json.Decode/Json.Encode.
+    let results = lint_project_with_elm_json(
+        &[(
+            "Main.elm",
+            "module Main exposing (..)\n\nimport Html\n\nview = Html.text \"hello\"",
+        )],
+        elm_json,
+        &rules::no_unused_dependencies::NoUnusedDependencies,
+    );
+
+    assert_eq!(results.len(), 1);
+    assert!(results[0].1.contains("elm/json"));
+}
+
+#[test]
+fn no_unused_dependencies_passes_all_used() {
+    let mut deps = HashMap::new();
+    deps.insert("elm/core".to_string(), "1.0.5".to_string());
+    deps.insert("elm/json".to_string(), "1.1.3".to_string());
+    deps.insert("elm/html".to_string(), "1.0.0".to_string());
+
+    let elm_json = ElmJsonInfo {
+        direct_deps: deps,
+        is_application: true,
+    };
+
+    let results = lint_project_with_elm_json(
+        &[(
+            "Main.elm",
+            "module Main exposing (..)\n\nimport Html\nimport Json.Decode\n\nview = Html.text \"hello\"",
+        )],
+        elm_json,
+        &rules::no_unused_dependencies::NoUnusedDependencies,
+    );
+
+    assert_eq!(results.len(), 0);
+}
+
+#[test]
+fn no_unused_dependencies_skips_elm_core() {
+    let mut deps = HashMap::new();
+    deps.insert("elm/core".to_string(), "1.0.5".to_string());
+
+    let elm_json = ElmJsonInfo {
+        direct_deps: deps,
+        is_application: true,
+    };
+
+    // Even with no explicit imports, elm/core is never flagged.
+    let results = lint_project_with_elm_json(
+        &[(
+            "Main.elm",
+            "module Main exposing (..)\n\nx = 1",
+        )],
+        elm_json,
+        &rules::no_unused_dependencies::NoUnusedDependencies,
+    );
+
+    assert_eq!(results.len(), 0);
+}
+
+#[test]
+fn no_unused_dependencies_skips_unknown_packages() {
+    let mut deps = HashMap::new();
+    deps.insert("elm/core".to_string(), "1.0.5".to_string());
+    deps.insert("some/unknown-package".to_string(), "1.0.0".to_string());
+
+    let elm_json = ElmJsonInfo {
+        direct_deps: deps,
+        is_application: true,
+    };
+
+    // Unknown packages are skipped (no false positives).
+    let results = lint_project_with_elm_json(
+        &[(
+            "Main.elm",
+            "module Main exposing (..)\n\nx = 1",
+        )],
+        elm_json,
+        &rules::no_unused_dependencies::NoUnusedDependencies,
+    );
+
+    assert_eq!(results.len(), 0);
+}
+
+#[test]
+fn no_unused_dependencies_reports_once_not_per_file() {
+    let mut deps = HashMap::new();
+    deps.insert("elm/core".to_string(), "1.0.5".to_string());
+    deps.insert("elm/http".to_string(), "2.0.0".to_string());
+
+    let elm_json = ElmJsonInfo {
+        direct_deps: deps,
+        is_application: true,
+    };
+
+    // Two modules, neither imports Http — should report once, not twice.
+    let results = lint_project_with_elm_json(
+        &[
+            ("A.elm", "module A exposing (..)\n\nx = 1"),
+            ("B.elm", "module B exposing (..)\n\ny = 2"),
+        ],
+        elm_json,
+        &rules::no_unused_dependencies::NoUnusedDependencies,
+    );
+
+    assert_eq!(results.len(), 1);
+    assert!(results[0].1.contains("elm/http"));
+}
+
+#[test]
+fn no_unused_dependencies_no_elm_json_passes() {
+    // Without elm.json info, the rule does nothing.
+    let results = lint_project(
+        &[("Main.elm", "module Main exposing (..)\n\nx = 1")],
+        &rules::no_unused_dependencies::NoUnusedDependencies,
+    );
+    assert_eq!(results.len(), 0);
 }

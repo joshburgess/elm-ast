@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use elm_ast::parse;
 use elm_lint::collect::collect_module_info;
+use elm_lint::elm_json::ElmJsonInfo;
 use elm_lint::rule::{LintContext, ProjectContext, Rule};
 use elm_lint::rules;
 
@@ -265,6 +266,7 @@ fn every_rule_fires_on_real_code() {
         "NoDuplicatePorts",               // requires project context with multiple port modules
         "NoUnsafePorts",                  // requires port declarations (rare in packages)
         "NoInconsistentAliases",          // requires per-rule config to do anything
+        "NoUnusedDependencies",           // requires elm.json (not available in test fixtures)
     ];
 
     // If no fixture files are available, skip gracefully.
@@ -634,6 +636,45 @@ foo x =
         assert!(
             !errors.is_empty(),
             "rule NoInconsistentAliases should fire on test input but produced 0 errors"
+        );
+    }
+
+    // Test NoUnusedDependencies separately — it needs elm.json + project context.
+    {
+        let mut deps = HashMap::new();
+        deps.insert("elm/core".to_string(), "1.0.5".to_string());
+        deps.insert("elm/json".to_string(), "1.1.3".to_string());
+        let elm_json = ElmJsonInfo {
+            direct_deps: deps,
+            is_application: true,
+        };
+
+        let source = "module Main exposing (..)\n\nx = 1";
+        let module = parse(source).unwrap();
+        let info = collect_module_info(&module);
+        let mod_name = info.module_name.join(".");
+        let mut module_infos = HashMap::new();
+        module_infos.insert(mod_name.clone(), info);
+        let project_context = ProjectContext::build_with_elm_json(module_infos, Some(elm_json));
+        let project_modules: Vec<String> = project_context.modules.keys().cloned().collect();
+
+        let ctx = LintContext {
+            module: &module,
+            source,
+            file_path: "Main.elm",
+            project_modules: &project_modules,
+            module_info: project_context.modules.get(&mod_name),
+            project: Some(&project_context),
+        };
+
+        let rule = all_rules
+            .iter()
+            .find(|r| r.name() == "NoUnusedDependencies")
+            .expect("NoUnusedDependencies not found");
+        let errors = rule.check(&ctx);
+        assert!(
+            !errors.is_empty(),
+            "rule NoUnusedDependencies should fire on test input but produced 0 errors"
         );
     }
 }

@@ -11,6 +11,7 @@ use rayon::prelude::*;
 
 use elm_lint::collect::collect_module_info;
 use elm_lint::config::Config;
+use elm_lint::elm_json;
 use elm_lint::fix::apply_fixes;
 use elm_lint::output;
 use elm_lint::rule::{self, LintContext, ProjectContext};
@@ -251,8 +252,11 @@ fn run_lint(
         })
         .collect();
 
+    // Load elm.json for dependency checking.
+    let elm_json_info = elm_json::load_elm_json(Path::new(dir)).ok();
+
     // Phase 3: Build ProjectContext (sequential, single-shot aggregation).
-    let project_context = ProjectContext::build(module_infos);
+    let project_context = ProjectContext::build_with_elm_json(module_infos, elm_json_info);
 
     // Phase 4: Run all rules on all files in parallel.
     let results: Vec<(String, String, Vec<rule::LintError>)> = parsed

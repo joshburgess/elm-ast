@@ -167,6 +167,7 @@ Organized by the elm-review packages they replace. Rules marked with (fix) suppo
 - [x] **NoDuplicatePorts** — port name declared in more than one module (causes runtime errors)
 - [x] **NoUnsafePorts** — port signature uses non-JSON-compatible types (custom types, type variables, functions)
 - [x] **NoInconsistentAliases** — import alias doesn't match project's canonical alias (configured in elm-assist.toml)
+- [x] **NoUnusedDependencies** — dependency in elm.json with no modules imported anywhere in the project
 
 ## Implementation phases
 
@@ -273,7 +274,7 @@ No editor-specific code needed beyond VS Code (which gets a dedicated extension 
 
 - Single binary, no runtime dependencies
 - Sub-second analysis on projects with 100+ modules
-- 53 rules covering the most popular elm-review packages
+- 54 rules covering the most popular elm-review packages
 - Auto-fix for 23 rules
 - Drop-in usable for most Elm projects without configuration
 - LSP server with real-time diagnostics and code actions
