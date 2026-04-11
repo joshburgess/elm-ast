@@ -1719,3 +1719,126 @@ fn no_recursive_update_passes_non_update_function() {
     );
     assert_eq!(errors, 0);
 }
+
+// ── NoDuplicatePorts ────────────────────────────────────────────────
+
+#[test]
+fn no_duplicate_ports_flags_duplicate() {
+    let results = lint_project(
+        &[
+            (
+                "Ports/A.elm",
+                "port module Ports.A exposing (..)\n\nport sendMessage : String -> Cmd msg",
+            ),
+            (
+                "Ports/B.elm",
+                "port module Ports.B exposing (..)\n\nport sendMessage : String -> Cmd msg",
+            ),
+        ],
+        &rules::no_duplicate_ports::NoDuplicatePorts,
+    );
+    // Both modules should be flagged.
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().all(|(_, msg)| msg.contains("sendMessage")));
+}
+
+#[test]
+fn no_duplicate_ports_passes_unique_names() {
+    let results = lint_project(
+        &[
+            (
+                "Ports/A.elm",
+                "port module Ports.A exposing (..)\n\nport sendMessage : String -> Cmd msg",
+            ),
+            (
+                "Ports/B.elm",
+                "port module Ports.B exposing (..)\n\nport receiveMessage : (String -> msg) -> Sub msg",
+            ),
+        ],
+        &rules::no_duplicate_ports::NoDuplicatePorts,
+    );
+    assert_eq!(results.len(), 0);
+}
+
+#[test]
+fn no_duplicate_ports_passes_no_ports() {
+    let errors = lint_count(
+        "module Main exposing (..)\n\nx = 1",
+        &rules::no_duplicate_ports::NoDuplicatePorts,
+    );
+    assert_eq!(errors, 0);
+}
+
+// ── NoUnsafePorts ───────────────────────────────────────────────────
+
+#[test]
+fn no_unsafe_ports_flags_custom_type() {
+    let errors = lint_count(
+        "port module T exposing (..)\n\ntype Msg = Click\n\nport sendMsg : Msg -> Cmd msg",
+        &rules::no_unsafe_ports::NoUnsafePorts,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_unsafe_ports_flags_type_variable() {
+    let errors = lint_count(
+        "port module T exposing (..)\n\nport sendData : a -> Cmd msg",
+        &rules::no_unsafe_ports::NoUnsafePorts,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_unsafe_ports_passes_safe_types() {
+    let errors = lint_count(
+        "port module T exposing (..)\n\nport sendString : String -> Cmd msg",
+        &rules::no_unsafe_ports::NoUnsafePorts,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn no_unsafe_ports_passes_json_value() {
+    let errors = lint_count(
+        "port module T exposing (..)\n\nport sendValue : Json.Encode.Value -> Cmd msg",
+        &rules::no_unsafe_ports::NoUnsafePorts,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn no_unsafe_ports_passes_record() {
+    let errors = lint_count(
+        "port module T exposing (..)\n\nport sendData : { name : String, age : Int } -> Cmd msg",
+        &rules::no_unsafe_ports::NoUnsafePorts,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn no_unsafe_ports_passes_list() {
+    let errors = lint_count(
+        "port module T exposing (..)\n\nport sendItems : List String -> Cmd msg",
+        &rules::no_unsafe_ports::NoUnsafePorts,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn no_unsafe_ports_flags_incoming_custom_type() {
+    let errors = lint_count(
+        "port module T exposing (..)\n\ntype Payload = Data\n\nport onData : (Payload -> msg) -> Sub msg",
+        &rules::no_unsafe_ports::NoUnsafePorts,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_unsafe_ports_passes_incoming_safe() {
+    let errors = lint_count(
+        "port module T exposing (..)\n\nport onMessage : (String -> msg) -> Sub msg",
+        &rules::no_unsafe_ports::NoUnsafePorts,
+    );
+    assert_eq!(errors, 0);
+}

@@ -5,6 +5,7 @@ pub mod no_boolean_case;
 pub mod no_confusing_prefix_operator;
 pub mod no_debug;
 pub mod no_deprecated;
+pub mod no_duplicate_ports;
 pub mod no_empty_let;
 pub mod no_empty_list_concat;
 pub mod no_empty_record_update;
@@ -37,6 +38,7 @@ pub mod no_todo_comment;
 pub mod no_unnecessary_parens;
 pub mod no_unnecessary_port_module;
 pub mod no_unnecessary_trailing_underscore;
+pub mod no_unsafe_ports;
 pub mod no_unoptimized_recursion;
 pub mod no_unused_custom_type_constructor_args;
 pub mod no_unused_custom_type_constructors;
@@ -109,5 +111,8 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(no_redundantly_qualified_type::NoRedundantlyQualifiedType),
         Box::new(no_unoptimized_recursion::NoUnoptimizedRecursion),
         Box::new(no_recursive_update::NoRecursiveUpdate),
+        // Port rules.
+        Box::new(no_duplicate_ports::NoDuplicatePorts),
+        Box::new(no_unsafe_ports::NoUnsafePorts),
     ]
 }

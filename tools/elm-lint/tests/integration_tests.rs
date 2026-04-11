@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use elm_ast::parse;
-use elm_lint::rule::LintContext;
+use elm_lint::collect::collect_module_info;
+use elm_lint::rule::{LintContext, ProjectContext};
 use elm_lint::rules;
 
 fn find_elm_files(dir: &str) -> Vec<PathBuf> {
@@ -259,6 +261,9 @@ fn every_rule_fires_on_real_code() {
         "NoRedundantlyQualifiedType",     // uncommon in well-written code
         "NoUnoptimizedRecursion",         // uncommon pattern
         "NoRecursiveUpdate",              // only applies to TEA apps with `update`
+        // Port rules
+        "NoDuplicatePorts",               // requires project context with multiple port modules
+        "NoUnsafePorts",                  // requires port declarations (rare in packages)
     ];
 
     // If no fixture files are available, skip gracefully.
@@ -457,6 +462,10 @@ fn each_rule_fires_on_something() {
             "NoRecursiveUpdate",
             "module T exposing (..)\n\ntype Msg = Click | Reset\n\nupdate msg model =\n    case msg of\n        Click ->\n            model + 1\n        Reset ->\n            update Click 0",
         ),
+        (
+            "NoUnsafePorts",
+            "port module T exposing (..)\n\ntype Msg = Click\n\nport sendMsg : Msg -> Cmd msg",
+        ),
     ];
 
     // NoMaxLineLength needs special handling (long line)
@@ -560,6 +569,44 @@ foo x =
         assert!(
             !errors.is_empty(),
             "rule CognitiveComplexity should fire on test input but produced 0 errors"
+        );
+    }
+
+    // Test NoDuplicatePorts separately — it requires project context with two port modules.
+    {
+        let src_a = "port module Ports.A exposing (..)\n\nport sendMessage : String -> Cmd msg";
+        let src_b = "port module Ports.B exposing (..)\n\nport sendMessage : String -> Cmd msg";
+
+        let mod_a = parse(src_a).unwrap();
+        let mod_b = parse(src_b).unwrap();
+        let info_a = collect_module_info(&mod_a);
+        let info_b = collect_module_info(&mod_b);
+        let name_a = info_a.module_name.join(".");
+        let name_b = info_b.module_name.join(".");
+
+        let mut module_infos = HashMap::new();
+        module_infos.insert(name_a.clone(), info_a);
+        module_infos.insert(name_b.clone(), info_b);
+        let project_context = ProjectContext::build(module_infos);
+        let project_modules: Vec<String> = project_context.modules.keys().cloned().collect();
+
+        let ctx_a = LintContext {
+            module: &mod_a,
+            source: src_a,
+            file_path: "Ports/A.elm",
+            project_modules: &project_modules,
+            module_info: project_context.modules.get(&name_a),
+            project: Some(&project_context),
+        };
+
+        let rule = all_rules
+            .iter()
+            .find(|r| r.name() == "NoDuplicatePorts")
+            .expect("NoDuplicatePorts not found");
+        let errors = rule.check(&ctx_a);
+        assert!(
+            !errors.is_empty(),
+            "rule NoDuplicatePorts should fire on test input but produced 0 errors"
         );
     }
 }

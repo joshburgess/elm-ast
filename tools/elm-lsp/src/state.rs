@@ -284,6 +284,7 @@ fn clone_module_info(info: &ModuleInfo) -> ModuleInfo {
         defined_values: info.defined_values.clone(),
         defined_types: info.defined_types.clone(),
         defined_constructors: info.defined_constructors.clone(),
+        defined_ports: info.defined_ports.clone(),
         imports: info
             .imports
             .iter()

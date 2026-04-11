@@ -170,6 +170,11 @@ Organized by the elm-review packages they replace. Rules marked with (fix) suppo
 - [x] **NoUnoptimizedRecursion** — recursive function where not all recursive calls are in tail position
 - [x] **NoRecursiveUpdate** — `update` function calling itself recursively
 
+### Port safety rules
+
+- [x] **NoDuplicatePorts** — port name declared in more than one module (causes runtime errors)
+- [x] **NoUnsafePorts** — port signature uses non-JSON-compatible types (custom types, type variables, functions)
+
 ## Implementation phases
 
 ### Phase 1: Consolidate existing tools
@@ -275,7 +280,7 @@ No editor-specific code needed beyond VS Code (which gets a dedicated extension 
 
 - Single binary, no runtime dependencies
 - Sub-second analysis on projects with 100+ modules
-- 50 rules covering the most popular elm-review packages
+- 52 rules covering the most popular elm-review packages
 - Auto-fix for 23 rules
 - Drop-in usable for most Elm projects without configuration
 - LSP server with real-time diagnostics and code actions

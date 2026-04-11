@@ -28,6 +28,9 @@ pub struct ModuleInfo {
     /// Custom type constructors defined in this module.
     pub defined_constructors: HashMap<String, String>, // constructor -> parent type
 
+    /// Port names defined in this module.
+    pub defined_ports: HashSet<String>,
+
     /// Imported modules: module_name -> (alias, exposing)
     pub imports: Vec<ImportInfo>,
 
@@ -85,6 +88,7 @@ pub fn collect_module_info(module: &ElmModule) -> ModuleInfo {
     let mut defined_values = HashSet::new();
     let mut defined_types = HashSet::new();
     let mut defined_constructors = HashMap::new();
+    let mut defined_ports = HashSet::new();
 
     for decl in &module.declarations {
         match &decl.value {
@@ -103,6 +107,7 @@ pub fn collect_module_info(module: &ElmModule) -> ModuleInfo {
             }
             Declaration::PortDeclaration(sig) => {
                 defined_values.insert(sig.name.value.clone());
+                defined_ports.insert(sig.name.value.clone());
             }
             Declaration::InfixDeclaration(_) | Declaration::Destructuring { .. } => {}
         }
@@ -118,6 +123,7 @@ pub fn collect_module_info(module: &ElmModule) -> ModuleInfo {
         defined_values,
         defined_types,
         defined_constructors,
+        defined_ports,
         imports,
         used_values: collector.used_values,
         used_qualified: collector.used_qualified,
