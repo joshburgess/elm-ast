@@ -2,7 +2,7 @@ use elm_ast::expr::Expr;
 use elm_ast::node::Spanned;
 use elm_ast::visit::{self, Visit};
 
-use crate::rule::{LintContext, LintError, Rule, Severity};
+use crate::rule::{Fix, LintContext, LintError, Rule, Severity};
 
 /// Reports `let in` expressions with no declarations.
 pub struct NoEmptyLet;
@@ -17,29 +17,33 @@ impl Rule for NoEmptyLet {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintError> {
-        let mut visitor = LetVisitor(Vec::new());
+        let mut visitor = LetVisitor {
+            source: ctx.source,
+            errors: Vec::new(),
+        };
         visitor.visit_module(ctx.module);
-        visitor
-            .0
-            .into_iter()
-            .map(|span| LintError {
-                rule: self.name(),
-                    severity: Severity::Warning,
-                message: "Empty `let` expression — remove the `let ... in` wrapper".into(),
-                span,
-                fix: None,
-            })
-            .collect()
+        visitor.errors
     }
 }
 
-struct LetVisitor(Vec<elm_ast::span::Span>);
+struct LetVisitor<'a> {
+    source: &'a str,
+    errors: Vec<LintError>,
+}
 
-impl Visit for LetVisitor {
+impl Visit for LetVisitor<'_> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
-        if let Expr::LetIn { declarations, .. } = &expr.value {
+        if let Expr::LetIn { declarations, body } = &expr.value {
             if declarations.is_empty() {
-                self.0.push(expr.span);
+                let body_text =
+                    &self.source[body.span.start.offset..body.span.end.offset];
+                self.errors.push(LintError {
+                    rule: "NoEmptyLet",
+                    severity: Severity::Warning,
+                    message: "Empty `let` expression — remove the `let ... in` wrapper".into(),
+                    span: expr.span,
+                    fix: Some(Fix::replace(expr.span, body_text.to_string())),
+                });
             }
         }
         visit::walk_expr(self, expr);

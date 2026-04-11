@@ -5,7 +5,7 @@ use elm_ast::expr::{Expr, LetDeclaration};
 use elm_ast::node::Spanned;
 use elm_ast::pattern::Pattern;
 
-use crate::rule::{LintContext, LintError, Rule, Severity};
+use crate::rule::{Fix, LintContext, LintError, Rule, Severity};
 
 /// Reports let-bound variables that are never used.
 pub struct NoUnusedVariables;
@@ -65,13 +65,13 @@ fn check_expr(expr: &Spanned<Expr>, errors: &mut Vec<LintError>) {
         }
 
         for (name, span) in &defined {
-            if !refs.contains(name) {
+            if !refs.contains(name) && !name.starts_with('_') {
                 errors.push(LintError {
                     rule: "NoUnusedVariables",
                     severity: Severity::Warning,
                     message: format!("Let binding `{name}` is never used"),
                     span: *span,
-                    fix: None,
+                    fix: Some(Fix::replace(*span, format!("_{name}"))),
                 });
             }
         }

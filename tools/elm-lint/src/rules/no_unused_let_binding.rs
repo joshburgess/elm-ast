@@ -4,7 +4,8 @@ use elm_ast::expr::{Expr, LetDeclaration};
 use elm_ast::node::Spanned;
 use elm_ast::visit::{self, Visit};
 
-use crate::rule::{LintContext, LintError, Rule, Severity};
+use crate::fix::remove_line;
+use crate::rule::{Edit, Fix, LintContext, LintError, Rule, Severity};
 
 /// Reports let bindings that are never referenced in the body.
 pub struct NoUnusedLetBinding;
@@ -20,6 +21,7 @@ impl Rule for NoUnusedLetBinding {
 
     fn check(&self, ctx: &LintContext) -> Vec<LintError> {
         let mut visitor = LetVisitor {
+            source: ctx.source,
             errors: Vec::new(),
         };
         visitor.visit_module(ctx.module);
@@ -27,7 +29,8 @@ impl Rule for NoUnusedLetBinding {
     }
 }
 
-struct LetVisitor {
+struct LetVisitor<'a> {
+    source: &'a str,
     errors: Vec<LintError>,
 }
 
@@ -55,7 +58,7 @@ fn collect_refs(expr: &Spanned<Expr>) -> HashSet<String> {
     collector.refs
 }
 
-impl Visit for LetVisitor {
+impl Visit for LetVisitor<'_> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         if let Expr::LetIn { declarations, body } = &expr.value {
             // Collect all names referenced in the body
@@ -97,12 +100,25 @@ impl Visit for LetVisitor {
                     }
 
                     if !used_in_other_decls {
+                        let fix = if declarations.len() == 1 {
+                            // Only binding — replace entire let-in with body.
+                            let body_text =
+                                &self.source[body.span.start.offset..body.span.end.offset];
+                            Some(Fix::replace(expr.span, body_text.to_string()))
+                        } else {
+                            // Multiple bindings — remove just this declaration.
+                            let remove = Edit::Remove { span };
+                            Some(Fix {
+                                edits: vec![remove_line(self.source, &remove)],
+                            })
+                        };
+
                         self.errors.push(LintError {
                             rule: "NoUnusedLetBinding",
-                    severity: Severity::Warning,
+                            severity: Severity::Warning,
                             message: format!("Let binding `{name}` is never used"),
                             span,
-                            fix: None,
+                            fix,
                         });
                     }
                 }

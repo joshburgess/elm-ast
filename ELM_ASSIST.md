@@ -94,7 +94,7 @@ Organized by the elm-review packages they replace. Rules marked with (fix) suppo
 ### From jfmengels/elm-review-unused (elm-unused already covers most of these)
 
 - [x] **NoUnusedImports** (fix) — import statement where nothing from the module is used
-- [x] **NoUnusedVariables** — defined but never referenced
+- [x] **NoUnusedVariables** (fix) — defined but never referenced
 - [x] **NoUnusedExports** — exported but never imported by any other module in the project
 - [x] **NoUnusedCustomTypeConstructors** — constructor never used in patterns or expressions
 - [x] **NoUnusedCustomTypeConstructorArgs** — constructor argument that is always ignored with `_`
@@ -141,14 +141,14 @@ Organized by the elm-review packages they replace. Rules marked with (fix) suppo
 
 ### New rules (no elm-review equivalent)
 
-- [x] **NoEmptyLet** — `let in expr` with no bindings
-- [x] **NoEmptyRecordUpdate** — `{ record | }` with no fields
+- [x] **NoEmptyLet** (fix) — `let in expr` with no bindings
+- [x] **NoEmptyRecordUpdate** (fix) — `{ record | }` with no fields
 - [x] **NoNestedNegation** — `not (not x)` -> `x`
 - [x] **NoWildcardPatternLast** — catch-all `_` that shadows more specific patterns
 - [x] **NoMaxLineLength** — configurable line length limit
 - [x] **NoTodoComment** — `-- TODO` or `{- TODO -}` in source
 - [x] **NoRecordPatternInFunctionArgs** — `foo { x, y } = ...` -> `foo record = ... record.x ... record.y`
-- [x] **NoUnusedLetBinding** — let binding that is never referenced in the body
+- [x] **NoUnusedLetBinding** (fix) — let binding that is never referenced in the body
 - [x] **NoShadowing** — local binding that shadows an outer name
 
 ### Batch 2: Popular elm-review rules
@@ -275,7 +275,7 @@ No editor-specific code needed beyond VS Code (which gets a dedicated extension 
 - Single binary, no runtime dependencies
 - Sub-second analysis on projects with 100+ modules
 - 54 rules covering the most popular elm-review packages
-- Auto-fix for 23 rules
+- Auto-fix for 27 rules
 - Drop-in usable for most Elm projects without configuration
 - LSP server with real-time diagnostics and code actions
 - VS Code extension published on the marketplace

@@ -1378,6 +1378,41 @@ fn fix_unused_parameter() {
     assert!(fixed.contains("foo _ = 1"));
 }
 
+// ── Fix: NoEmptyLet ───────────────────────────────────────────────
+
+#[test]
+fn fix_empty_let() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nfoo = let in 42",
+        &rules::no_empty_let::NoEmptyLet,
+    );
+    assert!(fixed.contains("42"));
+    assert!(!fixed.contains("let"));
+}
+
+// ── Fix: NoUnusedLetBinding ───────────────────────────────────────
+
+#[test]
+fn fix_unused_let_binding_single() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nfoo =\n    let\n        unused = 1\n    in\n    42",
+        &rules::no_unused_let_binding::NoUnusedLetBinding,
+    );
+    assert!(fixed.contains("42"));
+    assert!(!fixed.contains("unused"));
+}
+
+// ── Fix: NoUnusedVariables ────────────────────────────────────────
+
+#[test]
+fn fix_unused_variable_prefix() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nfoo =\n    let\n        unused = 1\n    in\n    42",
+        &rules::no_unused_variables::NoUnusedVariables,
+    );
+    assert!(fixed.contains("_unused"));
+}
+
 // ── NoUnnecessaryTrailingUnderscore ────────────────────────────────
 
 #[test]

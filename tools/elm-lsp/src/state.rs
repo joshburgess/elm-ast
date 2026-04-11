@@ -223,6 +223,10 @@ fn build_rule_descriptions(rules: &[Box<dyn Rule>]) -> HashMap<String, RuleInfo>
         "NoImportExposingAll",
         "NoUnnecessaryPortModule",
         "NoRedundantlyQualifiedType",
+        "NoEmptyLet",
+        "NoEmptyRecordUpdate",
+        "NoUnusedLetBinding",
+        "NoUnusedVariables",
     ]
     .into_iter()
     .collect();
