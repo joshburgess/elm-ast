@@ -46,6 +46,10 @@ struct Cli {
     #[arg(long, conflicts_with = "watch")]
     fix_all: bool,
 
+    /// Show what auto-fixes would change without writing to disk.
+    #[arg(long, conflicts_with_all = ["fix", "fix_all", "watch"])]
+    fix_dry_run: bool,
+
     /// Output findings as JSON for editor integration.
     #[arg(long)]
     json: bool,
@@ -70,9 +74,9 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    // --fix/--fix-all conflict with --json.
-    if cli.json && (cli.fix || cli.fix_all) {
-        eprintln!("Error: --json cannot be combined with --fix or --fix-all");
+    // --fix/--fix-all/--fix-dry-run conflict with --json.
+    if cli.json && (cli.fix || cli.fix_all || cli.fix_dry_run) {
+        eprintln!("Error: --json cannot be combined with --fix, --fix-all, or --fix-dry-run");
         std::process::exit(2);
     }
 
@@ -164,6 +168,12 @@ fn main() {
 
     // One-shot mode.
     let (total_errors, file_errors, sources) = run_lint(dir, &active_rules, &config, &format);
+
+    // Show dry-run diffs if requested.
+    if cli.fix_dry_run && total_errors > 0 {
+        println!();
+        show_fix_diffs(&file_errors, &sources);
+    }
 
     // Apply fixes if requested.
     if (cli.fix || cli.fix_all) && total_errors > 0 {
@@ -323,6 +333,116 @@ fn extract_module_name(module: &elm_ast::file::ElmModule) -> String {
         elm_ast::module_header::ModuleHeader::Normal { name, .. }
         | elm_ast::module_header::ModuleHeader::Port { name, .. }
         | elm_ast::module_header::ModuleHeader::Effect { name, .. } => name.value.join("."),
+    }
+}
+
+// ── Fix dry-run ───────────────────────────────────────────────────
+
+fn show_fix_diffs(
+    file_errors: &HashMap<String, Vec<rule::LintError>>,
+    sources: &HashMap<String, String>,
+) {
+    let mut file_paths: Vec<&String> = file_errors.keys().collect();
+    file_paths.sort();
+
+    let mut total_fixable = 0;
+
+    for path in file_paths {
+        let Some(source) = sources.get(path) else {
+            continue;
+        };
+
+        let errors = &file_errors[path];
+        let mut sorted: Vec<_> = errors.iter().filter(|e| e.fix.is_some()).collect();
+        sorted.sort_by_key(|e| (e.span.start.line, e.span.start.column));
+
+        for err in &sorted {
+            let fix = err.fix.as_ref().unwrap();
+            match apply_fixes(source, &fix.edits) {
+                Ok(fixed) => {
+                    total_fixable += 1;
+                    println!(
+                        "--- {}:{}:{} [{}] {}",
+                        path, err.span.start.line, err.span.start.column, err.rule, err.message
+                    );
+                    print_unified_diff(source, &fixed);
+                    println!();
+                }
+                Err(e) => {
+                    eprintln!(
+                        "  warning: could not compute fix for {} [{}]: {e}",
+                        path, err.rule
+                    );
+                }
+            }
+        }
+    }
+
+    if total_fixable > 0 {
+        println!("{total_fixable} fixes available. Run with --fix-all to apply.");
+    } else {
+        println!("No auto-fixable findings.");
+    }
+}
+
+/// Print a minimal unified diff between two strings, showing only changed
+/// lines with 2 lines of surrounding context.
+fn print_unified_diff(old: &str, new: &str) {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+
+    // Find common prefix and suffix to narrow the diff region.
+    let common_prefix = old_lines
+        .iter()
+        .zip(new_lines.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    let common_suffix = old_lines
+        .iter()
+        .rev()
+        .zip(new_lines.iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count()
+        .min(old_lines.len() - common_prefix)
+        .min(new_lines.len() - common_prefix);
+
+    let old_changed_end = old_lines.len() - common_suffix;
+    let new_changed_end = new_lines.len() - common_suffix;
+
+    if common_prefix == old_changed_end && common_prefix == new_changed_end {
+        return; // No differences.
+    }
+
+    // Context: 2 lines before and after.
+    let ctx = 2;
+    let ctx_start = common_prefix.saturating_sub(ctx);
+    let ctx_end_old = (old_changed_end + ctx).min(old_lines.len());
+    let ctx_end_new = (new_changed_end + ctx).min(new_lines.len());
+
+    println!(
+        "@@ -{},{} +{},{} @@",
+        ctx_start + 1,
+        ctx_end_old - ctx_start,
+        ctx_start + 1,
+        ctx_end_new - ctx_start,
+    );
+
+    // Context before.
+    for line in &old_lines[ctx_start..common_prefix] {
+        println!(" {line}");
+    }
+    // Removed lines.
+    for line in &old_lines[common_prefix..old_changed_end] {
+        println!("-{line}");
+    }
+    // Added lines.
+    for line in &new_lines[common_prefix..new_changed_end] {
+        println!("+{line}");
+    }
+    // Context after.
+    for line in &old_lines[old_changed_end..ctx_end_old] {
+        println!(" {line}");
     }
 }
 
