@@ -1,4 +1,4 @@
-# elm-review replacement
+# elm-assist
 
 A plan for expanding elm-lint into a fast, single-binary replacement for elm-review with built-in rules only. No plugin system, no Node.js dependency, no Elm runtime.
 
@@ -58,7 +58,7 @@ pub trait Rule {
 ### CLI design
 
 ```
-elm-review [options] [src-directory]
+elm-assist [options] [src-directory]
 
 Options:
   --fix              Apply auto-fixes
@@ -66,13 +66,13 @@ Options:
   --watch            Re-run on file changes
   --rules <list>     Enable only specific rules (comma-separated)
   --disable <list>   Disable specific rules
-  --config <path>    Path to review.toml config file
+  --config <path>    Path to elm-assist.toml config file
   --json             Output findings as JSON
   --color            Force colored output (auto-detected by default)
   --no-color         Disable colored output
 ```
 
-### Config file (review.toml)
+### Config file (elm-assist.toml)
 
 ```toml
 [rules]
@@ -89,7 +89,7 @@ max_length = 120
 
 ### Caching
 
-Hash each file's contents. On re-run, skip modules whose hash hasn't changed and whose rule set is the same. Store cache in `.elm-review-cache/` or similar. Invalidate project-level rule caches when any file changes.
+Hash each file's contents. On re-run, skip modules whose hash hasn't changed and whose rule set is the same. Store cache in `.elm-assist-cache/` or similar. Invalidate project-level rule caches when any file changes.
 
 ### Watch mode
 
@@ -189,7 +189,7 @@ Implement the most impactful rules from the list above. Priority order:
 
 - Proper CLI with `clap`
 - Colored terminal output with source context (like elm compiler errors)
-- `review.toml` config file
+- `elm-assist.toml` config file
 - `--json` output for editor integration
 - Exit codes: 0 = no findings, 1 = findings, 2 = error
 
@@ -206,7 +206,7 @@ The biggest advantage over elm-review: real-time lint diagnostics in the editor 
 
 #### LSP server
 
-A single `elm-review-lsp` binary (or `elm-review --lsp` flag) that speaks the Language Server Protocol. Built on `tower-lsp` or `lsp-server`.
+A single `elm-assist-lsp` binary (or `elm-assist --lsp` flag) that speaks the Language Server Protocol. Built on `tower-lsp` or `lsp-server`.
 
 Core loop:
 1. Client opens/changes a file -> LSP receives `textDocument/didOpen` or `textDocument/didChange`
@@ -222,7 +222,7 @@ LSP capabilities to implement:
 | `textDocument/codeAction` | `Fix` -> `CodeAction` | Click-to-fix in the editor lightbulb menu |
 | `workspace/executeCommand` | Fix-all, disable rule | Batch operations |
 | `textDocument/hover` | Rule description | Show rule docs on hover over diagnostic |
-| `workspace/didChangeConfiguration` | `review.toml` reload | Live config changes without restart |
+| `workspace/didChangeConfiguration` | `elm-assist.toml` reload | Live config changes without restart |
 
 The LSP and CLI share all parsing, rule, and fix logic. The LSP is just a different frontend to the same rule engine — it receives file contents from editor buffers instead of reading from disk, and reports via the LSP protocol instead of terminal output.
 
@@ -236,7 +236,7 @@ The LSP and CLI share all parsing, rule, and fix logic. The LSP is just a differ
 #### VS Code extension
 
 A thin TypeScript extension that:
-- Bundles or locates the `elm-review-lsp` binary
+- Bundles or locates the `elm-assist-lsp` binary
 - Spawns it as a language server child process
 - Provides configuration UI in VS Code settings (enable/disable rules, set severity)
 - Registers the server for `elm` language files
@@ -257,7 +257,7 @@ No editor-specific code needed beyond VS Code (which gets a dedicated extension 
 ## Non-goals
 
 - **Plugin system**: no dynamic loading, no WASM rules, no scripting. All rules are built into the binary. This can be revisited later if demand exists.
-- **elm-review config compatibility**: we use `review.toml`, not `ReviewConfig.elm`. Migration guide can be provided.
+- **elm-review config compatibility**: we use `elm-assist.toml`, not `ReviewConfig.elm`. Migration guide can be provided.
 - **100% rule parity**: some niche elm-review rules won't be replicated. Focus on the most commonly used rules.
 
 ## Success criteria
