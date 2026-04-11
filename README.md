@@ -185,7 +185,7 @@ None of this was strictly necessary -- a simple depth limit would have sufficed 
 
 ## Test coverage
 
-365 tests:
+366 tests:
 
 | Suite | Tests |
 |---|---|
