@@ -1957,17 +1957,21 @@ fn cognitive_complexity_respects_config() {
 
 // ── NoUnusedDependencies ────────────────────────────────────────────
 
-/// Build an `ElmJsonInfo` with `package_modules` resolved from the hardcoded
-/// known-package table (same fallback used when the Elm cache is unavailable).
+/// Build an `ElmJsonInfo` with test package_modules for the standard packages.
 fn make_elm_json(deps: HashMap<String, String>, is_application: bool) -> ElmJsonInfo {
-    let known = elm_lint::elm_json::known_package_modules();
     let mut package_modules = HashMap::new();
     for pkg_name in deps.keys() {
-        if let Some(modules) = known.get(pkg_name.as_str()) {
-            package_modules.insert(
-                pkg_name.clone(),
-                modules.iter().map(|s| s.to_string()).collect(),
-            );
+        let modules: Option<Vec<String>> = match pkg_name.as_str() {
+            "elm/json" => Some(vec!["Json.Decode".into(), "Json.Encode".into()]),
+            "elm/html" => Some(vec![
+                "Html".into(), "Html.Attributes".into(), "Html.Events".into(),
+                "Html.Keyed".into(), "Html.Lazy".into(),
+            ]),
+            "elm/http" => Some(vec!["Http".into()]),
+            _ => None,
+        };
+        if let Some(mods) = modules {
+            package_modules.insert(pkg_name.clone(), mods);
         }
     }
     ElmJsonInfo {

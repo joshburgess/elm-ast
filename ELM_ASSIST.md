@@ -167,7 +167,7 @@ Organized by the elm-review packages they replace. Rules marked with (fix) suppo
 - [x] **NoDuplicatePorts** — port name declared in more than one module (causes runtime errors)
 - [x] **NoUnsafePorts** — port signature uses non-JSON-compatible types (custom types, type variables, functions)
 - [x] **NoInconsistentAliases** — import alias doesn't match project's canonical alias (configured in elm-assist.toml)
-- [x] **NoUnusedDependencies** — dependency in elm.json with no modules imported anywhere in the project
+- [x] **NoUnusedDependencies** — dependency in elm.json with no modules imported anywhere in the project (resolves modules from `~/.elm/0.19.1/packages/`)
 
 ## Implementation phases
 

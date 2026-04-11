@@ -143,33 +143,22 @@ fn dirs_fallback_home() -> Option<PathBuf> {
 }
 
 /// For each dependency, try to read its `exposed-modules` from the Elm cache.
-/// Falls back to the hardcoded table for any package that can't be resolved.
+/// Packages not found in the cache are silently skipped (no false positives).
 fn resolve_all_package_modules(
     deps: &HashMap<String, String>,
     elm_home: Option<&Path>,
 ) -> HashMap<String, Vec<String>> {
-    let fallback = known_package_modules();
+    let elm_home = match elm_home {
+        Some(path) => path,
+        None => return HashMap::new(),
+    };
+
     let mut result = HashMap::new();
-
     for (pkg_name, version_str) in deps {
-        // Try the cache first.
-        if let Some(elm_home) = elm_home {
-            if let Some(modules) = read_package_modules_from_cache(elm_home, pkg_name, version_str)
-            {
-                result.insert(pkg_name.clone(), modules);
-                continue;
-            }
-        }
-
-        // Fall back to hardcoded table.
-        if let Some(modules) = fallback.get(pkg_name.as_str()) {
-            result.insert(
-                pkg_name.clone(),
-                modules.iter().map(|s| s.to_string()).collect(),
-            );
+        if let Some(modules) = read_package_modules_from_cache(elm_home, pkg_name, version_str) {
+            result.insert(pkg_name.clone(), modules);
         }
     }
-
     result
 }
 
@@ -285,157 +274,6 @@ fn parse_exposed_modules(contents: &str) -> Option<Vec<String>> {
         }
         _ => None,
     }
-}
-
-// ── Package → module mapping (hardcoded fallback) ────────────────────
-
-/// Known mapping of Elm package names to the modules they expose.
-/// Used as a fallback when the Elm package cache is not available.
-pub fn known_package_modules() -> HashMap<&'static str, &'static [&'static str]> {
-    let mut m = HashMap::new();
-
-    // elm/* standard packages
-    m.insert(
-        "elm/core",
-        [
-            "Array", "Basics", "Bitwise", "Char", "Debug", "Dict", "List",
-            "Maybe", "Order", "Platform", "Platform.Cmd", "Platform.Sub",
-            "Process", "Result", "Set", "String", "Task", "Tuple",
-        ]
-        .as_slice(),
-    );
-    m.insert("elm/json", ["Json.Decode", "Json.Encode"].as_slice());
-    m.insert(
-        "elm/html",
-        ["Html", "Html.Attributes", "Html.Events", "Html.Keyed", "Html.Lazy"].as_slice(),
-    );
-    m.insert("elm/http", ["Http"].as_slice());
-    m.insert(
-        "elm/browser",
-        [
-            "Browser", "Browser.Dom", "Browser.Events",
-            "Browser.Navigation",
-        ]
-        .as_slice(),
-    );
-    m.insert(
-        "elm/url",
-        ["Url", "Url.Builder", "Url.Parser", "Url.Parser.Query"].as_slice(),
-    );
-    m.insert("elm/time", ["Time"].as_slice());
-    m.insert("elm/regex", ["Regex"].as_slice());
-    m.insert("elm/parser", ["Parser", "Parser.Advanced"].as_slice());
-    m.insert("elm/random", ["Random"].as_slice());
-    m.insert(
-        "elm/file",
-        ["File", "File.Download", "File.Select"].as_slice(),
-    );
-    m.insert(
-        "elm/bytes",
-        ["Bytes", "Bytes.Decode", "Bytes.Encode"].as_slice(),
-    );
-    m.insert(
-        "elm/svg",
-        ["Svg", "Svg.Attributes", "Svg.Events", "Svg.Keyed", "Svg.Lazy"].as_slice(),
-    );
-    m.insert("elm/virtual-dom", ["VirtualDom"].as_slice());
-
-    // Popular community packages
-    m.insert("elm-community/list-extra", ["List.Extra"].as_slice());
-    m.insert("elm-community/maybe-extra", ["Maybe.Extra"].as_slice());
-    m.insert(
-        "elm-community/string-extra",
-        ["String.Extra"].as_slice(),
-    );
-    m.insert("elm-community/dict-extra", ["Dict.Extra"].as_slice());
-    m.insert("elm-community/array-extra", ["Array.Extra"].as_slice());
-    m.insert(
-        "elm-community/result-extra",
-        ["Result.Extra"].as_slice(),
-    );
-    m.insert(
-        "elm-community/html-extra",
-        ["Html.Extra", "Html.Attributes.Extra", "Html.Events.Extra"].as_slice(),
-    );
-    m.insert(
-        "elm-community/json-extra",
-        ["Json.Decode.Extra"].as_slice(),
-    );
-    m.insert(
-        "NoRedInk/elm-json-decode-pipeline",
-        ["Json.Decode.Pipeline"].as_slice(),
-    );
-    m.insert("krisajenern/remotedata", ["RemoteData"].as_slice());
-    m.insert(
-        "mdgriffith/elm-ui",
-        [
-            "Element",
-            "Element.Background",
-            "Element.Border",
-            "Element.Events",
-            "Element.Font",
-            "Element.Input",
-            "Element.Keyed",
-            "Element.Lazy",
-            "Element.Region",
-        ]
-        .as_slice(),
-    );
-    m.insert(
-        "rtfeldman/elm-css",
-        [
-            "Css",
-            "Css.Animations",
-            "Css.Global",
-            "Css.Media",
-            "Css.Preprocess",
-            "Css.Transitions",
-            "Html.Styled",
-            "Html.Styled.Attributes",
-            "Html.Styled.Events",
-            "Html.Styled.Keyed",
-            "Html.Styled.Lazy",
-            "Svg.Styled",
-            "Svg.Styled.Attributes",
-            "Svg.Styled.Events",
-        ]
-        .as_slice(),
-    );
-    m.insert(
-        "elm/project-metadata-utils",
-        [
-            "Elm.Docs", "Elm.Module", "Elm.Package", "Elm.Project", "Elm.Type",
-            "Elm.Version", "Elm.Constraint", "Elm.License",
-        ]
-        .as_slice(),
-    );
-    m.insert(
-        "elm-explorations/test",
-        ["Test", "Test.Runner", "Expect", "Fuzz"].as_slice(),
-    );
-    m.insert("elm-explorations/markdown", ["Markdown"].as_slice());
-    m.insert(
-        "elm-explorations/linear-algebra",
-        ["Math.Vector2", "Math.Vector3", "Math.Vector4", "Math.Matrix4"].as_slice(),
-    );
-    m.insert(
-        "elm-explorations/webgl",
-        [
-            "WebGL",
-            "WebGL.Settings",
-            "WebGL.Settings.Blend",
-            "WebGL.Settings.DepthTest",
-            "WebGL.Settings.StencilTest",
-            "WebGL.Texture",
-        ]
-        .as_slice(),
-    );
-    m.insert(
-        "elm-explorations/benchmark",
-        ["Benchmark", "Benchmark.Runner"].as_slice(),
-    );
-
-    m
 }
 
 /// Given a set of imported module names and a resolved package→modules mapping,
@@ -582,17 +420,11 @@ mod tests {
     }
 
     #[test]
-    fn resolve_falls_back_to_hardcoded() {
-        // With no elm_home, should use hardcoded fallbacks.
+    fn resolve_returns_empty_without_elm_home() {
         let mut deps = HashMap::new();
         deps.insert("elm/json".to_string(), "1.1.3".to_string());
-        deps.insert("some/unknown-pkg".to_string(), "1.0.0".to_string());
 
         let result = resolve_all_package_modules(&deps, None);
-        // elm/json should be resolved from hardcoded table.
-        assert!(result.contains_key("elm/json"));
-        assert!(result["elm/json"].contains(&"Json.Decode".to_string()));
-        // Unknown package should be absent.
-        assert!(!result.contains_key("some/unknown-pkg"));
+        assert!(result.is_empty());
     }
 }
