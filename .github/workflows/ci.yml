@@ -59,7 +59,7 @@ jobs:
       - run: cargo build --all-features
 
   wasm:
-    name: WASM build
+    name: WASM build & test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,3 +69,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --target wasm32-unknown-unknown --no-default-features --features wasm
       - run: cargo build --target wasm32-unknown-unknown --no-default-features --features wasm,serde
+      - run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - run: wasm-pack test --node -- --no-default-features --features wasm,serde
