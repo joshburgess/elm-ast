@@ -1,5 +1,6 @@
 #![allow(clippy::collapsible_if)]
 
+pub mod cache;
 pub mod collect;
 pub mod config;
 pub mod elm_json;

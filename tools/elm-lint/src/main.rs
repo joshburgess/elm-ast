@@ -9,6 +9,7 @@ use std::time::Instant;
 use clap::Parser;
 use rayon::prelude::*;
 
+use elm_lint::cache::{self, LintCache};
 use elm_lint::collect::collect_module_info;
 use elm_lint::config::Config;
 use elm_lint::elm_json;
@@ -220,28 +221,75 @@ fn run_lint(
         return (0, HashMap::new(), HashMap::new());
     }
 
-    // Phase 1: Read + parse in parallel.
-    let parse_results: Vec<Option<Result<_, String>>> = files
+    // Phase 0: Read files and compute hashes in parallel.
+    let file_contents: Vec<(PathBuf, String)> = files
         .par_iter()
-        .map(|file| {
+        .filter_map(|file| {
             let source = fs::read_to_string(file).ok()?;
-            let path_str = file.display().to_string();
-            match elm_ast::parse(&source) {
-                Ok(module) => {
-                    let mod_name = extract_module_name(&module);
-                    Some(Ok((path_str, mod_name, module, source)))
-                }
-                Err(errors) => Some(Err(format!("{}: {}", path_str, errors[0]))),
-            }
+            Some((file.clone(), source))
         })
         .collect();
+
+    let file_hashes: HashMap<String, u64> = file_contents
+        .iter()
+        .map(|(path, source)| {
+            (path.display().to_string(), cache::hash_contents(source.as_bytes()))
+        })
+        .collect();
+
+    // Check cache.
+    let rule_names: Vec<String> = active_rules.iter().map(|r| r.name().to_string()).collect();
+    let lint_cache = LintCache::load(Path::new(dir), rule_names);
+
+    if lint_cache.is_valid_for(&file_hashes) {
+        let elapsed = start.elapsed();
+        let cached_errors = lint_cache.get_all_errors();
+
+        // Read sources for fix application (only files with errors).
+        let mut sources: HashMap<String, String> = HashMap::new();
+        for (path, source) in &file_contents {
+            sources.insert(path.display().to_string(), source.clone());
+        }
+
+        // Convert cached errors back to LintErrors for reporting.
+        let file_errors = cached_to_lint_errors(&cached_errors);
+
+        eprintln!(
+            "Linted {} files with {} rules in {:.1}ms (cached)",
+            file_contents.len(),
+            active_rules.len(),
+            elapsed.as_secs_f64() * 1000.0,
+        );
+
+        let total_errors: usize = file_errors.values().map(|v| v.len()).sum();
+        output::report(format, &file_errors, &sources, file_contents.len(), active_rules.len());
+        output::report_summary(format, &file_errors);
+
+        return (total_errors, file_errors, sources);
+    }
+
+    // Phase 1: Parse in parallel.
+    let parse_results: Vec<Result<(String, String, elm_ast::file::ElmModule, String), String>> =
+        file_contents
+            .into_iter()
+            .map(|(path, source)| {
+                let path_str = path.display().to_string();
+                match elm_ast::parse(&source) {
+                    Ok(module) => {
+                        let mod_name = extract_module_name(&module);
+                        Ok((path_str, mod_name, module, source))
+                    }
+                    Err(errors) => Err(format!("{}: {}", path_str, errors[0])),
+                }
+            })
+            .collect();
 
     // Split results (sequential, cheap).
     let mut parsed: Vec<(String, String, elm_ast::file::ElmModule, String)> = Vec::new();
     let mut project_modules = Vec::new();
     let mut parse_errors = 0;
 
-    for result in parse_results.into_iter().flatten() {
+    for result in parse_results {
         match result {
             Ok((path, mod_name, module, source)) => {
                 project_modules.push(mod_name.clone());
@@ -309,6 +357,10 @@ fn run_lint(
         sources.insert(path, source);
     }
 
+    // Save cache.
+    let cached_errors = lint_errors_to_cached(&file_errors);
+    lint_cache.save(&file_hashes, &cached_errors);
+
     eprintln!(
         "Linted {} files with {} rules in {:.1}ms",
         parsed.len(),
@@ -326,6 +378,79 @@ fn run_lint(
     output::report_summary(format, &file_errors);
 
     (total_errors, file_errors, sources)
+}
+
+/// Convert LintErrors to cached representation.
+fn lint_errors_to_cached(
+    file_errors: &HashMap<String, Vec<rule::LintError>>,
+) -> HashMap<String, Vec<cache::CachedError>> {
+    file_errors
+        .iter()
+        .map(|(path, errors)| {
+            let cached: Vec<cache::CachedError> = errors
+                .iter()
+                .map(|e| cache::CachedError {
+                    rule: e.rule.to_string(),
+                    message: e.message.clone(),
+                    severity: match e.severity {
+                        rule::Severity::Error => "error".into(),
+                        rule::Severity::Warning => "warning".into(),
+                    },
+                    start_line: e.span.start.line,
+                    start_col: e.span.start.column,
+                    start_offset: e.span.start.offset,
+                    end_line: e.span.end.line,
+                    end_col: e.span.end.column,
+                    end_offset: e.span.end.offset,
+                    fixable: e.fix.is_some(),
+                })
+                .collect();
+            (path.clone(), cached)
+        })
+        .collect()
+}
+
+/// Convert cached errors back to LintErrors for reporting.
+/// Note: cached errors don't carry Fix data, so --fix won't work from cache.
+fn cached_to_lint_errors(
+    cached: &HashMap<String, Vec<cache::CachedError>>,
+) -> HashMap<String, Vec<rule::LintError>> {
+    cached
+        .iter()
+        .map(|(path, errors)| {
+            let lint_errors: Vec<rule::LintError> = errors
+                .iter()
+                .map(|e| rule::LintError {
+                    rule: leak_str(&e.rule),
+                    severity: match e.severity.as_str() {
+                        "error" => rule::Severity::Error,
+                        _ => rule::Severity::Warning,
+                    },
+                    message: e.message.clone(),
+                    span: elm_ast::span::Span {
+                        start: elm_ast::span::Position {
+                            offset: e.start_offset,
+                            line: e.start_line,
+                            column: e.start_col,
+                        },
+                        end: elm_ast::span::Position {
+                            offset: e.end_offset,
+                            line: e.end_line,
+                            column: e.end_col,
+                        },
+                    },
+                    fix: None, // Fixes are not cached.
+                })
+                .collect();
+            (path.clone(), lint_errors)
+        })
+        .collect()
+}
+
+/// Leak a String to get a &'static str. Used for cached rule names since
+/// LintError.rule is &'static str. Only used for cache hits (bounded count).
+fn leak_str(s: &str) -> &'static str {
+    Box::leak(s.to_string().into_boxed_str())
 }
 
 fn extract_module_name(module: &elm_ast::file::ElmModule) -> String {
