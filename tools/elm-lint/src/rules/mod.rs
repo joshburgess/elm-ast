@@ -14,6 +14,7 @@ pub mod no_fully_applied_prefix_operator;
 pub mod no_identity_function;
 pub mod no_if_true_false;
 pub mod no_import_exposing_all;
+pub mod no_inconsistent_aliases;
 pub mod no_list_literal_concat;
 pub mod no_max_line_length;
 pub mod no_maybe_map_with_nothing;
@@ -114,5 +115,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         // Port rules.
         Box::new(no_duplicate_ports::NoDuplicatePorts),
         Box::new(no_unsafe_ports::NoUnsafePorts),
+        // Config-driven rules.
+        Box::new(no_inconsistent_aliases::NoInconsistentAliases::default()),
     ]
 }

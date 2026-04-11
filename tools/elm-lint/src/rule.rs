@@ -163,6 +163,13 @@ pub trait Rule: Send + Sync {
         Severity::Warning
     }
 
+    /// Apply per-rule options from `elm-assist.toml`. Called once at startup.
+    /// The value is the TOML table for this rule, e.g. for
+    /// `[rules.NoMaxLineLength] max_length = 100` the value is `{ max_length = 100 }`.
+    fn configure(&mut self, _options: &toml::Value) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Run the rule against a module and return any findings.
     fn check(&self, ctx: &LintContext) -> Vec<LintError>;
 }

@@ -1842,3 +1842,114 @@ fn no_unsafe_ports_passes_incoming_safe() {
     );
     assert_eq!(errors, 0);
 }
+
+// ── NoInconsistentAliases ───────────────────────────────────────────
+
+#[test]
+fn no_inconsistent_aliases_flags_wrong_alias() {
+    let mut rule = rules::no_inconsistent_aliases::NoInconsistentAliases::default();
+    let config: toml::Value = toml::from_str(
+        r#"aliases = { "Json.Decode" = "Decode" }"#,
+    )
+    .unwrap();
+    rule.configure(&config).unwrap();
+
+    let errors = lint_count(
+        "module T exposing (..)\n\nimport Json.Decode as JD\n\nx = JD.string",
+        &rule,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_inconsistent_aliases_passes_correct_alias() {
+    let mut rule = rules::no_inconsistent_aliases::NoInconsistentAliases::default();
+    let config: toml::Value = toml::from_str(
+        r#"aliases = { "Json.Decode" = "Decode" }"#,
+    )
+    .unwrap();
+    rule.configure(&config).unwrap();
+
+    let errors = lint_count(
+        "module T exposing (..)\n\nimport Json.Decode as Decode\n\nx = Decode.string",
+        &rule,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn no_inconsistent_aliases_passes_default_alias_match() {
+    // If the canonical alias matches the default (last segment), no alias needed.
+    let mut rule = rules::no_inconsistent_aliases::NoInconsistentAliases::default();
+    let config: toml::Value = toml::from_str(
+        r#"aliases = { "Html.Attributes" = "Attributes" }"#,
+    )
+    .unwrap();
+    rule.configure(&config).unwrap();
+
+    let errors = lint_count(
+        "module T exposing (..)\n\nimport Html.Attributes\n\nx = Attributes.class \"foo\"",
+        &rule,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn no_inconsistent_aliases_flags_missing_alias() {
+    // Default alias "Attributes" doesn't match canonical "Attr".
+    let mut rule = rules::no_inconsistent_aliases::NoInconsistentAliases::default();
+    let config: toml::Value = toml::from_str(
+        r#"aliases = { "Html.Attributes" = "Attr" }"#,
+    )
+    .unwrap();
+    rule.configure(&config).unwrap();
+
+    let errors = lint_count(
+        "module T exposing (..)\n\nimport Html.Attributes\n\nx = Attributes.class \"foo\"",
+        &rule,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_inconsistent_aliases_no_config_passes_everything() {
+    let rule = rules::no_inconsistent_aliases::NoInconsistentAliases::default();
+    let errors = lint_count(
+        "module T exposing (..)\n\nimport Json.Decode as JD\n\nx = JD.string",
+        &rule,
+    );
+    assert_eq!(errors, 0);
+}
+
+// ── Per-rule config: NoMaxLineLength ────────────────────────────────
+
+#[test]
+fn no_max_line_length_respects_config() {
+    use elm_lint::rule::Rule;
+    let mut rule = rules::no_max_line_length::NoMaxLineLength::default();
+    let config: toml::Value = toml::from_str("max_length = 50").unwrap();
+    rule.configure(&config).unwrap();
+
+    // A 60-char line should fail with max_length=50 but pass with default 120.
+    let line = format!("x = \"{}\"", "a".repeat(52));
+    let source = format!("module T exposing (x)\n\n{line}");
+    let errors = lint_count(&source, &rule);
+    assert_eq!(errors, 1);
+}
+
+// ── Per-rule config: CognitiveComplexity ────────────────────────────
+
+#[test]
+fn cognitive_complexity_respects_config() {
+    use elm_lint::rule::Rule;
+    let mut rule = rules::cognitive_complexity::CognitiveComplexity::default();
+    let config: toml::Value = toml::from_str("threshold = 1").unwrap();
+    rule.configure(&config).unwrap();
+
+    // Two if/else branches: complexity = 1 + 1 = 2, exceeds threshold=1.
+    let errors = lint_count(
+        "module T exposing (..)\n\nfoo x =\n    if x then\n        if x then 1 else 2\n    else\n        0",
+        &rule,
+    );
+    assert_eq!(errors, 1);
+}

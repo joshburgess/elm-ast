@@ -32,28 +32,11 @@ pub trait Rule {
 
 1. **Project-level rules**: some rules need cross-module information (e.g., unused exports, missing module docs). Add a `ProjectRule` trait or extend `LintContext` with project-wide data.
 
-2. **Auto-fix support**: `LintError` already has an `Option<String>` fix field. Extend this to a structured `Fix` type:
-   ```rust
-   pub struct Fix {
-       pub edits: Vec<Edit>,
-   }
+2. **Auto-fix support** *(done)*: `Fix` type with `Edit` variants (Replace, InsertAfter, Remove). Applied to source text to preserve formatting.
 
-   pub enum Edit {
-       Replace { span: Span, replacement: String },
-       InsertAfter { span: Span, text: String },
-       Remove { span: Span },
-   }
-   ```
+3. **Rule configuration** *(done)*: rules implement `fn configure(&mut self, options: &toml::Value)` to read per-rule options from `elm-assist.toml`. Used by NoMaxLineLength, CognitiveComplexity, and NoInconsistentAliases.
 
-3. **Rule configuration**: some rules need parameters (e.g., max line length, forbidden modules). Add an optional config method:
-   ```rust
-   fn configure(&mut self, config: &toml::Value) -> Result<(), String> { Ok(()) }
-   ```
-
-4. **Severity levels**: allow rules to report warnings vs errors:
-   ```rust
-   pub enum Severity { Error, Warning }
-   ```
+4. **Severity levels** *(done)*: `Severity::Error` and `Severity::Warning`. Configurable per-rule via `[rules.severity]` in `elm-assist.toml`.
 
 ### CLI design
 
@@ -79,12 +62,21 @@ Options:
 # Disable specific rules
 disable = ["NoMissingTypeAnnotation"]
 
-# Rule-specific configuration
-[rules.NoUnusedExports]
-ignore_modules = ["Main", "Ports"]
+# Per-rule severity overrides
+[rules.severity]
+NoDebug = "error"
+NoUnusedImports = "warning"
+NoAlwaysIdentity = "off"
 
+# Per-rule options (any table under [rules] besides `severity` and `disable`)
 [rules.NoMaxLineLength]
-max_length = 120
+max_length = 100
+
+[rules.CognitiveComplexity]
+threshold = 20
+
+[rules.NoInconsistentAliases]
+aliases = { "Json.Decode" = "Decode", "Json.Encode" = "Encode", "Html.Attributes" = "Attr" }
 ```
 
 ### Caching
@@ -174,6 +166,7 @@ Organized by the elm-review packages they replace. Rules marked with (fix) suppo
 
 - [x] **NoDuplicatePorts** — port name declared in more than one module (causes runtime errors)
 - [x] **NoUnsafePorts** — port signature uses non-JSON-compatible types (custom types, type variables, functions)
+- [x] **NoInconsistentAliases** — import alias doesn't match project's canonical alias (configured in elm-assist.toml)
 
 ## Implementation phases
 
@@ -280,7 +273,7 @@ No editor-specific code needed beyond VS Code (which gets a dedicated extension 
 
 - Single binary, no runtime dependencies
 - Sub-second analysis on projects with 100+ modules
-- 52 rules covering the most popular elm-review packages
+- 53 rules covering the most popular elm-review packages
 - Auto-fix for 23 rules
 - Drop-in usable for most Elm projects without configuration
 - LSP server with real-time diagnostics and code actions

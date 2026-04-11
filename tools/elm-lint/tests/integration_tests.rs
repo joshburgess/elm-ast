@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use elm_ast::parse;
 use elm_lint::collect::collect_module_info;
-use elm_lint::rule::{LintContext, ProjectContext};
+use elm_lint::rule::{LintContext, ProjectContext, Rule};
 use elm_lint::rules;
 
 fn find_elm_files(dir: &str) -> Vec<PathBuf> {
@@ -264,6 +264,7 @@ fn every_rule_fires_on_real_code() {
         // Port rules
         "NoDuplicatePorts",               // requires project context with multiple port modules
         "NoUnsafePorts",                  // requires port declarations (rare in packages)
+        "NoInconsistentAliases",          // requires per-rule config to do anything
     ];
 
     // If no fixture files are available, skip gracefully.
@@ -607,6 +608,32 @@ foo x =
         assert!(
             !errors.is_empty(),
             "rule NoDuplicatePorts should fire on test input but produced 0 errors"
+        );
+    }
+
+    // Test NoInconsistentAliases separately — it needs per-rule config to activate.
+    {
+        let mut rule = rules::no_inconsistent_aliases::NoInconsistentAliases::default();
+        let config: toml::Value = toml::from_str(
+            r#"aliases = { "Json.Decode" = "Decode" }"#,
+        )
+        .unwrap();
+        rule.configure(&config).unwrap();
+
+        let source = "module T exposing (..)\n\nimport Json.Decode as JD\n\nx = JD.string";
+        let module = parse(source).unwrap();
+        let ctx = LintContext {
+            module: &module,
+            source,
+            file_path: "test.elm",
+            project_modules: &[],
+            module_info: None,
+            project: None,
+        };
+        let errors = rule.check(&ctx);
+        assert!(
+            !errors.is_empty(),
+            "rule NoInconsistentAliases should fire on test input but produced 0 errors"
         );
     }
 }

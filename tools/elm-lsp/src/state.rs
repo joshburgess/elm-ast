@@ -63,7 +63,16 @@ impl ServerState {
             .map(|(_path, c)| c)
             .unwrap_or_default();
 
-        let rules = rules::all_rules();
+        let mut rules = rules::all_rules();
+
+        // Apply per-rule config options.
+        for rule in &mut rules {
+            if let Some(options) = config.rule_options(rule.name()) {
+                if let Err(e) = rule.configure(options) {
+                    eprintln!("Warning: error configuring rule {}: {e}", rule.name());
+                }
+            }
+        }
 
         // Build rule description lookup for hover.
         let rule_descriptions = build_rule_descriptions(&rules);

@@ -24,6 +24,10 @@ pub struct RulesConfig {
     /// Per-rule severity overrides.
     #[serde(default)]
     pub severity: HashMap<String, SeverityValue>,
+    /// Per-rule custom options. Any key under `[rules]` that isn't `disable` or
+    /// `severity` is captured here as `RuleName -> toml::Value`.
+    #[serde(flatten)]
+    pub options: HashMap<String, toml::Value>,
 }
 
 /// A severity value in the config file. `Off` disables the rule.
@@ -92,6 +96,11 @@ impl Config {
             SeverityValue::Off => None,
         }
     }
+
+    /// Get per-rule options for a given rule name, if any.
+    pub fn rule_options(&self, name: &str) -> Option<&toml::Value> {
+        self.rules.options.get(name)
+    }
 }
 
 #[cfg(test)]
@@ -142,5 +151,58 @@ NoAlwaysIdentity = "off"
         let config = Config::default();
         assert!(!config.is_rule_disabled("NoDebug"));
         assert_eq!(config.severity_for("NoDebug"), None);
+    }
+
+    #[test]
+    fn parse_per_rule_options() {
+        let config: Config = toml::from_str(
+            r#"
+[rules.NoMaxLineLength]
+max_length = 100
+
+[rules.CognitiveComplexity]
+threshold = 20
+
+[rules.NoInconsistentAliases]
+aliases = { "Json.Decode" = "Decode", "Html.Attributes" = "Attr" }
+"#,
+        )
+        .unwrap();
+
+        let max_opts = config.rule_options("NoMaxLineLength").unwrap();
+        assert_eq!(max_opts.get("max_length").unwrap().as_integer(), Some(100));
+
+        let cog_opts = config.rule_options("CognitiveComplexity").unwrap();
+        assert_eq!(cog_opts.get("threshold").unwrap().as_integer(), Some(20));
+
+        let alias_opts = config.rule_options("NoInconsistentAliases").unwrap();
+        let aliases = alias_opts.get("aliases").unwrap().as_table().unwrap();
+        assert_eq!(aliases.get("Json.Decode").unwrap().as_str(), Some("Decode"));
+        assert_eq!(aliases.get("Html.Attributes").unwrap().as_str(), Some("Attr"));
+
+        // Unknown rules have no options.
+        assert!(config.rule_options("NoDebug").is_none());
+    }
+
+    #[test]
+    fn per_rule_options_coexist_with_disable_and_severity() {
+        let config: Config = toml::from_str(
+            r#"
+[rules]
+disable = ["NoTodoComment"]
+
+[rules.severity]
+NoDebug = "error"
+
+[rules.NoMaxLineLength]
+max_length = 80
+"#,
+        )
+        .unwrap();
+
+        assert!(config.is_rule_disabled("NoTodoComment"));
+        assert_eq!(config.severity_for("NoDebug"), Some(Severity::Error));
+        let opts = config.rule_options("NoMaxLineLength").unwrap();
+        assert_eq!(opts.get("max_length").unwrap().as_integer(), Some(80));
     }
 }

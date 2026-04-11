@@ -30,6 +30,16 @@ impl Rule for CognitiveComplexity {
         "Functions should not exceed the cognitive complexity threshold"
     }
 
+    fn configure(&mut self, options: &toml::Value) -> Result<(), String> {
+        if let Some(val) = options.get("threshold") {
+            self.threshold = val
+                .as_integer()
+                .ok_or_else(|| "threshold must be an integer".to_string())?
+                as u32;
+        }
+        Ok(())
+    }
+
     fn check(&self, ctx: &LintContext) -> Vec<LintError> {
         let mut errors = Vec::new();
 

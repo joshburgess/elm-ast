@@ -22,6 +22,16 @@ impl Rule for NoMaxLineLength {
         "Lines should not exceed the maximum length"
     }
 
+    fn configure(&mut self, options: &toml::Value) -> Result<(), String> {
+        if let Some(val) = options.get("max_length") {
+            self.max_length = val
+                .as_integer()
+                .ok_or_else(|| "max_length must be an integer".to_string())?
+                as usize;
+        }
+        Ok(())
+    }
+
     fn check(&self, ctx: &LintContext) -> Vec<LintError> {
         let mut errors = Vec::new();
         let mut offset = 0usize;

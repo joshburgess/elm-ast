@@ -94,7 +94,17 @@ fn main() {
         Config::default()
     };
 
-    let all_rules = rules::all_rules();
+    let mut all_rules = rules::all_rules();
+
+    // Apply per-rule config options.
+    for rule in &mut all_rules {
+        if let Some(options) = config.rule_options(rule.name()) {
+            if let Err(e) = rule.configure(options) {
+                eprintln!("Error configuring rule {}: {e}", rule.name());
+                std::process::exit(2);
+            }
+        }
+    }
 
     if cli.list {
         println!("Available rules ({}):\n", all_rules.len());
