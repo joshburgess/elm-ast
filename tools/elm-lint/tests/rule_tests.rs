@@ -1957,6 +1957,26 @@ fn cognitive_complexity_respects_config() {
 
 // ── NoUnusedDependencies ────────────────────────────────────────────
 
+/// Build an `ElmJsonInfo` with `package_modules` resolved from the hardcoded
+/// known-package table (same fallback used when the Elm cache is unavailable).
+fn make_elm_json(deps: HashMap<String, String>, is_application: bool) -> ElmJsonInfo {
+    let known = elm_lint::elm_json::known_package_modules();
+    let mut package_modules = HashMap::new();
+    for pkg_name in deps.keys() {
+        if let Some(modules) = known.get(pkg_name.as_str()) {
+            package_modules.insert(
+                pkg_name.clone(),
+                modules.iter().map(|s| s.to_string()).collect(),
+            );
+        }
+    }
+    ElmJsonInfo {
+        direct_deps: deps,
+        is_application,
+        package_modules,
+    }
+}
+
 fn lint_project_with_elm_json(
     sources: &[(&str, &str)],
     elm_json: ElmJsonInfo,
@@ -2001,10 +2021,7 @@ fn no_unused_dependencies_flags_unused() {
     deps.insert("elm/json".to_string(), "1.1.3".to_string());
     deps.insert("elm/html".to_string(), "1.0.0".to_string());
 
-    let elm_json = ElmJsonInfo {
-        direct_deps: deps,
-        is_application: true,
-    };
+    let elm_json = make_elm_json(deps, true);
 
     // Only imports Html, not Json.Decode/Json.Encode.
     let results = lint_project_with_elm_json(
@@ -2027,10 +2044,7 @@ fn no_unused_dependencies_passes_all_used() {
     deps.insert("elm/json".to_string(), "1.1.3".to_string());
     deps.insert("elm/html".to_string(), "1.0.0".to_string());
 
-    let elm_json = ElmJsonInfo {
-        direct_deps: deps,
-        is_application: true,
-    };
+    let elm_json = make_elm_json(deps, true);
 
     let results = lint_project_with_elm_json(
         &[(
@@ -2049,10 +2063,7 @@ fn no_unused_dependencies_skips_elm_core() {
     let mut deps = HashMap::new();
     deps.insert("elm/core".to_string(), "1.0.5".to_string());
 
-    let elm_json = ElmJsonInfo {
-        direct_deps: deps,
-        is_application: true,
-    };
+    let elm_json = make_elm_json(deps, true);
 
     // Even with no explicit imports, elm/core is never flagged.
     let results = lint_project_with_elm_json(
@@ -2073,10 +2084,7 @@ fn no_unused_dependencies_skips_unknown_packages() {
     deps.insert("elm/core".to_string(), "1.0.5".to_string());
     deps.insert("some/unknown-package".to_string(), "1.0.0".to_string());
 
-    let elm_json = ElmJsonInfo {
-        direct_deps: deps,
-        is_application: true,
-    };
+    let elm_json = make_elm_json(deps, true);
 
     // Unknown packages are skipped (no false positives).
     let results = lint_project_with_elm_json(
@@ -2097,10 +2105,7 @@ fn no_unused_dependencies_reports_once_not_per_file() {
     deps.insert("elm/core".to_string(), "1.0.5".to_string());
     deps.insert("elm/http".to_string(), "2.0.0".to_string());
 
-    let elm_json = ElmJsonInfo {
-        direct_deps: deps,
-        is_application: true,
-    };
+    let elm_json = make_elm_json(deps, true);
 
     // Two modules, neither imports Http — should report once, not twice.
     let results = lint_project_with_elm_json(

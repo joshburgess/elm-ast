@@ -644,9 +644,20 @@ foo x =
         let mut deps = HashMap::new();
         deps.insert("elm/core".to_string(), "1.0.5".to_string());
         deps.insert("elm/json".to_string(), "1.1.3".to_string());
+        let known = elm_lint::elm_json::known_package_modules();
+        let mut package_modules = HashMap::new();
+        for pkg_name in deps.keys() {
+            if let Some(modules) = known.get(pkg_name.as_str()) {
+                package_modules.insert(
+                    pkg_name.clone(),
+                    modules.iter().map(|s| s.to_string()).collect(),
+                );
+            }
+        }
         let elm_json = ElmJsonInfo {
             direct_deps: deps,
             is_application: true,
+            package_modules,
         };
 
         let source = "module Main exposing (..)\n\nx = 1";

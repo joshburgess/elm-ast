@@ -1,13 +1,14 @@
 use std::collections::HashSet;
 
-use crate::elm_json::{known_package_modules, packages_used_by_imports};
+use crate::elm_json::packages_used_by_imports;
 use crate::rule::{LintContext, LintError, Rule, Severity};
 
 /// Reports dependencies listed in elm.json that are never imported by any
 /// module in the project. Requires elm.json to be discoverable.
 ///
-/// Uses a hardcoded mapping of ~30 popular Elm packages to their exposed
-/// modules. Unknown packages are silently skipped (no false positives).
+/// Resolves package modules from the Elm package cache (~/.elm/0.19.1/packages/)
+/// when available, with a hardcoded fallback for ~30 popular packages.
+/// Unknown packages are silently skipped (no false positives).
 pub struct NoUnusedDependencies;
 
 impl Rule for NoUnusedDependencies {
@@ -48,8 +49,7 @@ impl Rule for NoUnusedDependencies {
             }
         }
 
-        let package_modules = known_package_modules();
-        let used_packages = packages_used_by_imports(&all_imported_modules, &package_modules);
+        let used_packages = packages_used_by_imports(&all_imported_modules, &elm_json.package_modules);
 
         let mut errors = Vec::new();
 
@@ -63,7 +63,7 @@ impl Rule for NoUnusedDependencies {
             }
 
             // Only check packages we know the modules for.
-            if !package_modules.contains_key(dep_name.as_str()) {
+            if !elm_json.package_modules.contains_key(dep_name) {
                 continue;
             }
 
