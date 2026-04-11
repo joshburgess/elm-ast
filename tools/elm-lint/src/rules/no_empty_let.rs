@@ -2,7 +2,7 @@ use elm_ast::expr::Expr;
 use elm_ast::node::Spanned;
 use elm_ast::visit::{self, Visit};
 
-use crate::rule::{LintContext, LintError, Rule};
+use crate::rule::{LintContext, LintError, Rule, Severity};
 
 /// Reports `let in` expressions with no declarations.
 pub struct NoEmptyLet;
@@ -24,6 +24,7 @@ impl Rule for NoEmptyLet {
             .into_iter()
             .map(|span| LintError {
                 rule: self.name(),
+                    severity: Severity::Warning,
                 message: "Empty `let` expression — remove the `let ... in` wrapper".into(),
                 span,
                 fix: None,

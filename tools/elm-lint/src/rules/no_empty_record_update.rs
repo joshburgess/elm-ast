@@ -2,7 +2,7 @@ use elm_ast::expr::Expr;
 use elm_ast::node::Spanned;
 use elm_ast::visit::{self, Visit};
 
-use crate::rule::{LintContext, LintError, Rule};
+use crate::rule::{LintContext, LintError, Rule, Severity};
 
 /// Reports `{ record | }` with no actual updates, which is just `record`.
 pub struct NoEmptyRecordUpdate;
@@ -24,6 +24,7 @@ impl Rule for NoEmptyRecordUpdate {
             .into_iter()
             .map(|span| LintError {
                 rule: self.name(),
+                    severity: Severity::Warning,
                 message: "Record update with no fields — just use the record directly".into(),
                 span,
                 fix: None,

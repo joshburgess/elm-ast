@@ -2,7 +2,7 @@ use elm_ast::expr::Expr;
 use elm_ast::node::Spanned;
 use elm_ast::visit::{self, Visit};
 
-use crate::rule::{LintContext, LintError, Rule};
+use crate::rule::{Fix, LintContext, LintError, Rule, Severity};
 
 /// Reports `always identity` which is just `identity`.
 /// Also reports `identity >> f` or `f >> identity` which is just `f`,
@@ -19,15 +19,21 @@ impl Rule for NoAlwaysIdentity {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintError> {
-        let mut visitor = AlwaysVisitor(Vec::new());
+        let mut visitor = AlwaysVisitor {
+            source: ctx.source,
+            errors: Vec::new(),
+        };
         visitor.visit_module(ctx.module);
-        visitor.0
+        visitor.errors
     }
 }
 
-struct AlwaysVisitor(Vec<LintError>);
+struct AlwaysVisitor<'a> {
+    source: &'a str,
+    errors: Vec<LintError>,
+}
 
-impl Visit for AlwaysVisitor {
+impl Visit for AlwaysVisitor<'_> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         // `always identity` → `identity`
         if let Expr::Application(args) = &expr.value {
@@ -35,11 +41,12 @@ impl Visit for AlwaysVisitor {
                 && is_name(&args[0].value, "always")
                 && is_name(&args[1].value, "identity")
             {
-                self.0.push(LintError {
+                self.errors.push(LintError {
                     rule: "NoAlwaysIdentity",
+                    severity: Severity::Warning,
                     message: "`always identity` is equivalent to `identity`".into(),
                     span: expr.span,
-                    fix: None,
+                    fix: Some(Fix::replace(expr.span, "identity".into())),
                 });
             }
         }
@@ -54,14 +61,23 @@ impl Visit for AlwaysVisitor {
         } = &expr.value
         {
             if operator == ">>" || operator == "<<" {
-                if is_name(&left.value, "identity") || is_name(&right.value, "identity") {
-                    self.0.push(LintError {
+                let left_is_identity = is_name(&left.value, "identity");
+                let right_is_identity = is_name(&right.value, "identity");
+
+                if left_is_identity || right_is_identity {
+                    // The non-identity side is the replacement.
+                    let other = if left_is_identity { right } else { left };
+                    let other_text =
+                        &self.source[other.span.start.offset..other.span.end.offset];
+
+                    self.errors.push(LintError {
                         rule: "NoAlwaysIdentity",
+                    severity: Severity::Warning,
                         message: format!(
                             "Composing with `identity` using `{operator}` has no effect"
                         ),
                         span: expr.span,
-                        fix: None,
+                        fix: Some(Fix::replace(expr.span, other_text.to_string())),
                     });
                 }
             }

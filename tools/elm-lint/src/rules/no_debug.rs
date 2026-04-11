@@ -2,7 +2,7 @@ use elm_ast::expr::Expr;
 use elm_ast::node::Spanned;
 use elm_ast::visit::{self, Visit};
 
-use crate::rule::{LintContext, LintError, Rule};
+use crate::rule::{LintContext, LintError, Rule, Severity};
 
 /// Reports uses of `Debug.log`, `Debug.todo`, and `Debug.toString`.
 pub struct NoDebug;
@@ -16,6 +16,10 @@ impl Rule for NoDebug {
         "Disallows Debug.log, Debug.todo, and Debug.toString"
     }
 
+    fn default_severity(&self) -> Severity {
+        Severity::Error
+    }
+
     fn check(&self, ctx: &LintContext) -> Vec<LintError> {
         let mut visitor = DebugVisitor(Vec::new());
         visitor.visit_module(ctx.module);
@@ -24,6 +28,7 @@ impl Rule for NoDebug {
             .into_iter()
             .map(|(span, name)| LintError {
                 rule: self.name(),
+                    severity: Severity::Warning,
                 message: format!("`Debug.{name}` should not be used in production code"),
                 span,
                 fix: None,

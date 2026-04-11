@@ -1,5 +1,9 @@
+use std::collections::HashMap;
+
 use elm_ast::parse;
-use elm_lint::rule::{LintContext, Rule};
+use elm_lint::collect::collect_module_info;
+use elm_lint::fix::apply_fixes;
+use elm_lint::rule::{LintContext, LintError, ProjectContext, Rule};
 use elm_lint::rules;
 
 fn lint(source: &str, rule: &dyn Rule) -> Vec<String> {
@@ -9,6 +13,8 @@ fn lint(source: &str, rule: &dyn Rule) -> Vec<String> {
         source,
         file_path: "Test.elm",
         project_modules: &[],
+        module_info: None,
+        project: None,
     };
     rule.check(&ctx).into_iter().map(|e| e.message).collect()
 }
@@ -237,6 +243,227 @@ fn no_always_identity_flags_composition() {
     assert_eq!(errors, 1);
 }
 
+// ── Project-level rule helpers ───────────────────────────────────────
+
+/// Parse multiple modules, build ProjectContext, run a rule on each module,
+/// return all (file_path, message) pairs.
+fn lint_project(sources: &[(&str, &str)], rule: &dyn Rule) -> Vec<(String, String)> {
+    let mut parsed = Vec::new();
+    let mut module_infos = HashMap::new();
+
+    for (file_path, source) in sources {
+        let module = parse(source).unwrap_or_else(|e| panic!("parse failed for {file_path}: {e:?}"));
+        let info = collect_module_info(&module);
+        let mod_name = info.module_name.join(".");
+        module_infos.insert(mod_name.clone(), info);
+        parsed.push((file_path.to_string(), mod_name, module, source.to_string()));
+    }
+
+    let project_context = ProjectContext::build(module_infos);
+    let project_modules: Vec<String> = project_context.modules.keys().cloned().collect();
+
+    let mut results = Vec::new();
+    for (file_path, mod_name, module, source) in &parsed {
+        let ctx = LintContext {
+            module,
+            source,
+            file_path,
+            project_modules: &project_modules,
+            module_info: project_context.modules.get(mod_name),
+            project: Some(&project_context),
+        };
+        for error in rule.check(&ctx) {
+            results.push((file_path.clone(), error.message));
+        }
+    }
+    results
+}
+
+// ── NoUnusedExports ─────────────────────────────────────────────────
+
+#[test]
+fn no_unused_exports_flags_unused() {
+    let errors = lint_project(
+        &[
+            ("A.elm", "module A exposing (foo, bar)\n\nfoo = 1\n\nbar = 2"),
+            ("B.elm", "module B exposing (..)\n\nimport A exposing (foo)\n\nx = foo"),
+        ],
+        &rules::no_unused_exports::NoUnusedExports,
+    );
+    // bar is exported from A but never imported by B.
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].1.contains("bar"));
+}
+
+#[test]
+fn no_unused_exports_passes_when_imported() {
+    let errors = lint_project(
+        &[
+            ("A.elm", "module A exposing (foo)\n\nfoo = 1"),
+            ("B.elm", "module B exposing (..)\n\nimport A exposing (foo)\n\nx = foo"),
+        ],
+        &rules::no_unused_exports::NoUnusedExports,
+    );
+    assert_eq!(errors.len(), 0);
+}
+
+#[test]
+fn no_unused_exports_skips_exposing_all() {
+    let errors = lint_project(
+        &[
+            ("A.elm", "module A exposing (..)\n\nfoo = 1"),
+            ("B.elm", "module B exposing (..)\n\nx = 1"),
+        ],
+        &rules::no_unused_exports::NoUnusedExports,
+    );
+    // A uses exposing (..) — rule skips it.
+    assert_eq!(errors.len(), 0);
+}
+
+#[test]
+fn no_unused_exports_passes_internally_used() {
+    let errors = lint_project(
+        &[
+            ("A.elm", "module A exposing (foo)\n\nfoo = bar\n\nbar = 1"),
+        ],
+        &rules::no_unused_exports::NoUnusedExports,
+    );
+    // foo is exported and uses bar internally — foo itself is not used externally
+    // but it IS used internally (it references bar). Wait — foo is exported but not
+    // imported by anyone. It is not used internally either (nothing calls foo).
+    // So it should be flagged.
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].1.contains("foo"));
+}
+
+#[test]
+fn no_unused_exports_conservative_with_exposing_all_import() {
+    let errors = lint_project(
+        &[
+            ("A.elm", "module A exposing (foo)\n\nfoo = 1"),
+            ("B.elm", "module B exposing (..)\n\nimport A exposing (..)\n\nx = foo"),
+        ],
+        &rules::no_unused_exports::NoUnusedExports,
+    );
+    // B imports A exposing (..) — conservative: treat all of A's exports as used.
+    assert_eq!(errors.len(), 0);
+}
+
+#[test]
+fn no_unused_exports_flags_unused_type() {
+    let errors = lint_project(
+        &[
+            ("A.elm", "module A exposing (Foo, Bar)\n\ntype alias Foo = Int\n\ntype alias Bar = String"),
+            ("B.elm", "module B exposing (..)\n\nimport A exposing (Foo)\n\nx : Foo\nx = 1"),
+        ],
+        &rules::no_unused_exports::NoUnusedExports,
+    );
+    // Bar is exported but never imported.
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].1.contains("Bar"));
+}
+
+// ── NoUnusedCustomTypeConstructors ──────────────────────────────────
+
+#[test]
+fn no_unused_constructors_flags_unused() {
+    let errors = lint_project(
+        &[
+            ("A.elm", "module A exposing (..)\n\ntype Msg = Used | Unused\n\nx = Used"),
+        ],
+        &rules::no_unused_custom_type_constructors::NoUnusedCustomTypeConstructors,
+    );
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].1.contains("Unused"));
+}
+
+#[test]
+fn no_unused_constructors_passes_when_used() {
+    let errors = lint_project(
+        &[
+            ("A.elm", "module A exposing (..)\n\ntype Msg = Click | Hover\n\nx = Click\n\ny = Hover"),
+        ],
+        &rules::no_unused_custom_type_constructors::NoUnusedCustomTypeConstructors,
+    );
+    assert_eq!(errors.len(), 0);
+}
+
+#[test]
+fn no_unused_constructors_cross_module() {
+    let errors = lint_project(
+        &[
+            ("A.elm", "module A exposing (..)\n\ntype Msg = Click | Hover"),
+            ("B.elm", "module B exposing (..)\n\nimport A\n\nx = A.Click\n\ny = A.Hover"),
+        ],
+        &rules::no_unused_custom_type_constructors::NoUnusedCustomTypeConstructors,
+    );
+    // Both constructors used from B via qualified references.
+    assert_eq!(errors.len(), 0);
+}
+
+#[test]
+fn no_unused_constructors_pattern_match() {
+    let errors = lint_project(
+        &[
+            ("A.elm", "module A exposing (..)\n\ntype Msg = Click | Hover\n\nhandle msg =\n    case msg of\n        Click ->\n            1\n        Hover ->\n            2"),
+        ],
+        &rules::no_unused_custom_type_constructors::NoUnusedCustomTypeConstructors,
+    );
+    assert_eq!(errors.len(), 0);
+}
+
+// ── NoUnusedModules ─────────────────────────────────────────────────
+
+#[test]
+fn no_unused_modules_flags_unused() {
+    let errors = lint_project(
+        &[
+            ("A.elm", "module A exposing (..)\n\nx = 1"),
+            ("B.elm", "module B exposing (..)\n\ny = 2"),
+        ],
+        &rules::no_unused_modules::NoUnusedModules,
+    );
+    // Neither module imports the other — both flagged.
+    assert_eq!(errors.len(), 2);
+}
+
+#[test]
+fn no_unused_modules_passes_when_imported() {
+    let errors = lint_project(
+        &[
+            ("A.elm", "module A exposing (..)\n\nx = 1"),
+            ("B.elm", "module B exposing (..)\n\nimport A\n\ny = A.x"),
+        ],
+        &rules::no_unused_modules::NoUnusedModules,
+    );
+    // A is imported by B — only B is flagged (nothing imports B).
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].1.contains("B"));
+}
+
+#[test]
+fn no_unused_modules_exempts_main() {
+    let errors = lint_project(
+        &[
+            ("Main.elm", "module Main exposing (..)\n\nimport A\n\nx = A.foo"),
+            ("A.elm", "module A exposing (..)\n\nfoo = 1"),
+        ],
+        &rules::no_unused_modules::NoUnusedModules,
+    );
+    // Main is exempt (entry point). A is imported by Main.
+    assert_eq!(errors.len(), 0);
+}
+
+#[test]
+fn no_unused_modules_no_errors_without_project_context() {
+    // Without project context, rule should produce no errors.
+    let errors = lint_count(
+        "module A exposing (..)\n\nx = 1",
+        &rules::no_unused_modules::NoUnusedModules,
+    );
+    assert_eq!(errors, 0);
+}
+
 // ── All rules don't crash on complex code ────────────────────────────
 
 #[test]
@@ -267,6 +494,8 @@ view model =
         source,
         file_path: "Test.elm",
         project_modules: &[],
+        module_info: None,
+        project: None,
     };
 
     // Run every rule — none should crash.
@@ -276,4 +505,636 @@ view model =
         // because some rules will legitimately fire.
         let _ = errors;
     }
+}
+
+// ── Fix verification helpers ────────────────────────────────────────
+
+/// Run a rule, apply its fix, verify the result parses and the rule no longer fires.
+fn lint_and_fix(source: &str, rule: &dyn Rule) -> String {
+    let errors = lint_errors(source, rule);
+    assert!(!errors.is_empty(), "rule should fire on input");
+
+    let fix = errors[0]
+        .fix
+        .as_ref()
+        .unwrap_or_else(|| panic!("rule {} should provide a fix", errors[0].rule));
+
+    let fixed = apply_fixes(source, &fix.edits)
+        .unwrap_or_else(|e| panic!("apply_fixes failed: {e}"));
+
+    // Verify the fixed source parses.
+    parse(&fixed).unwrap_or_else(|e| panic!("fixed source doesn't parse: {e:?}\n---\n{fixed}"));
+
+    // Verify the rule no longer fires on the fixed source.
+    let re_errors = lint_errors(&fixed, rule);
+    assert!(
+        re_errors.is_empty(),
+        "rule {} still fires after fix: {:?}\n---\n{fixed}",
+        rule.name(),
+        re_errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+
+    fixed
+}
+
+fn lint_errors(source: &str, rule: &dyn Rule) -> Vec<LintError> {
+    let module = parse(source).unwrap_or_else(|e| panic!("parse failed: {e:?}"));
+    let ctx = LintContext {
+        module: &module,
+        source,
+        file_path: "Test.elm",
+        project_modules: &[],
+        module_info: None,
+        project: None,
+    };
+    rule.check(&ctx)
+}
+
+// ── Fix tests ───────────────────────────────────────────────────────
+
+#[test]
+fn fix_unnecessary_parens() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = (1)",
+        &rules::no_unnecessary_parens::NoUnnecessaryParens,
+    );
+    assert!(fixed.contains("x = 1"));
+}
+
+#[test]
+fn fix_unnecessary_parens_name() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = (foo)",
+        &rules::no_unnecessary_parens::NoUnnecessaryParens,
+    );
+    assert!(fixed.contains("x = foo"));
+}
+
+#[test]
+fn fix_redundant_cons() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = 1 :: []",
+        &rules::no_redundant_cons::NoRedundantCons,
+    );
+    assert!(fixed.contains("[ 1 ]"));
+}
+
+#[test]
+fn fix_unused_import() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nimport Html\n\nx = 1",
+        &rules::no_unused_imports::NoUnusedImports,
+    );
+    assert!(!fixed.contains("import Html"));
+    assert!(fixed.contains("x = 1"));
+}
+
+#[test]
+fn fix_if_true_false_identity() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = if y then True else False",
+        &rules::no_if_true_false::NoIfTrueFalse,
+    );
+    assert!(fixed.contains("x = y"));
+    assert!(!fixed.contains("if"));
+}
+
+#[test]
+fn fix_if_true_false_negation() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = if y then False else True",
+        &rules::no_if_true_false::NoIfTrueFalse,
+    );
+    assert!(fixed.contains("not"));
+    assert!(!fixed.contains("if"));
+}
+
+#[test]
+fn fix_always_identity() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = always identity",
+        &rules::no_always_identity::NoAlwaysIdentity,
+    );
+    assert!(fixed.contains("x = identity"));
+    assert!(!fixed.contains("always"));
+}
+
+#[test]
+fn fix_identity_composition() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = identity >> f",
+        &rules::no_always_identity::NoAlwaysIdentity,
+    );
+    assert!(fixed.contains("x = f"));
+    assert!(!fixed.contains(">>"));
+}
+
+#[test]
+fn fix_nested_negation() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = not (not y)",
+        &rules::no_nested_negation::NoNestedNegation,
+    );
+    assert!(fixed.contains("x = y"));
+    assert!(!fixed.contains("not"));
+}
+
+// ── NoBoolOperatorSimplify ──────────────────────────────────────────
+
+#[test]
+fn no_bool_operator_simplify_and_true() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = y && True",
+        &rules::no_bool_operator_simplify::NoBoolOperatorSimplify,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_bool_operator_simplify_or_false() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = y || False",
+        &rules::no_bool_operator_simplify::NoBoolOperatorSimplify,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_bool_operator_simplify_and_false() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = y && False",
+        &rules::no_bool_operator_simplify::NoBoolOperatorSimplify,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_bool_operator_simplify_or_true() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = y || True",
+        &rules::no_bool_operator_simplify::NoBoolOperatorSimplify,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_bool_operator_simplify_passes_normal() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = y && z",
+        &rules::no_bool_operator_simplify::NoBoolOperatorSimplify,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn fix_bool_operator_and_true() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = y && True",
+        &rules::no_bool_operator_simplify::NoBoolOperatorSimplify,
+    );
+    assert!(fixed.contains("x = y"));
+    assert!(!fixed.contains("True"));
+}
+
+#[test]
+fn fix_bool_operator_or_false() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = y || False",
+        &rules::no_bool_operator_simplify::NoBoolOperatorSimplify,
+    );
+    assert!(fixed.contains("x = y"));
+    assert!(!fixed.contains("False"));
+}
+
+// ── NoEmptyListConcat ───────────────────────────────────────────────
+
+#[test]
+fn no_empty_list_concat_left() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = [] ++ y",
+        &rules::no_empty_list_concat::NoEmptyListConcat,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_empty_list_concat_right() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = y ++ []",
+        &rules::no_empty_list_concat::NoEmptyListConcat,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_empty_list_concat_passes_non_empty() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = [ 1 ] ++ [ 2 ]",
+        &rules::no_empty_list_concat::NoEmptyListConcat,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn fix_empty_list_concat_left() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = [] ++ y",
+        &rules::no_empty_list_concat::NoEmptyListConcat,
+    );
+    assert!(fixed.contains("x = y"));
+    assert!(!fixed.contains("[]"));
+}
+
+#[test]
+fn fix_empty_list_concat_right() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = y ++ []",
+        &rules::no_empty_list_concat::NoEmptyListConcat,
+    );
+    assert!(fixed.contains("x = y"));
+    assert!(!fixed.contains("[]"));
+}
+
+// ── NoListLiteralConcat ─────────────────────────────────────────────
+
+#[test]
+fn no_list_literal_concat_flags() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = [ 1 ] ++ [ 2 ]",
+        &rules::no_list_literal_concat::NoListLiteralConcat,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_list_literal_concat_passes_non_literal() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = [ 1 ] ++ y",
+        &rules::no_list_literal_concat::NoListLiteralConcat,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn fix_list_literal_concat() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = [ 1 ] ++ [ 2 ]",
+        &rules::no_list_literal_concat::NoListLiteralConcat,
+    );
+    assert!(fixed.contains("[ 1, 2 ]"));
+    assert!(!fixed.contains("++"));
+}
+
+// ── NoPipelineSimplify ──────────────────────────────────────────────
+
+#[test]
+fn no_pipeline_simplify_right() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = y |> identity",
+        &rules::no_pipeline_simplify::NoPipelineSimplify,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_pipeline_simplify_left() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = identity <| y",
+        &rules::no_pipeline_simplify::NoPipelineSimplify,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_pipeline_simplify_passes_normal() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = y |> f",
+        &rules::no_pipeline_simplify::NoPipelineSimplify,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn fix_pipeline_simplify_right() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = y |> identity",
+        &rules::no_pipeline_simplify::NoPipelineSimplify,
+    );
+    assert!(fixed.contains("x = y"));
+    assert!(!fixed.contains("identity"));
+}
+
+#[test]
+fn fix_pipeline_simplify_left() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = identity <| y",
+        &rules::no_pipeline_simplify::NoPipelineSimplify,
+    );
+    assert!(fixed.contains("x = y"));
+    assert!(!fixed.contains("identity"));
+}
+
+// ── NoNegationOfBooleanOperator ─────────────────────────────────────
+
+#[test]
+fn no_negation_of_boolean_operator_eq() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = not (a == b)",
+        &rules::no_negation_of_boolean_operator::NoNegationOfBooleanOperator,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_negation_of_boolean_operator_lt() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = not (a < b)",
+        &rules::no_negation_of_boolean_operator::NoNegationOfBooleanOperator,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_negation_of_boolean_operator_passes_non_comparison() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = not (a && b)",
+        &rules::no_negation_of_boolean_operator::NoNegationOfBooleanOperator,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn fix_negation_of_boolean_operator_eq() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = not (a == b)",
+        &rules::no_negation_of_boolean_operator::NoNegationOfBooleanOperator,
+    );
+    assert!(fixed.contains("a /= b"));
+    assert!(!fixed.contains("not"));
+}
+
+#[test]
+fn fix_negation_of_boolean_operator_lt() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = not (a < b)",
+        &rules::no_negation_of_boolean_operator::NoNegationOfBooleanOperator,
+    );
+    assert!(fixed.contains("a >= b"));
+    assert!(!fixed.contains("not"));
+}
+
+// ── NoStringConcat ──────────────────────────────────────────────────
+
+#[test]
+fn no_string_concat_flags() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = \"hello\" ++ \" world\"",
+        &rules::no_string_concat::NoStringConcat,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_string_concat_passes_non_literal() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = \"hello\" ++ y",
+        &rules::no_string_concat::NoStringConcat,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn fix_string_concat() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = \"hello\" ++ \" world\"",
+        &rules::no_string_concat::NoStringConcat,
+    );
+    assert!(fixed.contains("\"hello world\""));
+    assert!(!fixed.contains("++"));
+}
+
+// ── NoFullyAppliedPrefixOperator ────────────────────────────────────
+
+#[test]
+fn no_fully_applied_prefix_operator_flags() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = (+) 1 2",
+        &rules::no_fully_applied_prefix_operator::NoFullyAppliedPrefixOperator,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_fully_applied_prefix_operator_passes_partial() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = (+) 1",
+        &rules::no_fully_applied_prefix_operator::NoFullyAppliedPrefixOperator,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn fix_fully_applied_prefix_operator() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = (+) 1 2",
+        &rules::no_fully_applied_prefix_operator::NoFullyAppliedPrefixOperator,
+    );
+    assert!(fixed.contains("1 + 2"));
+    assert!(!fixed.contains("(+)"));
+}
+
+// ── NoIdentityFunction ──────────────────────────────────────────────
+
+#[test]
+fn no_identity_function_flags() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = \\a -> a",
+        &rules::no_identity_function::NoIdentityFunction,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_identity_function_passes_transformation() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = \\a -> a + 1",
+        &rules::no_identity_function::NoIdentityFunction,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn no_identity_function_passes_multi_arg() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx = \\a b -> a",
+        &rules::no_identity_function::NoIdentityFunction,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn fix_identity_function() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx = \\a -> a",
+        &rules::no_identity_function::NoIdentityFunction,
+    );
+    assert!(fixed.contains("identity"));
+    assert!(!fixed.contains("\\"));
+}
+
+// ── NoSimpleLetBody ─────────────────────────────────────────────────
+
+#[test]
+fn no_simple_let_body_flags() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx =\n    let\n        y = 1\n    in\n    y",
+        &rules::no_simple_let_body::NoSimpleLetBody,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_simple_let_body_passes_used_body() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx =\n    let\n        y = 1\n    in\n    y + 2",
+        &rules::no_simple_let_body::NoSimpleLetBody,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn no_simple_let_body_passes_multiple_decls() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx =\n    let\n        y = 1\n        z = 2\n    in\n    y",
+        &rules::no_simple_let_body::NoSimpleLetBody,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn fix_simple_let_body() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nx =\n    let\n        y = 1\n    in\n    y",
+        &rules::no_simple_let_body::NoSimpleLetBody,
+    );
+    assert!(fixed.contains("1"));
+    assert!(!fixed.contains("let"));
+}
+
+// ── NoUnusedLetBinding ──────────────────────────────────────────────
+
+#[test]
+fn no_unused_let_binding_flags() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx =\n    let\n        y = 1\n    in\n    2",
+        &rules::no_unused_let_binding::NoUnusedLetBinding,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_unused_let_binding_passes_used() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx =\n    let\n        y = 1\n    in\n    y",
+        &rules::no_unused_let_binding::NoUnusedLetBinding,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn no_unused_let_binding_passes_used_by_other_decl() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nx =\n    let\n        y = 1\n        z = y + 1\n    in\n    z",
+        &rules::no_unused_let_binding::NoUnusedLetBinding,
+    );
+    assert_eq!(errors, 0);
+}
+
+// ── NoTodoComment ───────────────────────────────────────────────────
+
+#[test]
+fn no_todo_comment_flags_todo() {
+    let errors = lint_count(
+        "module T exposing (..)\n\n-- TODO fix this\nx = 1",
+        &rules::no_todo_comment::NoTodoComment,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_todo_comment_flags_fixme() {
+    let errors = lint_count(
+        "module T exposing (..)\n\n-- FIXME later\nx = 1",
+        &rules::no_todo_comment::NoTodoComment,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_todo_comment_passes_clean() {
+    let errors = lint_count(
+        "module T exposing (..)\n\n-- This is fine\nx = 1",
+        &rules::no_todo_comment::NoTodoComment,
+    );
+    assert_eq!(errors, 0);
+}
+
+// ── NoMaybeMapWithNothing ───────────────────────────────────────────
+
+#[test]
+fn no_maybe_map_with_nothing_flags() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nimport Maybe\n\nx = Maybe.map f Nothing",
+        &rules::no_maybe_map_with_nothing::NoMaybeMapWithNothing,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_maybe_map_with_nothing_passes_just() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nimport Maybe\n\nx = Maybe.map f (Just 1)",
+        &rules::no_maybe_map_with_nothing::NoMaybeMapWithNothing,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn fix_maybe_map_with_nothing() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nimport Maybe\n\nx = Maybe.map f Nothing",
+        &rules::no_maybe_map_with_nothing::NoMaybeMapWithNothing,
+    );
+    assert!(fixed.contains("x = Nothing"));
+    assert!(!fixed.contains("Maybe.map"));
+}
+
+// ── NoResultMapWithErr ──────────────────────────────────────────────
+
+#[test]
+fn no_result_map_with_err_flags() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nimport Result\n\nx = Result.map f (Err e)",
+        &rules::no_result_map_with_err::NoResultMapWithErr,
+    );
+    assert_eq!(errors, 1);
+}
+
+#[test]
+fn no_result_map_with_err_passes_ok() {
+    let errors = lint_count(
+        "module T exposing (..)\n\nimport Result\n\nx = Result.map f (Ok 1)",
+        &rules::no_result_map_with_err::NoResultMapWithErr,
+    );
+    assert_eq!(errors, 0);
+}
+
+#[test]
+fn fix_result_map_with_err() {
+    let fixed = lint_and_fix(
+        "module T exposing (..)\n\nimport Result\n\nx = Result.map f (Err e)",
+        &rules::no_result_map_with_err::NoResultMapWithErr,
+    );
+    assert!(fixed.contains("Err e"));
+    assert!(!fixed.contains("Result.map"));
 }

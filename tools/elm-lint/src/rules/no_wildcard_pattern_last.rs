@@ -3,7 +3,7 @@ use elm_ast::node::Spanned;
 use elm_ast::pattern::Pattern;
 use elm_ast::visit::{self, Visit};
 
-use crate::rule::{LintContext, LintError, Rule};
+use crate::rule::{LintContext, LintError, Rule, Severity};
 
 /// Reports `case` expressions where a wildcard `_` pattern is not the last branch.
 pub struct NoWildcardPatternLast;
@@ -35,6 +35,7 @@ impl Visit for Visitor {
                     if is_wildcard(&branch.pattern.value) {
                         self.0.push(LintError {
                             rule: "NoWildcardPatternLast",
+                    severity: Severity::Warning,
                             message:
                                 "Wildcard `_` pattern is not the last branch — subsequent branches are unreachable"
                                     .into(),

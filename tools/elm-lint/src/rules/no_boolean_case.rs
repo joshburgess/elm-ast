@@ -3,7 +3,7 @@ use elm_ast::node::Spanned;
 use elm_ast::pattern::Pattern;
 use elm_ast::visit::{self, Visit};
 
-use crate::rule::{LintContext, LintError, Rule};
+use crate::rule::{LintContext, LintError, Rule, Severity};
 
 /// Reports `case x of True -> ... ; False -> ...` which should be `if x then ... else ...`.
 pub struct NoBooleanCase;
@@ -25,6 +25,7 @@ impl Rule for NoBooleanCase {
             .into_iter()
             .map(|span| LintError {
                 rule: self.name(),
+                    severity: Severity::Warning,
                 message: "Use `if`/`else` instead of `case` on Bool".into(),
                 span,
                 fix: None,

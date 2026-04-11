@@ -1,6 +1,6 @@
 use elm_ast::declaration::Declaration;
 
-use crate::rule::{LintContext, LintError, Rule};
+use crate::rule::{LintContext, LintError, Rule, Severity};
 
 /// Reports top-level functions missing type annotations.
 pub struct NoMissingTypeAnnotation;
@@ -23,6 +23,7 @@ impl Rule for NoMissingTypeAnnotation {
                     let name = &func.declaration.value.name.value;
                     errors.push(LintError {
                         rule: self.name(),
+                    severity: Severity::Warning,
                         message: format!("`{name}` is missing a type annotation"),
                         span: func.declaration.value.name.span,
                         fix: None,

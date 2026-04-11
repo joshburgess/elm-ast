@@ -2,7 +2,7 @@ use elm_ast::expr::Expr;
 use elm_ast::node::Spanned;
 use elm_ast::visit::{self, Visit};
 
-use crate::rule::{LintContext, LintError, Rule};
+use crate::rule::{LintContext, LintError, Rule, Severity};
 
 /// Reports `case` expressions with only one branch (should use `let` instead).
 pub struct NoSinglePatternCase;
@@ -24,6 +24,7 @@ impl Rule for NoSinglePatternCase {
             .into_iter()
             .map(|span| LintError {
                 rule: self.name(),
+                    severity: Severity::Warning,
                 message: "Case expression has only one branch — consider using `let` destructuring"
                     .into(),
                 span,

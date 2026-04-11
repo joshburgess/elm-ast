@@ -2,7 +2,7 @@ use elm_ast::expr::Expr;
 use elm_ast::node::Spanned;
 use elm_ast::visit::{self, Visit};
 
-use crate::rule::{LintContext, LintError, Rule};
+use crate::rule::{Fix, LintContext, LintError, Rule, Severity};
 
 /// Reports unnecessary parentheses around simple expressions.
 pub struct NoUnnecessaryParens;
@@ -17,24 +17,21 @@ impl Rule for NoUnnecessaryParens {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintError> {
-        let mut visitor = ParenVisitor(Vec::new());
+        let mut visitor = ParenVisitor {
+            source: ctx.source,
+            errors: Vec::new(),
+        };
         visitor.visit_module(ctx.module);
-        visitor
-            .0
-            .into_iter()
-            .map(|span| LintError {
-                rule: self.name(),
-                message: "Unnecessary parentheses".into(),
-                span,
-                fix: None,
-            })
-            .collect()
+        visitor.errors
     }
 }
 
-struct ParenVisitor(Vec<elm_ast::span::Span>);
+struct ParenVisitor<'a> {
+    source: &'a str,
+    errors: Vec<LintError>,
+}
 
-impl Visit for ParenVisitor {
+impl Visit for ParenVisitor<'_> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         if let Expr::Parenthesized(inner) = &expr.value {
             // Parens around simple atoms are unnecessary.
@@ -46,7 +43,15 @@ impl Visit for ParenVisitor {
                     | Expr::RecordAccessFunction(_)
             );
             if is_simple {
-                self.0.push(expr.span);
+                let inner_text =
+                    &self.source[inner.span.start.offset..inner.span.end.offset];
+                self.errors.push(LintError {
+                    rule: "NoUnnecessaryParens",
+                    severity: Severity::Warning,
+                    message: "Unnecessary parentheses".into(),
+                    span: expr.span,
+                    fix: Some(Fix::replace(expr.span, inner_text.to_string())),
+                });
             }
         }
         visit::walk_expr(self, expr);

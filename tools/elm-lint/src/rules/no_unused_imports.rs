@@ -7,7 +7,8 @@ use elm_ast::pattern::Pattern;
 use elm_ast::type_annotation::TypeAnnotation;
 use elm_ast::visit::{self, Visit};
 
-use crate::rule::{LintContext, LintError, Rule};
+use crate::fix::remove_line;
+use crate::rule::{Edit, Fix, LintContext, LintError, Rule, Severity};
 
 pub struct NoUnusedImports;
 
@@ -52,11 +53,16 @@ impl Rule for NoUnusedImports {
             };
 
             if !qualified_used && !exposed_used {
+                let remove_edit = Edit::Remove { span: imp.span };
+                let line_edit = remove_line(ctx.source, &remove_edit);
                 errors.push(LintError {
                     rule: self.name(),
+                    severity: Severity::Warning,
                     message: format!("Import `{imp_module}` is not used"),
                     span: imp.span,
-                    fix: None,
+                    fix: Some(Fix {
+                        edits: vec![line_edit],
+                    }),
                 });
             }
         }

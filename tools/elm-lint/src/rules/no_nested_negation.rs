@@ -2,7 +2,7 @@ use elm_ast::expr::Expr;
 use elm_ast::node::Spanned;
 use elm_ast::visit::{self, Visit};
 
-use crate::rule::{LintContext, LintError, Rule};
+use crate::rule::{Fix, LintContext, LintError, Rule, Severity};
 
 /// Reports double negation like `not (not x)` or `-(-(x))`.
 pub struct NoNestedNegation;
@@ -17,31 +17,38 @@ impl Rule for NoNestedNegation {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintError> {
-        let mut visitor = NegVisitor(Vec::new());
+        let mut visitor = NegVisitor {
+            source: ctx.source,
+            errors: Vec::new(),
+        };
         visitor.visit_module(ctx.module);
-        visitor
-            .0
-            .into_iter()
-            .map(|span| LintError {
-                rule: self.name(),
-                message: "Double negation — simplify by removing both".into(),
-                span,
-                fix: None,
-            })
-            .collect()
+        visitor.errors
     }
 }
 
-struct NegVisitor(Vec<elm_ast::span::Span>);
+struct NegVisitor<'a> {
+    source: &'a str,
+    errors: Vec<LintError>,
+}
 
-impl Visit for NegVisitor {
+impl Visit for NegVisitor<'_> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        // `-(-(x))` → `x`
         if let Expr::Negation(inner) = &expr.value {
-            if matches!(&inner.value, Expr::Negation(_)) {
-                self.0.push(expr.span);
+            if let Expr::Negation(innermost) = &inner.value {
+                let inner_text =
+                    &self.source[innermost.span.start.offset..innermost.span.end.offset];
+                self.errors.push(LintError {
+                    rule: "NoNestedNegation",
+                    severity: Severity::Warning,
+                    message: "Double negation — simplify by removing both".into(),
+                    span: expr.span,
+                    fix: Some(Fix::replace(expr.span, inner_text.to_string())),
+                });
             }
         }
-        // Also check `not (not x)` pattern.
+
+        // `not (not x)` → `x`
         if let Expr::Application(args) = &expr.value {
             if args.len() == 2 {
                 if let Expr::FunctionOrValue { module_name, name } = &args[0].value {
@@ -55,7 +62,16 @@ impl Visit for NegVisitor {
                                     } = &inner_args[0].value
                                     {
                                         if m2.is_empty() && n2 == "not" {
-                                            self.0.push(expr.span);
+                                            let arg = &inner_args[1];
+                                            let arg_text = &self.source
+                                                [arg.span.start.offset..arg.span.end.offset];
+                                            self.errors.push(LintError {
+                                                rule: "NoNestedNegation",
+                    severity: Severity::Warning,
+                                                message: "Double negation — simplify by removing both".into(),
+                                                span: expr.span,
+                                                fix: Some(Fix::replace(expr.span, arg_text.to_string())),
+                                            });
                                         }
                                     }
                                 }

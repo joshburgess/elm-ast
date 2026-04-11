@@ -2,7 +2,7 @@ use elm_ast::expr::Expr;
 use elm_ast::node::Spanned;
 use elm_ast::visit::{self, Visit};
 
-use crate::rule::{LintContext, LintError, Rule};
+use crate::rule::{Fix, LintContext, LintError, Rule, Severity};
 
 /// Reports `x :: []` which should be `[ x ]`.
 pub struct NoRedundantCons;
@@ -17,33 +17,41 @@ impl Rule for NoRedundantCons {
     }
 
     fn check(&self, ctx: &LintContext) -> Vec<LintError> {
-        let mut visitor = Visitor(Vec::new());
+        let mut visitor = Visitor {
+            source: ctx.source,
+            errors: Vec::new(),
+        };
         visitor.visit_module(ctx.module);
-        visitor
-            .0
-            .into_iter()
-            .map(|span| LintError {
-                rule: self.name(),
-                message: "`x :: []` can be simplified to `[ x ]`".into(),
-                span,
-                fix: None,
-            })
-            .collect()
+        visitor.errors
     }
 }
 
-struct Visitor(Vec<elm_ast::span::Span>);
+struct Visitor<'a> {
+    source: &'a str,
+    errors: Vec<LintError>,
+}
 
-impl Visit for Visitor {
+impl Visit for Visitor<'_> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         if let Expr::OperatorApplication {
-            operator, right, ..
+            operator, left, right, ..
         } = &expr.value
         {
             if operator == "::" {
                 if let Expr::List(elems) = &right.value {
                     if elems.is_empty() {
-                        self.0.push(expr.span);
+                        let left_text =
+                            &self.source[left.span.start.offset..left.span.end.offset];
+                        self.errors.push(LintError {
+                            rule: "NoRedundantCons",
+                    severity: Severity::Warning,
+                            message: "`x :: []` can be simplified to `[ x ]`".into(),
+                            span: expr.span,
+                            fix: Some(Fix::replace(
+                                expr.span,
+                                format!("[ {left_text} ]"),
+                            )),
+                        });
                     }
                 }
             }
