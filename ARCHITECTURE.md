@@ -37,14 +37,6 @@ src/
   fold.rs                  Fold trait — owned transformation
   builder.rs               Helpers for programmatic AST construction
   wasm.rs                  WASM bindings via wasm-bindgen
-
-tools/
-  elm-unused/              Dead code detection
-  elm-lint/                14 built-in lint rules
-  elm-deps/                Dependency graphs, cycle detection
-  elm-refactor/            Rename, sort imports, qualify imports
-  elm-search/              Semantic AST-aware code search
-
 tests/
   parser_tests.rs          Parser unit tests
   printer_tests.rs         Printer unit tests
@@ -165,16 +157,6 @@ Three traits provide different traversal strategies:
 
 Each trait has one method per AST node type (e.g., `visit_expr`, `visit_pattern`) with a default implementation that calls the corresponding `walk_*` function for recursive descent. Override specific methods to intercept nodes of interest.
 
-## Tool architecture
-
-All five tools are separate workspace crates that depend on `elm-ast`:
-
-- **elm-unused** uses `Visit` to collect definitions and references from each module, then cross-references them to find unused code.
-- **elm-lint** defines a `Rule` trait. Each rule receives a `LintContext` (parsed module + source + file path) and returns `Vec<LintError>`. Rules use pattern matching on AST nodes.
-- **elm-deps** extracts module names and import lists from parsed files, builds a `HashMap<&str, Vec<&str>>` graph, and runs DFS-based cycle detection.
-- **elm-refactor** uses `VisitMut` for rename and qualify-imports operations. It loads all files into a `Project` struct and applies transformations across modules.
-- **elm-search** pattern-matches on AST nodes to find expressions/declarations matching structured queries (return type, case patterns, record updates, etc.).
-
 ## Test organization
 
 Tests are layered from unit to integration:
@@ -183,7 +165,6 @@ Tests are layered from unit to integration:
 2. **Edge case tests** — serde round-trips, builder API, comment handling
 3. **Property tests** — proptest-generated random ASTs verify parse/print invariants
 4. **Integration tests** — 291 real `.elm` files from 50 packages verify parse, round-trip (parse -> print -> parse produces structurally equal AST), and printer idempotency (print -> parse -> print produces identical text)
-5. **Tool integration tests** — all 5 tools run against the full 291-file corpus, with targeted assertions (lint rules fire on real code, dependency graph edges are correct, refactored output reparses, all search query types find results)
 
 ### Regression watchlist
 

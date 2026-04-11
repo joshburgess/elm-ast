@@ -1,6 +1,6 @@
 # elm-ast
 
-Inspired by [`syn`](https://github.com/dtolnay/syn), `elm-ast` is a Rust library for parsing and constructing Elm 0.19.1 ASTs. The repository also features a suite of developer tools for Elm written with the tool.
+Inspired by [`syn`](https://github.com/dtolnay/syn), `elm-ast` is a Rust library for parsing and constructing Elm 0.19.1 ASTs.
 
 ## Overview
 
@@ -8,41 +8,7 @@ Inspired by [`syn`](https://github.com/dtolnay/syn), `elm-ast` is a Rust library
 
 **Tested against 291 real-world `.elm` files from 50 packages** (including `elm/core`, `elm/browser`, `rtfeldman/elm-css`, `mdgriffith/elm-ui`, `dillonkearns/elm-markdown`, `folkertdev/elm-flate`, `elm-explorations/test`) with 100% parse, round-trip, and printer idempotency rates.
 
-## Tool suite
-
-Built on `elm-ast`, five standalone CLI tools for Elm development:
-
-| Tool | Description | Speed |
-|---|---|---|
-| [**`elm-unused`**](tools/elm-unused/) | Project-wide dead code detection | 10ms / 26 files |
-| [**`elm-lint`**](tools/elm-lint/) | 14 built-in lint rules | 7ms / 26 files |
-| [**`elm-deps`**](tools/elm-deps/) | Dependency graphs, cycle detection, coupling metrics | 18ms / 13 files |
-| [**`elm-refactor`**](tools/elm-refactor/) | Cross-file rename, sort/qualify imports | 7ms / 18 files |
-| [**`elm-search`**](tools/elm-search/) | Semantic AST-aware code search (10 query types) | 3ms / 18 files |
-
-### Quick examples
-
-```bash
-# Find dead code
-cargo run -p elm-unused -- src
-
-# Lint with all 14 rules
-cargo run -p elm-lint -- src
-
-# Visualize module dependencies
-cargo run -p elm-deps -- --mermaid src
-
-# Rename a function across all files
-cargo run -p elm-refactor -- rename Main.oldName oldName newName src
-
-# Find all functions returning Maybe
-cargo run -p elm-search -- --dir src returns Maybe
-
-# Find unused function arguments
-cargo run -p elm-search -- --dir src unused-args
-```
-
-## Library quick start
+## Quick start
 
 ```rust
 use elm_ast::{parse, print};
@@ -219,7 +185,7 @@ None of this was strictly necessary -- a simple depth limit would have sufficed 
 
 ## Test coverage
 
-448 tests across the workspace:
+365 tests:
 
 | Suite | Tests |
 |---|---|
@@ -230,11 +196,6 @@ None of this was strictly necessary -- a simple depth limit would have sufficed 
 | Edge cases + serde + builders + comments | 104 |
 | Property-based (proptest) | 5 |
 | Integration (291 real files, 50 packages) | 3 |
-| elm-unused | 9 |
-| elm-lint | 26 |
-| elm-deps | 11 |
-| elm-refactor | 15 |
-| elm-search | 21 |
 
 ## License
 

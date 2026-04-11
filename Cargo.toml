@@ -1,6 +1,3 @@
-[workspace]
-members = [".", "tools/elm-unused", "tools/elm-lint", "tools/elm-lsp", "tools/elm-deps", "tools/elm-refactor", "tools/elm-search"]
-
 [package]
 name = "elm-ast"
 version = "0.1.0"
@@ -9,9 +6,10 @@ description = "A syn-quality Rust library for parsing and constructing Elm 0.19.
 license = "MIT OR Apache-2.0"
 keywords = ["elm", "ast", "parser", "syntax"]
 categories = ["parsing", "development-tools"]
-repository = "https://github.com/joshburgess/elm-ast-rs"
+repository = "https://github.com/joshburgess/elm-ast"
 documentation = "https://docs.rs/elm-ast"
 readme = "README.md"
+exclude = ["test-fixtures/"]
 
 [features]
 default = ["full"]
