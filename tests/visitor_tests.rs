@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use elm_ast::comment::Comment;
 use elm_ast::declaration::{Declaration, InfixDef};
 use elm_ast::exposing::ExposedItem;

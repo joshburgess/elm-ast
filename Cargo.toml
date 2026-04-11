@@ -28,9 +28,33 @@ serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 serde_json = "1"
+wasm-bindgen-test = "0.3"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1"
+
+[[example]]
+name = "elm_identifiers"
+required-features = ["parsing", "visit"]
+
+[[example]]
+name = "elm_parse"
+required-features = ["parsing"]
+
+[[example]]
+name = "elm_roundtrip"
+required-features = ["parsing", "printing"]
+
+[[example]]
+name = "print_file"
+required-features = ["parsing", "printing"]
+
+[[example]]
+name = "roundtrip_debug"
+required-features = ["parsing", "printing"]
 
 [[bench]]
 name = "parse_bench"
 harness = false
+required-features = ["parsing", "printing"]

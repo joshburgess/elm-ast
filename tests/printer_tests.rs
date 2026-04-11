@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use elm_ast::parse;
 use elm_ast::print::print;
 

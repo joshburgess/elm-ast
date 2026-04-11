@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use elm_ast::lexer::Lexer;
 use elm_ast::literal::Literal;
 use elm_ast::token::Token;

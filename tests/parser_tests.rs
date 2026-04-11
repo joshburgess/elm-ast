@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use elm_ast::declaration::Declaration;
 use elm_ast::exposing::{ExposedItem, Exposing};
 use elm_ast::expr::Expr;
