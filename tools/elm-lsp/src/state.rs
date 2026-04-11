@@ -204,6 +204,12 @@ fn build_rule_descriptions(rules: &[Box<dyn Rule>]) -> HashMap<String, RuleInfo>
         "NoSimpleLetBody",
         "NoMaybeMapWithNothing",
         "NoResultMapWithErr",
+        // New fixable rules
+        "NoUnusedParameters",
+        "NoExposingAll",
+        "NoImportExposingAll",
+        "NoUnnecessaryPortModule",
+        "NoRedundantlyQualifiedType",
     ]
     .into_iter()
     .collect();

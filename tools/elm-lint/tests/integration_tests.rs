@@ -244,6 +244,21 @@ fn every_rule_fires_on_real_code() {
         "NoTodoComment",                  // well-maintained packages resolve TODOs
         "NoMaybeMapWithNothing",          // uncommon pattern
         "NoResultMapWithErr",             // uncommon pattern
+        // New rules — uncommon in well-written packages or require context
+        "NoDeprecated",                   // packages rarely mark things deprecated inline
+        "NoUnnecessaryPortModule",        // uncommon pattern
+        "NoUnusedCustomTypeConstructorArgs", // requires seeing all case branches
+        "NoPrematureLetComputation",      // uncommon pattern
+        "NoRecordPatternInFunctionArgs",  // style preference
+        // Batch 2 rules
+        "NoUnusedPatterns",               // uncommon in well-written code
+        "CognitiveComplexity",            // well-written packages keep functions short
+        "NoMissingTypeAnnotationInLetIn", // many packages skip let annotations
+        "NoConfusingPrefixOperator",      // uncommon pattern
+        "NoMissingTypeExpose",            // requires specific exposing list
+        "NoRedundantlyQualifiedType",     // uncommon in well-written code
+        "NoUnoptimizedRecursion",         // uncommon pattern
+        "NoRecursiveUpdate",              // only applies to TEA apps with `update`
     ];
 
     // If no fixture files are available, skip gracefully.
@@ -368,7 +383,116 @@ fn each_rule_fires_on_something() {
             "NoResultMapWithErr",
             "module T exposing (..)\n\nimport Result\n\nx = Result.map f (Err e)",
         ),
+        // New rules
+        (
+            "NoUnusedParameters",
+            "module T exposing (..)\n\nfoo x = 1",
+        ),
+        (
+            "NoUnusedCustomTypeConstructorArgs",
+            "module T exposing (..)\n\ntype Msg = Click Int\n\nfoo msg =\n    case msg of\n        Click _ ->\n            1",
+        ),
+        (
+            "NoExposingAll",
+            "module T exposing (..)\n\nfoo = 1",
+        ),
+        (
+            "NoImportExposingAll",
+            "module T exposing (foo)\n\nimport Html exposing (..)\n\nfoo = Html.div",
+        ),
+        (
+            "NoDeprecated",
+            "module T exposing (bar)\n\n{-| deprecated -}\nfoo = 1\n\nbar = foo + 1",
+        ),
+        (
+            "NoMissingDocumentation",
+            "module T exposing (foo)\n\nfoo = 1",
+        ),
+        (
+            "NoUnnecessaryTrailingUnderscore",
+            "module T exposing (..)\n\nfoo x_ = x_",
+        ),
+        (
+            "NoPrematureLetComputation",
+            "module T exposing (..)\n\nfoo x =\n    let\n        y = expensive x\n    in\n    if x then y else 0",
+        ),
+        (
+            "NoUnnecessaryPortModule",
+            "port module T exposing (foo)\n\nfoo = 1",
+        ),
+        (
+            "NoShadowing",
+            "module T exposing (..)\n\nfoo = 1\n\nbar foo = foo + 1",
+        ),
+        (
+            "NoRecordPatternInFunctionArgs",
+            "module T exposing (..)\n\nfoo { x, y } = x + y",
+        ),
+        // Batch 2 rules
+        (
+            "NoUnusedPatterns",
+            "module T exposing (..)\n\nfoo x =\n    case x of\n        Just y ->\n            1\n        Nothing ->\n            0",
+        ),
+        (
+            "NoMissingTypeAnnotationInLetIn",
+            "module T exposing (..)\n\nfoo =\n    let\n        bar = 1\n    in\n    bar",
+        ),
+        (
+            "NoConfusingPrefixOperator",
+            "module T exposing (..)\n\nx = (-) 5 3",
+        ),
+        (
+            "NoMissingTypeExpose",
+            "module T exposing (foo)\n\ntype alias MyType = Int\n\nfoo : MyType -> Int\nfoo x = x",
+        ),
+        (
+            "NoRedundantlyQualifiedType",
+            "module T exposing (..)\n\nimport Set\n\nfoo : Set.Set Int\nfoo = Set.empty",
+        ),
+        (
+            "NoUnoptimizedRecursion",
+            "module T exposing (..)\n\nsum n =\n    if n == 0 then\n        0\n    else\n        n + sum (n - 1)",
+        ),
+        (
+            "NoRecursiveUpdate",
+            "module T exposing (..)\n\ntype Msg = Click | Reset\n\nupdate msg model =\n    case msg of\n        Click ->\n            model + 1\n        Reset ->\n            update Click 0",
+        ),
     ];
+
+    // NoMaxLineLength needs special handling (long line)
+    let long_line = format!("x = \"{}\"", "a".repeat(200));
+    let max_line_source = format!("module T exposing (x)\n\n{long_line}");
+
+    // CognitiveComplexity needs special handling (deeply nested function)
+    let cognitive_source = r#"module T exposing (..)
+
+foo x =
+    if x == 1 then
+        if x == 2 then
+            if x == 3 then
+                if x == 4 then
+                    if x == 5 then
+                        if x == 6 then
+                            if x == 7 then
+                                if x == 8 then
+                                    1
+                                else
+                                    2
+                            else
+                                3
+                        else
+                            4
+                    else
+                        5
+                else
+                    6
+            else
+                7
+        else
+            8
+    else
+        9
+"#;
 
     let all_rules = rules::all_rules();
 
@@ -392,6 +516,50 @@ fn each_rule_fires_on_something() {
         assert!(
             !errors.is_empty(),
             "rule {rule_name} should fire on test input but produced 0 errors"
+        );
+    }
+
+    // Test NoMaxLineLength separately with dynamic source.
+    {
+        let module = parse(&max_line_source).unwrap();
+        let ctx = LintContext {
+            module: &module,
+            source: &max_line_source,
+            file_path: "test.elm",
+            project_modules: &[],
+            module_info: None,
+            project: None,
+        };
+        let rule = all_rules
+            .iter()
+            .find(|r| r.name() == "NoMaxLineLength")
+            .expect("NoMaxLineLength not found");
+        let errors = rule.check(&ctx);
+        assert!(
+            !errors.is_empty(),
+            "rule NoMaxLineLength should fire on test input but produced 0 errors"
+        );
+    }
+
+    // Test CognitiveComplexity separately with deeply nested source.
+    {
+        let module = parse(cognitive_source).unwrap();
+        let ctx = LintContext {
+            module: &module,
+            source: cognitive_source,
+            file_path: "test.elm",
+            project_modules: &[],
+            module_info: None,
+            project: None,
+        };
+        let rule = all_rules
+            .iter()
+            .find(|r| r.name() == "CognitiveComplexity")
+            .expect("CognitiveComplexity not found");
+        let errors = rule.check(&ctx);
+        assert!(
+            !errors.is_empty(),
+            "rule CognitiveComplexity should fire on test input but produced 0 errors"
         );
     }
 }

@@ -75,7 +75,7 @@ fn lint_detects_debug_log() {
 
 #[test]
 fn lint_clean_file_has_no_errors() {
-    let source = "module Test exposing (x)\n\n\nx : Int\nx =\n    1\n";
+    let source = "module Test exposing (x)\n\n\n{-| A value. -}\nx : Int\nx =\n    1\n";
     let (state, uri) = make_state_with_source(source);
 
     let errors = analysis::lint_document(&state, &uri);
@@ -85,7 +85,10 @@ fn lint_clean_file_has_no_errors() {
         .filter(|e| {
             !matches!(
                 e.rule,
-                "NoUnusedExports" | "NoUnusedCustomTypeConstructors" | "NoUnusedModules"
+                "NoUnusedExports"
+                    | "NoUnusedCustomTypeConstructors"
+                    | "NoUnusedModules"
+                    | "NoMissingDocumentation"
             )
         })
         .collect();

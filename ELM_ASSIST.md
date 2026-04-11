@@ -103,11 +103,11 @@ Organized by the elm-review packages they replace. Rules marked with (fix) suppo
 
 - [x] **NoUnusedImports** (fix) — import statement where nothing from the module is used
 - [x] **NoUnusedVariables** — defined but never referenced
-- [ ] **NoUnusedExports** — exported but never imported by any other module in the project
-- [ ] **NoUnusedCustomTypeConstructors** — constructor never used in patterns or expressions
-- [ ] **NoUnusedCustomTypeConstructorArgs** — constructor argument that is always ignored with `_`
-- [ ] **NoUnusedModules** — module that is never imported by any other module
-- [ ] **NoUnusedParameters** (fix) — function parameter always matched with `_`
+- [x] **NoUnusedExports** — exported but never imported by any other module in the project
+- [x] **NoUnusedCustomTypeConstructors** — constructor never used in patterns or expressions
+- [x] **NoUnusedCustomTypeConstructorArgs** — constructor argument that is always ignored with `_`
+- [x] **NoUnusedModules** — module that is never imported by any other module
+- [x] **NoUnusedParameters** (fix) — function parameter always matched with `_`
 
 ### From jfmengels/elm-review-simplify
 
@@ -116,16 +116,16 @@ Organized by the elm-review packages they replace. Rules marked with (fix) suppo
 - [x] **NoAlwaysIdentity** (fix) — `always identity` -> `\_ -> identity` or simplified
 - [x] **NoRedundantCons** (fix) — `x :: []` -> `[x]`
 - [x] **NoUnnecessaryParens** (fix) — `(x)` -> `x` when parens aren't needed
-- [ ] **NoNegationOfBooleanOperator** (fix) — `not (a == b)` -> `a /= b`
-- [ ] **NoFullyAppliedPrefixOperator** (fix) — `(+) 1 2` -> `1 + 2`
-- [ ] **NoIdentityFunction** (fix) — `\x -> x` passed as argument -> `identity`
-- [ ] **NoListLiteralConcat** (fix) — `[a] ++ [b]` -> `[a, b]`
-- [ ] **NoEmptyListConcat** (fix) — `[] ++ list` -> `list`
-- [ ] **NoStringConcat** (fix) — `"a" ++ "b"` -> `"ab"` for string literals
-- [ ] **NoBoolOperatorSimplify** (fix) — `x && True` -> `x`, `x || False` -> `x`
-- [ ] **NoMaybeMapWithNothing** (fix) — `Maybe.map f Nothing` -> `Nothing`
-- [ ] **NoResultMapWithErr** (fix) — `Result.map f (Err e)` -> `Err e`
-- [ ] **NoPipelineSimplify** (fix) — `x |> identity` -> `x`
+- [x] **NoNegationOfBooleanOperator** (fix) — `not (a == b)` -> `a /= b`
+- [x] **NoFullyAppliedPrefixOperator** (fix) — `(+) 1 2` -> `1 + 2`
+- [x] **NoIdentityFunction** (fix) — `\x -> x` passed as argument -> `identity`
+- [x] **NoListLiteralConcat** (fix) — `[a] ++ [b]` -> `[a, b]`
+- [x] **NoEmptyListConcat** (fix) — `[] ++ list` -> `list`
+- [x] **NoStringConcat** (fix) — `"a" ++ "b"` -> `"ab"` for string literals
+- [x] **NoBoolOperatorSimplify** (fix) — `x && True` -> `x`, `x || False` -> `x`
+- [x] **NoMaybeMapWithNothing** (fix) — `Maybe.map f Nothing` -> `Nothing`
+- [x] **NoResultMapWithErr** (fix) — `Result.map f (Err e)` -> `Err e`
+- [x] **NoPipelineSimplify** (fix) — `x |> identity` -> `x`
 
 ### From jfmengels/elm-review-debug
 
@@ -135,17 +135,17 @@ Organized by the elm-review packages they replace. Rules marked with (fix) suppo
 
 - [x] **NoMissingTypeAnnotation** — top-level function without a type signature
 - [x] **NoSinglePatternCase** (fix) — `case x of _ -> ...` -> `let _ = x in ...`
-- [ ] **NoExposingAll** (fix) — `module Foo exposing (..)` -> explicit exposing list
-- [ ] **NoImportExposingAll** (fix) — `import Foo exposing (..)` -> explicit exposing
-- [ ] **NoDeprecated** — usage of functions/types marked as deprecated
-- [ ] **NoMissingDocumentation** — public function/type without a doc comment
+- [x] **NoExposingAll** (fix) — `module Foo exposing (..)` -> explicit exposing list
+- [x] **NoImportExposingAll** (fix) — `import Foo exposing (..)` -> explicit exposing
+- [x] **NoDeprecated** — usage of functions/types marked as deprecated
+- [x] **NoMissingDocumentation** — public function/type without a doc comment
 
 ### From jfmengels/elm-review-code-style
 
-- [ ] **NoUnnecessaryTrailingUnderscore** (fix) — `foo_` when `foo` is not in scope
-- [ ] **NoPrematureLetComputation** (fix) — let binding used only in one branch of if/case
-- [ ] **NoSimpleLetBody** (fix) — `let x = expr in x` -> `expr`
-- [ ] **NoUnnecessaryPortModule** (fix) — `port module` with no port declarations
+- [x] **NoUnnecessaryTrailingUnderscore** — `foo_` when `foo` is not in scope
+- [x] **NoPrematureLetComputation** — let binding used only in one branch of if/case
+- [x] **NoSimpleLetBody** (fix) — `let x = expr in x` -> `expr`
+- [x] **NoUnnecessaryPortModule** (fix) — `port module` with no port declarations
 
 ### New rules (no elm-review equivalent)
 
@@ -153,11 +153,22 @@ Organized by the elm-review packages they replace. Rules marked with (fix) suppo
 - [x] **NoEmptyRecordUpdate** — `{ record | }` with no fields
 - [x] **NoNestedNegation** — `not (not x)` -> `x`
 - [x] **NoWildcardPatternLast** — catch-all `_` that shadows more specific patterns
-- [ ] **NoMaxLineLength** — configurable line length limit
-- [ ] **NoTodoComment** — `-- TODO` or `{- TODO -}` in source
-- [ ] **NoRecordPatternInFunctionArgs** — `foo { x, y } = ...` -> `foo record = ... record.x ... record.y`
-- [ ] **NoUnusedLetBinding** — let binding that is never referenced in the body
-- [ ] **NoShadowing** — local binding that shadows an outer name
+- [x] **NoMaxLineLength** — configurable line length limit
+- [x] **NoTodoComment** — `-- TODO` or `{- TODO -}` in source
+- [x] **NoRecordPatternInFunctionArgs** — `foo { x, y } = ...` -> `foo record = ... record.x ... record.y`
+- [x] **NoUnusedLetBinding** — let binding that is never referenced in the body
+- [x] **NoShadowing** — local binding that shadows an outer name
+
+### Batch 2: Popular elm-review rules
+
+- [x] **NoUnusedPatterns** — case branch pattern variable that is never referenced in the branch body
+- [x] **CognitiveComplexity** — function exceeds configurable complexity threshold (default 15)
+- [x] **NoMissingTypeAnnotationInLetIn** — let-in function binding without a type annotation
+- [x] **NoConfusingPrefixOperator** — non-commutative operator used in prefix form, e.g. `(-) a b`
+- [x] **NoMissingTypeExpose** — type referenced in a public function signature but not exposed from the module
+- [x] **NoRedundantlyQualifiedType** (fix) — `Set.Set` -> `Set` when type name matches module name
+- [x] **NoUnoptimizedRecursion** — recursive function where not all recursive calls are in tail position
+- [x] **NoRecursiveUpdate** — `update` function calling itself recursively
 
 ## Implementation phases
 
@@ -264,8 +275,8 @@ No editor-specific code needed beyond VS Code (which gets a dedicated extension 
 
 - Single binary, no runtime dependencies
 - Sub-second analysis on projects with 100+ modules
-- 30+ rules covering the most popular elm-review packages
-- Auto-fix for at least 15 rules
+- 50 rules covering the most popular elm-review packages
+- Auto-fix for 23 rules
 - Drop-in usable for most Elm projects without configuration
 - LSP server with real-time diagnostics and code actions
 - VS Code extension published on the marketplace

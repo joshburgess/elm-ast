@@ -1,31 +1,51 @@
+pub mod cognitive_complexity;
 pub mod no_always_identity;
 pub mod no_bool_operator_simplify;
 pub mod no_boolean_case;
+pub mod no_confusing_prefix_operator;
 pub mod no_debug;
+pub mod no_deprecated;
 pub mod no_empty_let;
 pub mod no_empty_list_concat;
 pub mod no_empty_record_update;
+pub mod no_exposing_all;
 pub mod no_fully_applied_prefix_operator;
 pub mod no_identity_function;
 pub mod no_if_true_false;
+pub mod no_import_exposing_all;
 pub mod no_list_literal_concat;
+pub mod no_max_line_length;
 pub mod no_maybe_map_with_nothing;
+pub mod no_missing_documentation;
 pub mod no_missing_type_annotation;
+pub mod no_missing_type_annotation_in_let_in;
+pub mod no_missing_type_expose;
 pub mod no_negation_of_boolean_operator;
 pub mod no_nested_negation;
 pub mod no_pipeline_simplify;
+pub mod no_premature_let_computation;
+pub mod no_record_pattern_in_function_args;
+pub mod no_recursive_update;
 pub mod no_redundant_cons;
+pub mod no_redundantly_qualified_type;
 pub mod no_result_map_with_err;
+pub mod no_shadowing;
 pub mod no_simple_let_body;
 pub mod no_single_pattern_case;
 pub mod no_string_concat;
 pub mod no_todo_comment;
 pub mod no_unnecessary_parens;
+pub mod no_unnecessary_port_module;
+pub mod no_unnecessary_trailing_underscore;
+pub mod no_unoptimized_recursion;
+pub mod no_unused_custom_type_constructor_args;
 pub mod no_unused_custom_type_constructors;
 pub mod no_unused_exports;
 pub mod no_unused_imports;
 pub mod no_unused_let_binding;
 pub mod no_unused_modules;
+pub mod no_unused_parameters;
+pub mod no_unused_patterns;
 pub mod no_unused_variables;
 pub mod no_wildcard_pattern_last;
 
@@ -67,5 +87,27 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(no_unused_exports::NoUnusedExports),
         Box::new(no_unused_custom_type_constructors::NoUnusedCustomTypeConstructors),
         Box::new(no_unused_modules::NoUnusedModules),
+        // New rules.
+        Box::new(no_unused_parameters::NoUnusedParameters),
+        Box::new(no_unused_custom_type_constructor_args::NoUnusedCustomTypeConstructorArgs),
+        Box::new(no_exposing_all::NoExposingAll),
+        Box::new(no_import_exposing_all::NoImportExposingAll),
+        Box::new(no_deprecated::NoDeprecated),
+        Box::new(no_missing_documentation::NoMissingDocumentation),
+        Box::new(no_unnecessary_trailing_underscore::NoUnnecessaryTrailingUnderscore),
+        Box::new(no_premature_let_computation::NoPrematureLetComputation),
+        Box::new(no_unnecessary_port_module::NoUnnecessaryPortModule),
+        Box::new(no_max_line_length::NoMaxLineLength::default()),
+        Box::new(no_shadowing::NoShadowing),
+        Box::new(no_record_pattern_in_function_args::NoRecordPatternInFunctionArgs),
+        // Batch 2 rules.
+        Box::new(no_unused_patterns::NoUnusedPatterns),
+        Box::new(cognitive_complexity::CognitiveComplexity::default()),
+        Box::new(no_missing_type_annotation_in_let_in::NoMissingTypeAnnotationInLetIn),
+        Box::new(no_confusing_prefix_operator::NoConfusingPrefixOperator),
+        Box::new(no_missing_type_expose::NoMissingTypeExpose),
+        Box::new(no_redundantly_qualified_type::NoRedundantlyQualifiedType),
+        Box::new(no_unoptimized_recursion::NoUnoptimizedRecursion),
+        Box::new(no_recursive_update::NoRecursiveUpdate),
     ]
 }
