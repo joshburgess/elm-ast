@@ -185,7 +185,7 @@ None of this was strictly necessary -- a simple depth limit would have sufficed 
 
 ## Test coverage
 
-366 tests:
+379 tests (366 native + 13 WASM):
 
 | Suite | Tests |
 |---|---|
@@ -196,6 +196,7 @@ None of this was strictly necessary -- a simple depth limit would have sufficed 
 | Edge cases + serde + builders + comments | 104 |
 | Property-based (proptest) | 5 |
 | Integration (291 real files, 50 packages) | 3 |
+| WASM bindings (wasm-pack) | 13 |
 
 ## License
 

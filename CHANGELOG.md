@@ -24,7 +24,7 @@ Initial release.
 - `Display` impls for all AST types
 - Feature gates: `parsing`, `printing`, `visit`, `visit-mut`, `fold`, `serde`, `wasm`
 - `serde` support (`Serialize`/`Deserialize`) for all 28 AST types
-- WASM bindings via `wasm-bindgen`
-- 366 tests including property-based tests and integration tests against 291 real-world `.elm` files from 50 packages with 100% parse, round-trip, and printer idempotency rates
+- WASM bindings via `wasm-bindgen` with `parse_elm_recovering`, `parse_elm_recovering_to_json`, structured JSON errors, and `print_elm_from_json`
+- 379 tests (366 native + 13 WASM) including property-based tests and integration tests against 291 real-world `.elm` files from 50 packages with 100% parse, round-trip, and printer idempotency rates
 
 [0.1.0]: https://github.com/joshburgess/elm-ast/releases/tag/v0.1.0
