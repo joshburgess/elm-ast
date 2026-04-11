@@ -25,14 +25,6 @@ Initial release.
 - Feature gates: `parsing`, `printing`, `visit`, `visit-mut`, `fold`, `serde`, `wasm`
 - `serde` support (`Serialize`/`Deserialize`) for all 28 AST types
 - WASM bindings via `wasm-bindgen`
-- 448 tests across the workspace, including property-based tests and integration tests against 291 real-world `.elm` files from 50 packages with 100% parse, round-trip, and printer idempotency rates
-
-### Tool suite
-
-- **elm-unused** -- project-wide dead code detection
-- **elm-lint** -- 14 built-in lint rules
-- **elm-deps** -- module dependency graphs, cycle detection, coupling metrics
-- **elm-refactor** -- cross-file rename, sort/qualify imports
-- **elm-search** -- semantic AST-aware code search with 10 query types
+- 365 tests including property-based tests and integration tests against 291 real-world `.elm` files from 50 packages with 100% parse, round-trip, and printer idempotency rates
 
 [0.1.0]: https://github.com/joshburgess/elm-ast/releases/tag/v0.1.0
