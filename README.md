@@ -196,6 +196,7 @@ None of this was strictly necessary -- a simple depth limit would have sufficed 
 | Edge cases + serde + builders + comments | 104 |
 | Property-based (proptest) | 5 |
 | Integration (291 real files, 50 packages) | 3 |
+| Doc-tests | 2 |
 | WASM bindings (wasm-pack) | 13 |
 
 ## License
