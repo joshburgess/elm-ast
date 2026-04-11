@@ -200,6 +200,60 @@ Implement the most impactful rules from the list above. Priority order:
 - Parallel rule execution (rules are independent per-file)
 - Parallel file parsing with `rayon`
 
+### Phase 6: LSP and editor integration
+
+The biggest advantage over elm-review: real-time lint diagnostics in the editor with click-to-fix code actions. elm-review has no editor integration — you run it in the terminal and read output. An LSP makes the tool feel native.
+
+#### LSP server
+
+A single `elm-review-lsp` binary (or `elm-review --lsp` flag) that speaks the Language Server Protocol. Built on `tower-lsp` or `lsp-server`.
+
+Core loop:
+1. Client opens/changes a file -> LSP receives `textDocument/didOpen` or `textDocument/didChange`
+2. Re-parse the changed file (our parser is fast enough for keystroke-level latency)
+3. Run all enabled rules on the changed module (and project-level rules if needed)
+4. Publish diagnostics via `textDocument/publishDiagnostics`
+
+LSP capabilities to implement:
+
+| Capability | Maps to | Notes |
+|---|---|---|
+| `textDocument/publishDiagnostics` | `LintError` -> `Diagnostic` | Squiggly underlines with rule name and message |
+| `textDocument/codeAction` | `Fix` -> `CodeAction` | Click-to-fix in the editor lightbulb menu |
+| `workspace/executeCommand` | Fix-all, disable rule | Batch operations |
+| `textDocument/hover` | Rule description | Show rule docs on hover over diagnostic |
+| `workspace/didChangeConfiguration` | `review.toml` reload | Live config changes without restart |
+
+The LSP and CLI share all parsing, rule, and fix logic. The LSP is just a different frontend to the same rule engine — it receives file contents from editor buffers instead of reading from disk, and reports via the LSP protocol instead of terminal output.
+
+#### Incremental analysis
+
+- Track which files are open and their in-memory contents (LSP text sync)
+- On change, only re-parse and re-lint the changed file
+- For project-level rules (e.g., unused exports), maintain a cached project index and update it incrementally when a file changes
+- Debounce rapid keystrokes (e.g., 100ms delay before re-analyzing)
+
+#### VS Code extension
+
+A thin TypeScript extension that:
+- Bundles or locates the `elm-review-lsp` binary
+- Spawns it as a language server child process
+- Provides configuration UI in VS Code settings (enable/disable rules, set severity)
+- Registers the server for `elm` language files
+
+This is a minimal wrapper — all intelligence lives in the Rust LSP binary.
+
+#### Other editors
+
+Because it's a standard LSP server, it works out of the box with:
+- **Neovim**: `nvim-lspconfig` entry
+- **Emacs**: `lsp-mode` or `eglot` configuration
+- **Helix**: `languages.toml` entry
+- **Zed**: extension or built-in LSP support
+- **Sublime Text**: LSP package configuration
+
+No editor-specific code needed beyond VS Code (which gets a dedicated extension for discoverability/configuration).
+
 ## Non-goals
 
 - **Plugin system**: no dynamic loading, no WASM rules, no scripting. All rules are built into the binary. This can be revisited later if demand exists.
@@ -213,3 +267,5 @@ Implement the most impactful rules from the list above. Priority order:
 - 30+ rules covering the most popular elm-review packages
 - Auto-fix for at least 15 rules
 - Drop-in usable for most Elm projects without configuration
+- LSP server with real-time diagnostics and code actions
+- VS Code extension published on the marketplace
