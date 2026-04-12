@@ -38,7 +38,6 @@ fn keywords() {
     assert_eq!(lex("type"), vec![Token::Type]);
     assert_eq!(lex("alias"), vec![Token::Alias]);
     assert_eq!(lex("port"), vec![Token::Port]);
-    assert_eq!(lex("effect"), vec![Token::Effect]);
     assert_eq!(lex("if"), vec![Token::If]);
     assert_eq!(lex("then"), vec![Token::Then]);
     assert_eq!(lex("else"), vec![Token::Else]);
@@ -47,11 +46,12 @@ fn keywords() {
     assert_eq!(lex("let"), vec![Token::Let]);
     assert_eq!(lex("in"), vec![Token::In]);
     assert_eq!(lex("infix"), vec![Token::Infix]);
-    // `left`, `right`, `non` are NOT keywords — they are contextual
-    // identifiers only special inside `infix` declarations.
+    // `left`, `right`, `non`, `effect` are NOT keywords — they are
+    // contextual identifiers only special in specific declarations.
     assert_eq!(lex("left"), vec![Token::LowerName("left".into())]);
     assert_eq!(lex("right"), vec![Token::LowerName("right".into())]);
     assert_eq!(lex("non"), vec![Token::LowerName("non".into())]);
+    assert_eq!(lex("effect"), vec![Token::LowerName("effect".into())]);
 }
 
 #[test]
@@ -774,7 +774,7 @@ fn effect_module() {
     assert_eq!(
         tokens,
         vec![
-            Token::Effect,
+            Token::LowerName("effect".into()),
             Token::Module,
             Token::UpperName("Task".into()),
             Token::Where,

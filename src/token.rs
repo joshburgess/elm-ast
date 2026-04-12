@@ -21,8 +21,6 @@ pub enum Token {
     Alias,
     /// `port`
     Port,
-    /// `effect`
-    Effect,
     /// `if`
     If,
     /// `then`
@@ -134,7 +132,9 @@ impl Token {
             "type" => Some(Token::Type),
             "alias" => Some(Token::Alias),
             "port" => Some(Token::Port),
-            "effect" => Some(Token::Effect),
+            // Note: `effect` is NOT a keyword — it is only contextual in
+            // `effect module` declarations and is a valid identifier
+            // everywhere else, just like `left`, `right`, `non`.
             "if" => Some(Token::If),
             "then" => Some(Token::Then),
             "else" => Some(Token::Else),

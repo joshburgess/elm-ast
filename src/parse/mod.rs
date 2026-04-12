@@ -406,7 +406,6 @@ fn describe(tok: &Token) -> String {
         Token::Type => "`type`".into(),
         Token::Alias => "`alias`".into(),
         Token::Port => "`port`".into(),
-        Token::Effect => "`effect`".into(),
         Token::If => "`if`".into(),
         Token::Then => "`then`".into(),
         Token::Else => "`else`".into(),

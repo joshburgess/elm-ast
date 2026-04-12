@@ -67,7 +67,7 @@ fn parse_module_header(p: &mut Parser) -> ParseResult<Spanned<ModuleHeader>> {
     let start = p.current_pos();
 
     match p.peek().clone() {
-        Token::Effect => {
+        Token::LowerName(ref s) if s == "effect" => {
             p.advance(); // consume `effect`
             p.expect(&Token::Module)?;
             let name = parse_module_name(p)?;
