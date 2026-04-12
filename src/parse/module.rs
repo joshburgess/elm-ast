@@ -3,6 +3,7 @@ use crate::file::ElmModule;
 use crate::import::Import;
 use crate::module_header::ModuleHeader;
 use crate::node::Spanned;
+use crate::span::Span;
 use crate::token::Token;
 
 use super::declaration::parse_declaration;
@@ -262,12 +263,21 @@ fn parse_import(p: &mut Parser) -> ParseResult<Spanned<Import>> {
     p.expect(&Token::Import)?;
 
     let module_name = parse_module_name(p)?;
+    // Track the end of the import's meaningful content explicitly. We can't
+    // use `spanned_from` here because it derives `end` from the last consumed
+    // token, and `skip_whitespace` below consumes trailing `Newline` tokens
+    // while looking for optional `as`/`exposing` — that would leak the
+    // import's span past its trailing whitespace and make line-based fixes
+    // (like removing unused imports) eat blank lines after the import.
+    let mut end = module_name.span.end;
 
     // Optional `as Alias`
     p.skip_whitespace();
     let alias = if matches!(p.peek(), Token::As) {
         p.advance();
-        Some(parse_module_name(p)?)
+        let name = parse_module_name(p)?;
+        end = name.span.end;
+        Some(name)
     } else {
         None
     };
@@ -276,13 +286,15 @@ fn parse_import(p: &mut Parser) -> ParseResult<Spanned<Import>> {
     p.skip_whitespace();
     let exposing = if matches!(p.peek(), Token::Exposing) {
         p.advance();
-        Some(parse_exposing(p)?)
+        let exp = parse_exposing(p)?;
+        end = exp.span.end;
+        Some(exp)
     } else {
         None
     };
 
-    Ok(p.spanned_from(
-        start,
+    Ok(Spanned::new(
+        Span::new(start, end),
         Import {
             module_name,
             alias,

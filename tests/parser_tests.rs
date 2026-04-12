@@ -154,6 +154,26 @@ import Html.Events exposing (onClick)
     assert_eq!(m.imports.len(), 3);
 }
 
+#[test]
+fn import_span_does_not_leak_trailing_whitespace() {
+    // Regression: `parse_import` used to let `skip_whitespace` (called while
+    // probing for optional `as`/`exposing`) extend the import's span past
+    // trailing newlines, causing line-based refactors (e.g. removing an
+    // unused import) to eat blank lines that followed the import.
+    let src = "module Main exposing (..)\n\nimport Dict\n\n\nx = 1\n";
+    let m = parse_ok(src);
+    assert_eq!(m.imports.len(), 1);
+    let imp = &m.imports[0];
+    // The import's end offset should land right after `Dict`, not past the
+    // trailing newlines.
+    let end_offset = imp.span.end.offset;
+    assert_eq!(
+        &src[..end_offset],
+        "module Main exposing (..)\n\nimport Dict",
+        "import span leaked past end of `Dict` into trailing whitespace",
+    );
+}
+
 // ── Type annotations ─────────────────────────────────────────────────
 
 #[test]
