@@ -174,6 +174,50 @@ fn import_span_does_not_leak_trailing_whitespace() {
     );
 }
 
+#[test]
+fn binary_expr_span_does_not_leak_trailing_whitespace() {
+    // Regression: the Pratt loop in `binary_loop` calls `skip_whitespace` at
+    // the top of every iteration before checking for the next operator. When
+    // it breaks (no more operator), the parser's position has advanced past
+    // trailing newlines, so `spanned_from` — which derives end from
+    // `tokens[pos-1].span.end` — would extend the binary expression's span
+    // all the way to the start of the following declaration. Downstream
+    // refactors (e.g. NoEmptyListConcat's span-based replacement) then chewed
+    // up the blank lines and glued the next declaration onto the replacement.
+    let src = "\
+module Main exposing (..)
+
+extras : List Int
+extras =
+    [] ++ [ 1, 2, 3 ]
+
+
+update : Int -> Int
+update n = n
+";
+    let m = parse_ok(src);
+    // Find `extras` function body expression.
+    let extras_body = m
+        .declarations
+        .iter()
+        .find_map(|d| match &d.value {
+            elm_ast::declaration::Declaration::FunctionDeclaration(f)
+                if f.declaration.value.name.value == "extras" =>
+            {
+                Some(&f.declaration.value.body)
+            }
+            _ => None,
+        })
+        .expect("extras declaration");
+    let end_offset = extras_body.span.end.offset;
+    let slice = &src[..end_offset];
+    assert!(
+        slice.ends_with("[] ++ [ 1, 2, 3 ]"),
+        "binary expr span leaked past right operand; slice ended with: {:?}",
+        &slice[slice.len().saturating_sub(30)..]
+    );
+}
+
 // ── Type annotations ─────────────────────────────────────────────────
 
 #[test]

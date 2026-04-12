@@ -124,13 +124,18 @@ fn binary_loop(
             if top.right_bp > left_bp {
                 let top = pending.pop().unwrap();
                 let start = top.left.span.start;
+                // Compute end from the right operand itself, NOT from the
+                // parser's current position — `skip_whitespace` at the top of
+                // the loop may have advanced past trailing newlines, which
+                // would make `spanned_from` leak the span into whitespace.
+                let end = left.span.end;
                 let expr = Expr::OperatorApplication {
                     operator: top.op,
                     direction: top.assoc,
                     left: Box::new(top.left),
                     right: Box::new(left),
                 };
-                left = p.spanned_from(start, expr);
+                left = Spanned::new(Span::new(start, end), expr);
             } else {
                 break;
             }
@@ -159,16 +164,19 @@ fn binary_loop(
         }
     }
 
-    // Fold all remaining pending operators.
+    // Fold all remaining pending operators. Same concern as the inner fold:
+    // use the right operand's own span.end, not the parser position, because
+    // the loop exited after `skip_whitespace` consumed trailing newlines.
     while let Some(top) = pending.pop() {
         let start = top.left.span.start;
+        let end = left.span.end;
         let expr = Expr::OperatorApplication {
             operator: top.op,
             direction: top.assoc,
             left: Box::new(top.left),
             right: Box::new(left),
         };
-        left = p.spanned_from(start, expr);
+        left = Spanned::new(Span::new(start, end), expr);
     }
 
     Ok(Step::Done(left))
