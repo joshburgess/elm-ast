@@ -181,7 +181,7 @@ The expression parser uses **zero stack recursion**. Traditional recursive-desce
 
 This guarantees **O(1) call-stack depth** regardless of expression nesting. The continuation stack is bounded by `MAX_EXPR_DEPTH` (256) as a resource guard, not a safety requirement.
 
-None of this was strictly necessary -- a simple depth limit would have sufficed -- but it was fun to build, and, most importantly, it is thoroughly tested and works.
+None of this was actually necessary. A simple depth limit would have sufficed, but it was fun to build, and, most importantly, it is thoroughly tested and works.
 
 ## Test coverage
 
