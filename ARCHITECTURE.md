@@ -67,9 +67,12 @@ Every AST node is wrapped in `Spanned<T>`:
 
 ```rust
 pub struct Spanned<T> {
-    pub span: Span,              // source location (start..end)
-    pub value: T,                // the actual AST node
-    pub comments: Vec<Spanned<Comment>>,  // leading comments
+    // source location (start..end)
+    pub span: Span,  
+    // the actual AST node
+    pub value: T,       
+    // leading comments
+    pub comments: Vec<Spanned<Comment>>,  
 }
 ```
 
