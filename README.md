@@ -163,6 +163,8 @@ let module2: elm_ast::ElmModule = serde_json::from_str(&json)?;
 
 ## Architecture
 
+For the full story, see the [ARCHITECTURE.md](ARCHITECTURE.md) doc.
+
 The design follows `syn`'s proven patterns:
 - **Enum-of-structs AST** -- each variant wraps a dedicated struct with named fields
 - **`Spanned<T>`** -- every node carries a `Span` (byte offset + line/column)
