@@ -84,6 +84,7 @@ impl Parser {
         std::mem::take(&mut self.collected_comments)
     }
 
+
     /// Returns true if currently inside parens/brackets/braces.
     /// When true, indentation-sensitive layout rules are suspended.
     pub fn in_paren_context(&self) -> bool {
@@ -149,7 +150,7 @@ impl Parser {
     pub fn skip_whitespace(&mut self) {
         while matches!(
             self.peek(),
-            Token::Newline | Token::LineComment(_) | Token::BlockComment(_) | Token::DocComment(_)
+            Token::Newline | Token::LineComment(_) | Token::BlockComment(_)
         ) {
             let tok = self.peek().clone();
             let spanned_tok = self.advance();
@@ -162,7 +163,7 @@ impl Parser {
                     self.collected_comments
                         .push(Spanned::new(spanned_tok.span, Comment::Block(text)));
                 }
-                _ => {} // Newline, DocComment
+                _ => {} // Newline
             }
         }
     }

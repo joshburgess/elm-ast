@@ -54,6 +54,10 @@ required-features = ["parsing", "printing"]
 name = "roundtrip_debug"
 required-features = ["parsing", "printing"]
 
+[[example]]
+name = "elm_pretty"
+required-features = ["parsing", "printing"]
+
 [[bench]]
 name = "parse_bench"
 harness = false

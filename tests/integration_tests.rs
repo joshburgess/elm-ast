@@ -2,13 +2,14 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use elm_ast::declaration::Declaration;
 use elm_ast::expr::Expr;
 use elm_ast::file::ElmModule;
 use elm_ast::pattern::Pattern;
 use elm_ast::type_annotation::TypeAnnotation;
-use elm_ast::{parse, print};
+use elm_ast::{parse, pretty_print, print};
 
 // ── Regression watchlist ─────────────────────────────────────────────
 //
@@ -656,6 +657,164 @@ fn printer_idempotency() {
         passed,
         total,
         "{} of {} files failed idempotency:\n{}",
+        total - passed,
+        total,
+        failures.join("\n")
+    );
+}
+
+// ── pretty_print vs elm-format ──────────────────────────────────────
+//
+// Verify that `pretty_print()` (ElmFormat mode) produces output identical
+// to `elm-format --stdin`. This is the gold-standard test: parse a file,
+// pretty-print it, feed the result to elm-format, and check nothing changes.
+//
+// The test is skipped when elm-format is not found on the system.
+// Set ELM_FORMAT to a custom path if it's not in PATH.
+
+/// Try to locate elm-format. Checks `$ELM_FORMAT`, then `$PATH`.
+fn find_elm_format() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("ELM_FORMAT") {
+        let p = PathBuf::from(&path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    // Check PATH
+    Command::new("elm-format")
+        .arg("--help")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|_| PathBuf::from("elm-format"))
+}
+
+/// Run elm-format on the given source string. Returns the formatted output.
+fn run_elm_format(elm_format: &Path, source: &str) -> Result<String, String> {
+    use std::io::Write;
+    let mut child = Command::new(elm_format)
+        .args(["--stdin", "--elm-version=0.19"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to spawn elm-format: {e}"))?;
+
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(source.as_bytes())
+        .map_err(|e| format!("failed to write to elm-format stdin: {e}"))?;
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("elm-format failed: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "elm-format exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[test]
+#[ignore] // Run explicitly: cargo test pretty_print_matches_elm_format -- --ignored --nocapture
+fn pretty_print_matches_elm_format() {
+    let elm_format = match find_elm_format() {
+        Some(path) => path,
+        None => {
+            eprintln!("elm-format not found — skipping pretty_print_matches_elm_format test");
+            eprintln!("Install elm-format or set ELM_FORMAT=/path/to/elm-format to enable");
+            return;
+        }
+    };
+
+    let dirs = all_fixture_dirs();
+
+    let mut total = 0;
+    let mut passed = 0;
+    let mut failures = Vec::new();
+
+    for (pkg, dir) in &dirs {
+        let files = find_elm_files(dir);
+        for file in &files {
+            // Only test files we can parse.
+            if try_parse_file(file).is_err() {
+                continue;
+            }
+            let source = fs::read_to_string(file).unwrap();
+            let ast = match parse(&source) {
+                Ok(ast) => ast,
+                Err(_) => continue,
+            };
+
+            let pretty = pretty_print(&ast);
+
+            // Feed pretty-printed output to elm-format.
+            let formatted = match run_elm_format(&elm_format, &pretty) {
+                Ok(f) => f,
+                Err(msg) => {
+                    // elm-format couldn't parse our output — that's a failure.
+                    failures.push(format!(
+                        "[{pkg}] elm-format rejected pretty_print output for {}: {msg}",
+                        file.display()
+                    ));
+                    total += 1;
+                    continue;
+                }
+            };
+
+            total += 1;
+            if pretty == formatted {
+                passed += 1;
+            } else {
+                // Find first differing line for diagnostics.
+                let pretty_lines: Vec<&str> = pretty.lines().collect();
+                let fmt_lines: Vec<&str> = formatted.lines().collect();
+                let mut diff_msg = String::new();
+                for (i, (p, f)) in pretty_lines.iter().zip(fmt_lines.iter()).enumerate() {
+                    if p != f {
+                        diff_msg = format!(
+                            "first diff at line {}:\n  pretty_print: {}\n  elm-format:   {}",
+                            i + 1,
+                            p,
+                            f
+                        );
+                        break;
+                    }
+                }
+                if diff_msg.is_empty() && pretty_lines.len() != fmt_lines.len() {
+                    diff_msg = format!(
+                        "line count differs: pretty_print={} vs elm-format={}",
+                        pretty_lines.len(),
+                        fmt_lines.len()
+                    );
+                }
+                failures.push(format!(
+                    "[{pkg}] pretty_print differs from elm-format for {}:\n  {diff_msg}",
+                    file.display()
+                ));
+            }
+        }
+    }
+
+    eprintln!("\n=== pretty_print vs elm-format results ===");
+    eprintln!("{passed}/{total} files match elm-format exactly");
+    for f in &failures {
+        eprintln!("\n{f}");
+    }
+    if total > 0 {
+        let pass_rate = (passed as f64 / total as f64) * 100.0;
+        eprintln!("\nMatch rate: {pass_rate:.1}%");
+    }
+    assert_eq!(
+        passed,
+        total,
+        "{} of {} files differ from elm-format:\n{}",
         total - passed,
         total,
         failures.join("\n")

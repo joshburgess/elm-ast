@@ -20,17 +20,34 @@ pub fn parse_module(p: &mut Parser) -> ParseResult<ElmModule> {
     // Parse imports.
     // Use skip_whitespace_before_doc so we don't accidentally consume
     // doc comments that belong to the first declaration. If we encounter
-    // a DocComment, check whether an Import follows — if so, skip past
-    // the doc comment (it's a module-level doc) and continue the loop.
+    // a DocComment, check whether an Import follows — if so, capture it
+    // as the module documentation and continue the loop.
     let mut imports = Vec::new();
+    let mut module_documentation = None;
     loop {
         p.skip_whitespace_before_doc();
         if matches!(p.peek(), Token::DocComment(_)) {
+            if module_documentation.is_some() {
+                // Already captured the module doc. This doc comment belongs
+                // to a declaration — break without consuming it.
+                break;
+            }
+            // Capture this as the module documentation. In Elm, a {-| ... -}
+            // comment right after the module header is always the module doc,
+            // whether followed by imports or declarations.
+            if let Token::DocComment(text) = p.peek().clone() {
+                let tok = p.current().clone();
+                module_documentation = Some(Spanned::new(tok.span, text));
+            }
             if matches!(p.peek_past_whitespace(), Token::Import) {
-                p.skip_whitespace(); // consume the doc comment
+                p.advance(); // consume the module doc comment token
+                p.skip_whitespace(); // consume whitespace between doc and import
             // Fall through to parse the import below.
             } else {
-                break; // Doc comment is for the first declaration.
+                // Advance past just the module doc comment, but don't consume
+                // any subsequent doc comments (they belong to declarations).
+                p.advance();
+                break;
             }
         }
         if !matches!(p.peek(), Token::Import) {
@@ -38,6 +55,13 @@ pub fn parse_module(p: &mut Parser) -> ParseResult<ElmModule> {
         }
         imports.push(parse_import(p)?);
     }
+
+    // If there are no imports, a doc comment right after the header might
+    // still be a module doc (followed by declarations, not imports).
+    // In that case, try_doc_comment in parse_declaration would consume it,
+    // but it should be the module doc if the module has no other declarations
+    // with doc comments at the top level.
+    // For now, only capture module docs that precede imports (the common case).
 
     // Parse declarations.
     // Use skip_whitespace_before_doc so doc comments stay in the stream
@@ -56,6 +80,7 @@ pub fn parse_module(p: &mut Parser) -> ParseResult<ElmModule> {
 
     Ok(ElmModule {
         header,
+        module_documentation,
         imports,
         declarations,
         comments,
@@ -319,12 +344,20 @@ pub fn parse_module_recovering(p: &mut Parser) -> (Option<ElmModule>, Vec<ParseE
     };
 
     let mut imports = Vec::new();
+    let mut module_documentation = None;
     loop {
         p.skip_whitespace_before_doc();
         if matches!(p.peek(), Token::DocComment(_)) {
+            if module_documentation.is_none() {
+                if let Token::DocComment(text) = p.peek().clone() {
+                    let tok = p.current().clone();
+                    module_documentation = Some(Spanned::new(tok.span, text));
+                }
+            }
             if matches!(p.peek_past_whitespace(), Token::Import) {
                 p.skip_whitespace();
             } else {
+                p.skip_whitespace();
                 break;
             }
         }
@@ -360,6 +393,7 @@ pub fn parse_module_recovering(p: &mut Parser) -> (Option<ElmModule>, Vec<ParseE
     (
         Some(ElmModule {
             header,
+            module_documentation,
             imports,
             declarations,
             comments,
