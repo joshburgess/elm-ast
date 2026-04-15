@@ -476,7 +476,20 @@ impl Printer {
             for group in &doc_groups {
                 let group_items: Vec<&ExposedItem> = group
                     .iter()
-                    .filter_map(|name| item_map.get(name.as_str()).copied())
+                    .filter_map(|name| {
+                        let item = item_map.get(name.as_str()).copied()?;
+                        // elm-format's textToRef only recognizes operators with
+                        // 1 or 2 symbol characters.  Operators with 3+ chars
+                        // (e.g. </>, <?>, |=, |.) silently fail to match their
+                        // @docs entry and end up as leftovers. Replicate that
+                        // behavior so our output matches elm-format exactly.
+                        if let ExposedItem::Infix(op) = item {
+                            if op.len() >= 3 {
+                                return None;
+                            }
+                        }
+                        Some(item)
+                    })
                     .collect();
                 if !group_items.is_empty() {
                     for item in &group_items {
@@ -1818,6 +1831,7 @@ fn normalize_emphasis(text: &str) -> String {
     let mut in_code_span = false;
     let mut at_line_start = true;
     let mut line_indent = 0u32;
+    let mut in_docs_line = false;
 
     // Helper: push the UTF-8 character starting at byte position `pos` in
     // `text` into `result` and return the number of bytes consumed.
@@ -1845,6 +1859,7 @@ fn normalize_emphasis(text: &str) -> String {
             i += 1;
             at_line_start = true;
             line_indent = 0;
+            in_docs_line = false;
             continue;
         }
         if at_line_start {
@@ -1855,6 +1870,18 @@ fn normalize_emphasis(text: &str) -> String {
                 continue;
             }
             at_line_start = false;
+            // Detect @docs lines — skip emphasis processing on these.
+            if text[i..].starts_with("@docs") {
+                in_docs_line = true;
+            }
+        }
+
+        // On @docs lines, pass through unchanged (operators like (*) must not
+        // have their `*` escaped or converted).
+        if in_docs_line {
+            result.push(ch as char);
+            i += 1;
+            continue;
         }
 
         // Inside a code block (4+ spaces indent) — pass through unchanged.
