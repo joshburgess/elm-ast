@@ -111,6 +111,59 @@ impl Printer {
         self.config.style == PrintStyle::ElmFormat
     }
 
+    /// Check if an expression will produce multi-line output.
+    ///
+    /// In ElmFormat mode, `if-else` is always multi-line (the printer never
+    /// uses single-line if). This makes parent containers (Application,
+    /// OperatorApplication, etc.) aware that their child will be multi-line,
+    /// so they can choose vertical layout accordingly.
+    fn is_multiline(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::IfElse {
+                branches,
+                else_branch,
+                ..
+            } => {
+                // In ElmFormat mode, if-else is always multiline.
+                if self.is_pretty() {
+                    return true;
+                }
+                // In Compact mode, single-line when simple.
+                if branches.len() == 1 {
+                    let (c, b) = &branches[0];
+                    if !self.is_multiline(&c.value)
+                        && !self.is_multiline(&b.value)
+                        && !self.is_multiline(&else_branch.value)
+                    {
+                        return false;
+                    }
+                }
+                true
+            }
+            Expr::CaseOf { .. } | Expr::LetIn { .. } => true,
+            Expr::Lambda { body, .. } => self.is_multiline(&body.value),
+            Expr::Application(args) => args.iter().any(|a| self.is_multiline(&a.value)),
+            Expr::List(elems) => elems.iter().any(|e| self.is_multiline(&e.value)),
+            Expr::Tuple(elems) => elems.iter().any(|e| self.is_multiline(&e.value)),
+            Expr::Record(fields) => {
+                fields
+                    .iter()
+                    .any(|f| self.is_multiline(&f.value.value.value))
+            }
+            Expr::RecordUpdate { updates, .. } => {
+                updates
+                    .iter()
+                    .any(|f| self.is_multiline(&f.value.value.value))
+            }
+            Expr::OperatorApplication { left, right, .. } => {
+                self.is_multiline(&left.value) || self.is_multiline(&right.value)
+            }
+            Expr::Parenthesized(inner) => self.is_multiline(&inner.value),
+            Expr::Negation(inner) => self.is_multiline(&inner.value),
+            _ => false,
+        }
+    }
+
     // ── Output helpers ───────────────────────────────────────────────
 
     fn write(&mut self, s: &str) {
@@ -1035,7 +1088,7 @@ impl Printer {
                 right,
                 ..
             } => {
-                let use_vertical = is_multiline(&right.value);
+                let use_vertical = self.is_multiline(&right.value);
                 self.write_leading_comments(&left.comments);
                 self.write_expr_operand(&left.value, operator, true);
                 if use_vertical && operator == "<|" {
@@ -1132,7 +1185,7 @@ impl Printer {
                 // line — this ensures args are always at a column greater
                 // than the function name, satisfying the parser's indent rules.
                 let any_arg_ml =
-                    args.len() > 1 && args.iter().skip(1).any(|a| is_multiline(&a.value));
+                    args.len() > 1 && args.iter().skip(1).any(|a| self.is_multiline(&a.value));
                 if any_arg_ml {
                     self.write_expr_atomic(&args[0].value);
                     self.indent();
@@ -1202,7 +1255,7 @@ impl Printer {
                     self.write("{}");
                 } else {
                     let any_ml =
-                        fields.iter().any(|f| is_multiline(&f.value.value.value));
+                        fields.iter().any(|f| self.is_multiline(&f.value.value.value));
                     if any_ml {
                         self.write("{ ");
                         self.write_record_setter(&fields[0].value);
@@ -1231,7 +1284,7 @@ impl Printer {
             Expr::RecordUpdate { base, updates } => {
                 let any_ml = updates
                     .iter()
-                    .any(|f| is_multiline(&f.value.value.value));
+                    .any(|f| self.is_multiline(&f.value.value.value));
                 if any_ml {
                     self.write("{ ");
                     self.write(&base.value);
@@ -1304,7 +1357,7 @@ impl Printer {
     /// Write a comma-separated list of expressions with adaptive layout.
     /// Uses single-line when all elements are single-line, multi-line otherwise.
     fn write_comma_sep(&mut self, open: &str, close: &str, elems: &[Spanned<Expr>]) {
-        let any_multiline = elems.iter().any(|e| is_multiline(&e.value));
+        let any_multiline = elems.iter().any(|e| self.is_multiline(&e.value));
         if any_multiline {
             // Multi-line: one element per indented line.
             self.write(open.trim_end());
@@ -1336,7 +1389,7 @@ impl Printer {
 
     fn write_record_setter(&mut self, setter: &RecordSetter) {
         self.write(&setter.field.value);
-        if is_multiline(&setter.value.value) {
+        if self.is_multiline(&setter.value.value) {
             self.write(" =");
             self.indent();
             self.newline_indent();
@@ -1355,8 +1408,8 @@ impl Printer {
             && branches.len() == 1
             && branches
                 .iter()
-                .all(|(c, b)| !is_multiline(&c.value) && !is_multiline(&b.value))
-            && !is_multiline(else_branch);
+                .all(|(c, b)| !self.is_multiline(&c.value) && !self.is_multiline(&b.value))
+            && !self.is_multiline(else_branch);
 
         if all_simple {
             let (cond, body) = &branches[0];
@@ -1521,7 +1574,7 @@ impl Printer {
             }
             self.write_pattern_atomic(&arg.value);
         }
-        if is_multiline(body) {
+        if self.is_multiline(body) {
             self.write(" ->");
             self.indent();
             self.newline_indent();
@@ -1615,55 +1668,6 @@ impl Printer {
 // whether an expression would produce multi-line output. Block expressions
 // (case/if/let/lambda) are always multi-line. Containers are multi-line
 // if any child is multi-line.
-
-fn is_multiline(expr: &Expr) -> bool {
-    match expr {
-        // Block expressions are always multi-line.
-        Expr::IfElse {
-            branches,
-            else_branch,
-            ..
-        } => {
-            // Single-line if: only when simple condition + simple branches
-            if branches.len() == 1 {
-                let (c, b) = &branches[0];
-                if !is_multiline(&c.value)
-                    && !is_multiline(&b.value)
-                    && !is_multiline(&else_branch.value)
-                {
-                    return false;
-                }
-            }
-            true
-        }
-        Expr::CaseOf { .. } | Expr::LetIn { .. } => true,
-        Expr::Lambda { body, .. } => is_multiline(&body.value),
-
-        // Application: args are always inline (block args get parenthesized).
-        // An application is multi-line only if it contains a multi-line
-        // parenthesized block, which will have the closing ) on its own line.
-        Expr::Application(args) => args.iter().any(|a| is_multiline(&a.value)),
-        Expr::List(elems) => elems.iter().any(|e| is_multiline(&e.value)),
-        Expr::Tuple(elems) => elems.iter().any(|e| is_multiline(&e.value)),
-        Expr::Record(fields) => fields.iter().any(|f| is_multiline(&f.value.value.value)),
-        Expr::RecordUpdate { updates, .. } => {
-            updates.iter().any(|f| is_multiline(&f.value.value.value))
-        }
-
-        // Operators: multi-line if either side is multi-line.
-        Expr::OperatorApplication { left, right, .. } => {
-            is_multiline(&left.value) || is_multiline(&right.value)
-        }
-
-        // Wrapping: inherit from inner.
-        Expr::Parenthesized(inner) => is_multiline(&inner.value),
-        Expr::Negation(inner) => is_multiline(&inner.value),
-
-        // Everything else is single-line.
-        _ => false,
-    }
-}
-
 
 // ── Standalone helpers ───────────────────────────────────────────────
 
