@@ -563,13 +563,18 @@ impl Printer {
             }
             self.write_char(')');
         } else {
-            // Module header without @docs: single-line when short,
-            // multiline when the line would be very long.
+            // Module header without @docs: elm-format sorts alphabetically.
+            let mut sorted_items: Vec<&ExposedItem> =
+                items.iter().map(|i| &i.value).collect();
+            sorted_items.sort_by(|a, b| {
+                exposed_item_sort_key(a).cmp(&exposed_item_sort_key(b))
+            });
+
             let single_line: String = {
-                let mut parts = Vec::new();
-                for item in items {
-                    parts.push(exposed_item_to_string(&item.value));
-                }
+                let parts: Vec<String> = sorted_items
+                    .iter()
+                    .map(|item| exposed_item_to_string(item))
+                    .collect();
                 format!("({})", parts.join(", "))
             };
 
@@ -583,14 +588,14 @@ impl Printer {
                     self.buf.pop();
                 }
                 self.indent();
-                for (i, item) in items.iter().enumerate() {
+                for (i, item) in sorted_items.iter().enumerate() {
                     self.newline_indent();
                     if i == 0 {
                         self.write("( ");
                     } else {
                         self.write(", ");
                     }
-                    self.write_exposed_item(&item.value);
+                    self.write_exposed_item(item);
                 }
                 self.newline_indent();
                 self.write_char(')');
@@ -1101,7 +1106,15 @@ impl Printer {
                 right,
                 ..
             } => {
-                let use_vertical = self.is_multiline(&right.value);
+                // elm-format strips redundant Parenthesized wrappers on the
+                // right side of `<|` since `<|` has the lowest precedence and
+                // is right-associative, so parens are never required there.
+                let right_expr = if self.is_pretty() && operator == "<|" {
+                    unwrap_parens(&right.value)
+                } else {
+                    &right.value
+                };
+                let use_vertical = self.is_multiline(right_expr);
                 self.write_leading_comments(&left.comments);
                 self.write_expr_operand(&left.value, operator, true);
                 if use_vertical && operator == "<|" {
@@ -1112,7 +1125,9 @@ impl Printer {
                     self.indent();
                     self.newline_indent();
                     self.write_leading_comments(&right.comments);
-                    self.write_expr_operand(&right.value, operator, false);
+                    // Use write_expr_inner so block expressions (Lambda,
+                    // IfElse, etc.) aren't re-wrapped in parens.
+                    self.write_expr_inner(right_expr);
                     self.dedent();
                 } else if use_vertical {
                     // Vertical layout: operator and right operand on a new
@@ -1123,14 +1138,20 @@ impl Printer {
                     self.write(operator);
                     self.write_char(' ');
                     self.write_leading_comments(&right.comments);
-                    self.write_expr_operand(&right.value, operator, false);
+                    self.write_expr_operand(right_expr, operator, false);
                     self.dedent();
                 } else {
                     self.write_char(' ');
                     self.write(operator);
                     self.write_char(' ');
                     self.write_leading_comments(&right.comments);
-                    self.write_expr_operand(&right.value, operator, false);
+                    // Use write_expr_inner for <| so block expressions aren't
+                    // wrapped in redundant parens.
+                    if operator == "<|" {
+                        self.write_expr_inner(right_expr);
+                    } else {
+                        self.write_expr_operand(right_expr, operator, false);
+                    }
                 }
             }
             Expr::IfElse {
@@ -1246,9 +1267,16 @@ impl Printer {
             }
 
             Expr::Parenthesized(inner) => {
-                self.write_char('(');
-                self.write_expr(&inner.value);
-                self.write_char(')');
+                if self.is_pretty() && self.is_multiline(&inner.value) {
+                    self.write_char('(');
+                    self.write_expr(&inner.value);
+                    self.newline_indent();
+                    self.write_char(')');
+                } else {
+                    self.write_char('(');
+                    self.write_expr(&inner.value);
+                    self.write_char(')');
+                }
             }
 
             Expr::Tuple(elems) => {
@@ -1360,9 +1388,16 @@ impl Printer {
             | Expr::CaseOf { .. }
             | Expr::LetIn { .. }
             | Expr::Lambda { .. } => {
-                self.write_char('(');
-                self.write_expr_inner(expr);
-                self.write_char(')');
+                if self.is_pretty() {
+                    self.write_char('(');
+                    self.write_expr_inner(expr);
+                    self.newline_indent();
+                    self.write_char(')');
+                } else {
+                    self.write_char('(');
+                    self.write_expr_inner(expr);
+                    self.write_char(')');
+                }
             }
         }
     }
@@ -2235,6 +2270,15 @@ fn exposed_item_to_string(item: &ExposedItem) -> String {
             }
         }
         ExposedItem::Infix(op) => format!("({op})"),
+    }
+}
+
+/// Unwrap one layer of `Parenthesized` from an expression.
+/// Returns the inner expression if it is parenthesized, or the original expression otherwise.
+fn unwrap_parens(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Parenthesized(inner) => &inner.value,
+        other => other,
     }
 }
 

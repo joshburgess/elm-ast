@@ -820,4 +820,3 @@ fn pretty_print_matches_elm_format() {
         failures.join("\n")
     );
 }
-
