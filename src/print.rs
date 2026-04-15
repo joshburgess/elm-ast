@@ -391,6 +391,7 @@ impl Printer {
             let normalized = normalize_empty_link_refs(&normalized);
             let normalized = normalize_code_block_indent(&normalized);
             let normalized = normalize_docs_lines(&normalized);
+            let normalized = strip_trailing_whitespace_in_doc(&normalized);
             self.write("{-|");
             self.write(&normalized);
             self.write("-}");
@@ -2114,23 +2115,41 @@ fn normalize_docs_lines(text: &str) -> String {
     result
 }
 
-/// Normalize indentation of code examples in doc comments.
+/// Strip trailing whitespace from each line in a doc comment.
 ///
-/// elm-format re-parses code examples (indented code blocks) as Elm code and
-/// reformats them with 4-space indentation. We approximate this by detecting
-/// code blocks that use 2-space indentation and doubling the extra indent so
-/// that the result uses 4-space indentation.
+/// elm-format removes trailing spaces from doc comment lines. We do the same
+/// as a final normalization step. We must be careful not to strip trailing
+/// whitespace from the very last part (the line ending before `-}`) since
+/// that's structural.
+fn strip_trailing_whitespace_in_doc(text: &str) -> String {
+    // Split on newlines, trim trailing whitespace from each line except the
+    // last segment (which may be just whitespace before `-}`).
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut result = String::with_capacity(text.len());
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+        if i == lines.len() - 1 {
+            // Last segment — preserve as-is (it's the closing indent).
+            result.push_str(line);
+        } else {
+            result.push_str(line.trim_end());
+        }
+    }
+    result
+}
+
+/// Normalize code examples in doc comments by re-parsing and re-formatting them.
 ///
-/// A code block is a sequence of consecutive lines where each non-blank line
-/// starts with 4+ spaces, preceded by a blank line (or the start of the text).
+/// elm-format re-parses indented code blocks (4+ spaces after a blank line) as
+/// Elm code and reformats them. We do the same: strip the 4-space prefix, wrap
+/// in a dummy module, parse, pretty-print, then re-indent with 4 spaces.
+/// If parsing fails, the code block is left unchanged.
 fn normalize_code_block_indent(text: &str) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut result = String::with_capacity(text.len());
 
-    // First pass: identify code block spans.
-    // A code block region is a maximal run of lines (possibly including blank
-    // lines) where every non-blank line starts with 4+ spaces, preceded by a
-    // blank line or start-of-text.
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
@@ -2170,59 +2189,281 @@ fn normalize_code_block_indent(text: &str) -> String {
             }
         }
 
-        // Detect 2-space indentation: count how many non-blank lines with
-        // extra indent have 4-aligned extras vs non-4-aligned extras. If the
-        // majority are NOT 4-aligned, it's 2-space code. This avoids false
-        // positives on 4-space code with alignment exceptions (like `else`).
-        let mut count_4_aligned = 0usize;
-        let mut count_non_4_aligned = 0usize;
-        for j in block_start..=block_end {
-            let bline = lines[j];
-            if bline.trim().is_empty() {
-                continue;
-            }
-            let leading = bline.len() - bline.trim_start().len();
-            if leading > 4 {
-                if (leading - 4) % 4 == 0 {
-                    count_4_aligned += 1;
-                } else {
-                    count_non_4_aligned += 1;
-                }
-            }
-        }
+        // Only try to reformat if the code block appears to use non-elm-format
+        // indentation (e.g. 2-space indent). Code blocks already using 4-space
+        // indentation are left unchanged to avoid regressions from imperfect
+        // pretty printing.
+        let needs_reformat = code_block_needs_reformat(&lines[block_start..=block_end]);
 
-        // Normalize when non-4-aligned extras outnumber 4-aligned ones,
-        // indicating 2-space indent convention. Round each non-4-aligned
-        // extra up to the next multiple of 4.
-        let needs_normalize =
-            count_non_4_aligned > 0 && count_non_4_aligned >= count_4_aligned;
+        let reformatted = if needs_reformat {
+            try_reformat_code_block(&lines[block_start..=block_end])
+        } else {
+            None
+        };
 
-        for j in block_start..=block_end {
-            let bline = lines[j];
-            if needs_normalize && !bline.trim().is_empty() {
-                let leading = bline.len() - bline.trim_start().len();
-                if leading > 4 && (leading - 4) % 4 != 0 {
-                    let extra = leading - 4;
-                    let new_extra = (extra + 3) / 4 * 4;
-                    result.push_str("    ");
-                    for _ in 0..new_extra {
-                        result.push(' ');
-                    }
-                    result.push_str(bline.trim_start());
-                } else {
-                    result.push_str(bline);
-                }
-            } else {
-                result.push_str(bline);
-            }
-            if j < lines.len() - 1 {
+        if let Some(reformatted) = reformatted {
+            result.push_str(&reformatted);
+            if block_end < lines.len() - 1 {
                 result.push('\n');
+            }
+        } else {
+            // Parsing failed or not needed — emit the block unchanged.
+            for j in block_start..=block_end {
+                result.push_str(lines[j]);
+                if j < lines.len() - 1 {
+                    result.push('\n');
+                }
             }
         }
         i = block_end + 1;
     }
 
     result
+}
+
+/// Check whether a code block needs reformatting.
+///
+/// Returns true if the block contains lines with non-4-aligned extra
+/// indentation (beyond the 4-space code block prefix), indicating 2-space
+/// indentation that elm-format would normalize to 4-space.
+fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
+    let mut count_4_aligned = 0usize;
+    let mut count_non_4_aligned = 0usize;
+    for &line in block_lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        if leading > 4 {
+            if (leading - 4) % 4 == 0 {
+                count_4_aligned += 1;
+            } else {
+                count_non_4_aligned += 1;
+            }
+        }
+    }
+    count_non_4_aligned > 0 && count_non_4_aligned >= count_4_aligned
+}
+
+/// Try to reformat a code block (lines starting with 4+ spaces) as Elm code.
+///
+/// Splits the code block at blank lines into "paragraphs", then tries each
+/// as either a declaration (in a module) or an expression (wrapped in a dummy
+/// function). Returns `Some(reformatted)` with 4-space-prefixed lines if all
+/// paragraphs can be parsed, or `None` if any paragraph fails.
+fn try_reformat_code_block(block_lines: &[&str]) -> Option<String> {
+    // Strip the 4-space prefix from each line to get raw Elm code.
+    let mut raw_lines: Vec<String> = Vec::new();
+    for &line in block_lines {
+        if line.trim().is_empty() {
+            raw_lines.push(String::new());
+        } else if line.starts_with("    ") {
+            raw_lines.push(line[4..].to_string());
+        } else {
+            return None;
+        }
+    }
+
+    let raw_code = raw_lines.join("\n");
+
+    // First try: parse as a full module with declarations.
+    let wrapped = format!("module DocTemp__ exposing (..)\n\n\n{}\n", raw_code);
+    if let Some(result) = try_parse_and_format_module(&wrapped) {
+        return Some(result);
+    }
+
+    // Second try: split into paragraphs (separated by blank lines) and
+    // try each paragraph individually. Some may be expressions, some
+    // declarations.
+    let paragraphs = split_into_paragraphs(&raw_lines);
+    let mut formatted_paragraphs: Vec<String> = Vec::new();
+
+    for para in &paragraphs {
+        let para_text = para.join("\n");
+
+        // Try as declaration(s) first.
+        let wrapped_decl = format!("module DocTemp__ exposing (..)\n\n\n{}\n", para_text);
+        if let Some(result) = try_parse_and_format_module_raw(&wrapped_decl) {
+            formatted_paragraphs.push(result);
+            continue;
+        }
+
+        // Try as expression by wrapping in a dummy function.
+        let indented: Vec<String> = para.iter().enumerate().map(|(i, line)| {
+            if line.is_empty() {
+                String::new()
+            } else if i == 0 {
+                format!("    {}", line)
+            } else {
+                format!("    {}", line)
+            }
+        }).collect();
+        let wrapped_expr = format!(
+            "module DocTemp__ exposing (..)\n\n\ndocTemp__ =\n{}\n",
+            indented.join("\n")
+        );
+        if let Some(result) = try_parse_and_format_expr(&wrapped_expr) {
+            formatted_paragraphs.push(result);
+            continue;
+        }
+
+        // Can't parse this paragraph — bail out entirely.
+        return None;
+    }
+
+    // Join paragraphs with blank lines and re-indent with 4 spaces.
+    let joined = formatted_paragraphs.join("\n\n");
+    let mut output = String::new();
+    for (idx, line) in joined.split('\n').enumerate() {
+        if idx > 0 {
+            output.push('\n');
+        }
+        if line.is_empty() {
+            // Keep blank lines blank.
+        } else {
+            output.push_str("    ");
+            output.push_str(line);
+        }
+    }
+
+    Some(output)
+}
+
+/// Split raw lines into paragraphs separated by blank lines.
+fn split_into_paragraphs(lines: &[String]) -> Vec<Vec<String>> {
+    let mut paragraphs: Vec<Vec<String>> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+
+    for line in lines {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(current);
+                current = Vec::new();
+            }
+        } else {
+            current.push(line.clone());
+        }
+    }
+    if !current.is_empty() {
+        paragraphs.push(current);
+    }
+    paragraphs
+}
+
+/// Try to parse source as a module and extract formatted declarations.
+/// Returns Some(re-indented string) or None.
+fn try_parse_and_format_module(wrapped: &str) -> Option<String> {
+    let raw = try_parse_and_format_module_raw(wrapped)?;
+
+    // Collapse runs of 2+ consecutive blank lines to 1.
+    let lines: Vec<&str> = raw.split('\n').collect();
+    let mut collapsed: Vec<&str> = Vec::new();
+    let mut prev_blank = false;
+    for line in &lines {
+        if line.is_empty() {
+            if prev_blank {
+                continue;
+            }
+            prev_blank = true;
+        } else {
+            prev_blank = false;
+        }
+        collapsed.push(line);
+    }
+
+    // Re-indent with 4 spaces.
+    let mut output = String::new();
+    for (idx, line) in collapsed.iter().enumerate() {
+        if idx > 0 {
+            output.push('\n');
+        }
+        if line.is_empty() {
+            // blank
+        } else {
+            output.push_str("    ");
+            output.push_str(line);
+        }
+    }
+
+    Some(output)
+}
+
+/// Parse wrapped source as module and extract raw declaration text (no re-indenting).
+fn try_parse_and_format_module_raw(wrapped: &str) -> Option<String> {
+    let wrapped_owned = wrapped.to_string();
+    let result = std::panic::catch_unwind(|| {
+        let module = crate::parse::parse(&wrapped_owned).ok()?;
+        let first = pretty_print(&module);
+        // Idempotency check
+        let module2 = crate::parse::parse(&first).ok()?;
+        let second = pretty_print(&module2);
+        if first == second { Some(first) } else { None }
+    });
+    let formatted = match result {
+        Ok(Some(f)) => f,
+        _ => return None,
+    };
+
+    // Extract everything after the module header line + blank lines.
+    let header_end = formatted.find('\n')? + 1;
+    let rest = &formatted[header_end..];
+    let trimmed = rest.trim_start_matches('\n');
+    if trimmed.is_empty() {
+        return None;
+    }
+    let decl_text = trimmed.trim_end_matches('\n');
+    if decl_text.is_empty() {
+        return None;
+    }
+    Some(decl_text.to_string())
+}
+
+/// Parse wrapped source as a dummy function and extract the expression body.
+fn try_parse_and_format_expr(wrapped: &str) -> Option<String> {
+    let wrapped_owned = wrapped.to_string();
+    let result = std::panic::catch_unwind(|| {
+        let module = crate::parse::parse(&wrapped_owned).ok()?;
+        let first = pretty_print(&module);
+        // Idempotency check
+        let module2 = crate::parse::parse(&first).ok()?;
+        let second = pretty_print(&module2);
+        if first == second { Some(first) } else { None }
+    });
+    let formatted = match result {
+        Ok(Some(f)) => f,
+        _ => return None,
+    };
+
+    // Extract the expression body from:
+    // module DocTemp__ exposing (..)
+    //
+    //
+    // docTemp__ =
+    //     <expr>
+    //
+    // We need just the <expr> part, un-indented by 4 spaces.
+    let marker = "docTemp__ =\n";
+    let idx = formatted.find(marker)?;
+    let body = &formatted[idx + marker.len()..];
+    let body = body.trim_end_matches('\n');
+    if body.is_empty() {
+        return None;
+    }
+
+    // Remove 4-space indent from each line (the function body indent).
+    let mut result_lines: Vec<String> = Vec::new();
+    for line in body.split('\n') {
+        if line.is_empty() {
+            result_lines.push(String::new());
+        } else if line.starts_with("    ") {
+            result_lines.push(line[4..].to_string());
+        } else {
+            // Unexpected indentation — bail out.
+            return None;
+        }
+    }
+
+    Some(result_lines.join("\n"))
 }
 
 /// Parse `@docs` directives from a module documentation string.
