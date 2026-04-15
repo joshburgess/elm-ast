@@ -80,6 +80,12 @@ pub struct Printer {
     config: PrintConfig,
     buf: String,
     indent: usize,
+    /// Extra spaces added to newline_indent at the current indent level only.
+    /// Used to align `else`/`in` inside `(` by 1 space when a block expression
+    /// is parenthesized. Cleared on indent(), restored on dedent().
+    indent_extra: u32,
+    /// Stack of saved indent_extra values, pushed by indent(), popped by dedent().
+    indent_extra_stack: Vec<u32>,
     /// Groups of exposed names parsed from `@docs` directives in the module doc.
     /// Each inner Vec is one `@docs` line. Used by `write_exposing_pretty` to
     /// match elm-format's grouping of exposing items.
@@ -92,6 +98,8 @@ impl Printer {
             config,
             buf: String::new(),
             indent: 0,
+            indent_extra: 0,
+            indent_extra_stack: Vec::new(),
             doc_groups: Vec::new(),
         }
     }
@@ -179,17 +187,22 @@ impl Printer {
     }
 
     fn write_indent(&mut self) {
-        for _ in 0..self.indent * self.config.indent_width {
+        for _ in 0..self.indent * self.config.indent_width + self.indent_extra as usize {
             self.buf.push(' ');
         }
     }
 
     fn indent(&mut self) {
         self.indent += 1;
+        // Save and clear indent_extra — it only applies at the base level.
+        self.indent_extra_stack.push(self.indent_extra);
+        self.indent_extra = 0;
     }
 
     fn dedent(&mut self) {
         self.indent = self.indent.saturating_sub(1);
+        // Restore indent_extra from the previous level.
+        self.indent_extra = self.indent_extra_stack.pop().unwrap_or(0);
     }
 
     fn newline_indent(&mut self) {
@@ -1268,8 +1281,21 @@ impl Printer {
 
             Expr::Parenthesized(inner) => {
                 if self.is_pretty() && self.is_multiline(&inner.value) {
+                    let saved_extra = self.indent_extra;
                     self.write_char('(');
+                    // Block expressions inside parens need indent_extra so
+                    // that else/in/branches align 1 past the opening `(`.
+                    if matches!(
+                        inner.value,
+                        Expr::IfElse { .. }
+                            | Expr::CaseOf { .. }
+                            | Expr::LetIn { .. }
+                            | Expr::Lambda { .. }
+                    ) {
+                        self.indent_extra += 1;
+                    }
                     self.write_expr(&inner.value);
+                    self.indent_extra = saved_extra;
                     self.newline_indent();
                     self.write_char(')');
                 } else {
@@ -1389,8 +1415,11 @@ impl Printer {
             | Expr::LetIn { .. }
             | Expr::Lambda { .. } => {
                 if self.is_pretty() {
+                    let saved_extra = self.indent_extra;
                     self.write_char('(');
+                    self.indent_extra += 1;
                     self.write_expr_inner(expr);
+                    self.indent_extra = saved_extra;
                     self.newline_indent();
                     self.write_char(')');
                 } else {
