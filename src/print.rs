@@ -1384,7 +1384,10 @@ impl Printer {
             }
 
             Expr::Parenthesized(inner) => {
-                if self.is_pretty() && self.is_multiline(&inner.value) {
+                // elm-format strips Parenthesized around Negation: (-x) -> -x
+                if self.is_pretty() && matches!(inner.value, Expr::Negation(_)) {
+                    self.write_expr_app(&inner.value);
+                } else if self.is_pretty() && self.is_multiline(&inner.value) {
                     let saved_extra = self.indent_extra;
                     self.write_char('(');
                     // Block expressions inside parens need indent_extra so
