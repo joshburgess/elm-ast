@@ -1233,13 +1233,49 @@ impl Printer {
                 operands_and_operators,
                 final_operand,
             } => {
-                for (operand, op) in operands_and_operators {
-                    self.write_expr_app(&operand.value);
-                    self.write_char(' ');
-                    self.write(&op.value);
-                    self.write_char(' ');
+                if self.is_pretty() {
+                    // elm-format rule: if any operand is multiline (output
+                    // contains newlines), all operators break to vertical.
+                    let any_ml = operands_and_operators
+                        .iter()
+                        .any(|(op, _)| self.is_multiline(&op.value))
+                        || self.is_multiline(&final_operand.value);
+                    if any_ml {
+                        self.write_expr_app(&operands_and_operators[0].0.value);
+                        self.indent();
+                        for (i, (_operand, op)) in
+                            operands_and_operators.iter().enumerate()
+                        {
+                            self.newline_indent();
+                            self.write(&op.value);
+                            self.write_char(' ');
+                            if i + 1 < operands_and_operators.len() {
+                                self.write_expr_app(
+                                    &operands_and_operators[i + 1].0.value,
+                                );
+                            } else {
+                                self.write_expr_app(&final_operand.value);
+                            }
+                        }
+                        self.dedent();
+                    } else {
+                        for (operand, op) in operands_and_operators {
+                            self.write_expr_app(&operand.value);
+                            self.write_char(' ');
+                            self.write(&op.value);
+                            self.write_char(' ');
+                        }
+                        self.write_expr_app(&final_operand.value);
+                    }
+                } else {
+                    for (operand, op) in operands_and_operators {
+                        self.write_expr_app(&operand.value);
+                        self.write_char(' ');
+                        self.write(&op.value);
+                        self.write_char(' ');
+                    }
+                    self.write_expr_app(&final_operand.value);
                 }
-                self.write_expr_app(&final_operand.value);
             }
             _ => self.write_expr_app(expr),
         }
