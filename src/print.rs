@@ -1370,13 +1370,11 @@ impl Printer {
                     if any_ml {
                         self.write("{ ");
                         self.write_record_setter(&fields[0].value);
-                        self.indent();
                         for field in &fields[1..] {
                             self.newline_indent();
                             self.write(", ");
                             self.write_record_setter(&field.value);
                         }
-                        self.dedent();
                         self.newline_indent();
                         self.write("}");
                     } else {
