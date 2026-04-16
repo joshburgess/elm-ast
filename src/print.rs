@@ -1477,8 +1477,20 @@ impl Printer {
     /// Uses single-line when all elements are single-line, multi-line otherwise.
     fn write_comma_sep(&mut self, open: &str, close: &str, elems: &[Spanned<Expr>]) {
         let any_multiline = elems.iter().any(|e| self.is_multiline(&e.value));
-        if any_multiline {
-            // Multi-line: one element per indented line.
+        if any_multiline && self.is_pretty() {
+            // elm-format style: first element on same line as open bracket,
+            // subsequent elements aligned with ", " prefix at same indent.
+            self.write(open);
+            self.write_expr(&elems[0].value);
+            for elem in &elems[1..] {
+                self.newline_indent();
+                self.write(", ");
+                self.write_expr(&elem.value);
+            }
+            self.newline_indent();
+            self.write(close.trim_start());
+        } else if any_multiline {
+            // Compact mode: one element per indented line.
             self.write(open.trim_end());
             self.indent();
             for (i, elem) in elems.iter().enumerate() {
