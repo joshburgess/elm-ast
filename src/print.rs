@@ -390,6 +390,7 @@ impl Printer {
             let normalized = normalize_emphasis(&normalized);
             let normalized = normalize_empty_link_refs(&normalized);
             let normalized = normalize_markdown_lists(&normalized);
+            let normalized = normalize_fenced_code_blocks(&normalized);
             let normalized = normalize_code_block_indent(&normalized);
             let normalized = normalize_docs_lines(&normalized);
             let normalized = strip_trailing_whitespace_in_doc(&normalized);
@@ -2188,6 +2189,59 @@ fn normalize_markdown_lists(text: &str) -> String {
         } else {
             result.push_str(line);
         }
+    }
+    result
+}
+
+/// Convert fenced code blocks (triple-backtick) to indented code blocks.
+///
+/// elm-format's Cheapskate markdown parser converts fenced code blocks to
+/// 4-space indented code blocks. We do the same to match elm-format output.
+fn normalize_fenced_code_blocks(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut result = String::with_capacity(text.len());
+    let mut i = 0;
+
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        // Detect opening fence: only plain ``` without a language tag.
+        // Fenced blocks with language tags (e.g. ```elm) are preserved by elm-format.
+        if trimmed == "```" {
+            // Find the closing fence
+            let mut end = i + 1;
+            let mut found_close = false;
+            while end < lines.len() {
+                if lines[end].trim() == "```" {
+                    found_close = true;
+                    break;
+                }
+                end += 1;
+            }
+
+            if found_close {
+                // Convert: skip opening fence, indent content lines by 4 spaces,
+                // skip closing fence.
+                for j in (i + 1)..end {
+                    if !result.is_empty() || j > i + 1 {
+                        result.push('\n');
+                    }
+                    if lines[j].is_empty() {
+                        // Keep blank lines blank
+                    } else {
+                        result.push_str("    ");
+                        result.push_str(lines[j]);
+                    }
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+
+        if i > 0 {
+            result.push('\n');
+        }
+        result.push_str(lines[i]);
+        i += 1;
     }
     result
 }
