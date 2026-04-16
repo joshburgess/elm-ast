@@ -1480,12 +1480,20 @@ impl Printer {
         if any_multiline && self.is_pretty() {
             // elm-format style: first element on same line as open bracket,
             // subsequent elements aligned with ", " prefix at same indent.
+            // Set indent_extra = 2 so block expressions (if-else, let-in)
+            // inside elements align else/in with the element content after
+            // the "[ " or ", " prefix.
+            let saved_extra = self.indent_extra;
             self.write(open);
+            self.indent_extra = saved_extra + 2;
             self.write_expr(&elems[0].value);
+            self.indent_extra = saved_extra;
             for elem in &elems[1..] {
                 self.newline_indent();
                 self.write(", ");
+                self.indent_extra = saved_extra + 2;
                 self.write_expr(&elem.value);
+                self.indent_extra = saved_extra;
             }
             self.newline_indent();
             self.write(close.trim_start());
