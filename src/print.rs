@@ -1128,6 +1128,11 @@ impl Printer {
 
     /// The core expression dispatcher.
     fn write_expr_inner(&mut self, expr: &Expr) {
+        let expr = if self.is_pretty() {
+            unwrap_parens_non_block(expr)
+        } else {
+            expr
+        };
         match expr {
             Expr::OperatorApplication {
                 operator,
@@ -1307,6 +1312,11 @@ impl Printer {
 
     /// Write an operator operand, adding parens for precedence.
     fn write_expr_operand(&mut self, expr: &Expr, parent_op: &str, is_left: bool) {
+        let expr = if self.is_pretty() {
+            unwrap_parens_non_block(expr)
+        } else {
+            expr
+        };
         match expr {
             Expr::OperatorApplication { operator, .. } => {
                 let parent_prec = op_precedence(parent_op);
@@ -1384,8 +1394,13 @@ impl Printer {
             }
 
             Expr::Parenthesized(inner) => {
-                // elm-format strips Parenthesized around Negation: (-x) -> -x
-                if self.is_pretty() && matches!(inner.value, Expr::Negation(_)) {
+                // elm-format strips redundant Parenthesized wrappers.
+                // In atomic position, strip parens when the inner expression
+                // is itself atomic or is Negation/Application (which are
+                // handled directly by write_expr_app).
+                if self.is_pretty() && is_naturally_atomic(&inner.value) {
+                    self.write_expr_atomic(&inner.value);
+                } else if self.is_pretty() && matches!(inner.value, Expr::Negation(_)) {
                     self.write_expr_app(&inner.value);
                 } else if self.is_pretty() && self.is_multiline(&inner.value) {
                     let saved_extra = self.indent_extra;
@@ -2758,11 +2773,52 @@ fn exposed_item_to_string(item: &ExposedItem) -> String {
     }
 }
 
+/// Check if an expression is naturally atomic (doesn't need parens in any position).
+fn is_naturally_atomic(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Unit
+            | Expr::Literal(_)
+            | Expr::FunctionOrValue { .. }
+            | Expr::PrefixOperator(_)
+            | Expr::Parenthesized(_)
+            | Expr::Tuple(_)
+            | Expr::List(_)
+            | Expr::Record(_)
+            | Expr::RecordUpdate { .. }
+            | Expr::RecordAccess { .. }
+            | Expr::RecordAccessFunction(_)
+            | Expr::GLSLExpression(_)
+    )
+}
+
 /// Unwrap one layer of `Parenthesized` from an expression.
 /// Returns the inner expression if it is parenthesized, or the original expression otherwise.
 fn unwrap_parens(expr: &Expr) -> &Expr {
     match expr {
         Expr::Parenthesized(inner) => &inner.value,
+        other => other,
+    }
+}
+
+/// Unwrap `Parenthesized` when the inner expression doesn't need parens
+/// at the operator-operand or expression level. elm-format strips redundant
+/// parens around non-block, non-operator expressions in these positions.
+fn unwrap_parens_non_block(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Parenthesized(inner)
+            if !matches!(
+                inner.value,
+                Expr::OperatorApplication { .. }
+                    | Expr::BinOps { .. }
+                    | Expr::IfElse { .. }
+                    | Expr::CaseOf { .. }
+                    | Expr::LetIn { .. }
+                    | Expr::Lambda { .. }
+            ) =>
+        {
+            &inner.value
+        }
         other => other,
     }
 }
