@@ -1143,6 +1143,34 @@ impl Printer {
                 } else {
                     &right.value
                 };
+
+                // In pretty mode, flatten |>/>>/<< chains. elm-format's rule:
+                // if ANY part of a binops expression contains newlines (i.e.,
+                // any operand is multiline), ALL operators break to vertical.
+                // We detect this via is_multiline on each chain operand.
+                if self.is_pretty()
+                    && matches!(operator.as_str(), "|>" | ">>" | "<<")
+                {
+                    if let Some(chain) = flatten_left_assoc_chain(expr, operator) {
+                        let any_ml = chain.iter().any(|op| self.is_multiline(op));
+                        if any_ml {
+                            // Break ALL operators to vertical.
+                            self.write_expr_operand(chain[0], operator, true);
+                            self.indent();
+                            for operand in &chain[1..] {
+                                self.newline_indent();
+                                self.write(operator);
+                                self.write_char(' ');
+                                self.write_expr_operand(operand, operator, false);
+                            }
+                            self.dedent();
+                            return;
+                        }
+                        // All operands are single-line; fall through to
+                        // normal inline path (which handles recursion).
+                    }
+                }
+
                 let use_vertical = self.is_multiline(right_expr);
                 self.write_leading_comments(&left.comments);
                 self.write_expr_operand(&left.value, operator, true);
@@ -2655,6 +2683,27 @@ fn unwrap_parens(expr: &Expr) -> &Expr {
     match expr {
         Expr::Parenthesized(inner) => &inner.value,
         other => other,
+    }
+}
+
+/// Flatten a left-associative operator chain into a list of expressions.
+/// `a |> b |> c` (parsed as `(a |> b) |> c`) becomes `[a, b, c]`.
+fn flatten_left_assoc_chain<'a>(expr: &'a Expr, target_op: &str) -> Option<Vec<&'a Expr>> {
+    match expr {
+        Expr::OperatorApplication {
+            operator,
+            left,
+            right,
+            ..
+        } if operator == target_op => {
+            let mut chain = match flatten_left_assoc_chain(&left.value, target_op) {
+                Some(v) => v,
+                None => vec![&left.value],
+            };
+            chain.push(&right.value);
+            Some(chain)
+        }
+        _ => None,
     }
 }
 
