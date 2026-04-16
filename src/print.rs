@@ -1171,6 +1171,25 @@ impl Printer {
                     }
                 }
 
+                // Same rule for right-associative :: chains.
+                if self.is_pretty() && operator == "::" {
+                    if let Some(chain) = flatten_right_assoc_chain(expr, operator) {
+                        let any_ml = chain.iter().any(|op| self.is_multiline(op));
+                        if any_ml {
+                            self.write_expr_operand(chain[0], operator, true);
+                            self.indent();
+                            for operand in &chain[1..] {
+                                self.newline_indent();
+                                self.write(operator);
+                                self.write_char(' ');
+                                self.write_expr_operand(operand, operator, false);
+                            }
+                            self.dedent();
+                            return;
+                        }
+                    }
+                }
+
                 let use_vertical = self.is_multiline(right_expr);
                 self.write_leading_comments(&left.comments);
                 self.write_expr_operand(&left.value, operator, true);
@@ -2755,6 +2774,27 @@ fn flatten_left_assoc_chain<'a>(expr: &'a Expr, target_op: &str) -> Option<Vec<&
                 None => vec![&left.value],
             };
             chain.push(&right.value);
+            Some(chain)
+        }
+        _ => None,
+    }
+}
+
+/// Flatten a right-associative operator chain into a list of expressions.
+/// `a :: b :: c` (parsed as `a :: (b :: c)`) becomes `[a, b, c]`.
+fn flatten_right_assoc_chain<'a>(expr: &'a Expr, target_op: &str) -> Option<Vec<&'a Expr>> {
+    match expr {
+        Expr::OperatorApplication {
+            operator,
+            left,
+            right,
+            ..
+        } if operator == target_op => {
+            let mut chain = vec![&left.value];
+            match flatten_right_assoc_chain(&right.value, target_op) {
+                Some(mut rest) => chain.append(&mut rest),
+                None => chain.push(&right.value),
+            }
             Some(chain)
         }
         _ => None,
