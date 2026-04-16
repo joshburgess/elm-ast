@@ -2310,6 +2310,17 @@ fn normalize_markdown_lists(text: &str) -> String {
             // Unordered list item: indent by 2 spaces.
             result.push_str("  ");
             result.push_str(line);
+        } else if let Some(rest) = strip_ordered_list_prefix(line) {
+            // Ordered list item: strip leading spaces, double-space after period.
+            // `  1. text` or `1. text` -> `1.  text`
+            let trimmed = line.trim_start();
+            // Extract the number and period part
+            let prefix_len = trimmed.len() - rest.len();
+            let number_part = &trimmed[..prefix_len]; // e.g. "1. "
+            let number_dot = number_part.trim_end();   // e.g. "1."
+            result.push_str(number_dot);
+            result.push_str("  ");
+            result.push_str(rest);
         } else {
             result.push_str(line);
         }
@@ -2368,6 +2379,34 @@ fn normalize_fenced_code_blocks(text: &str) -> String {
         i += 1;
     }
     result
+}
+
+/// Check if a line is an ordered list item: optional whitespace, digits, period, space(s).
+/// Returns the text after all spaces following "N.", or None.
+fn strip_ordered_list_prefix(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    // Must start with a digit
+    let mut chars = trimmed.char_indices();
+    let first = chars.next()?;
+    if !first.1.is_ascii_digit() {
+        return None;
+    }
+    // Consume remaining digits
+    let mut after_digits = first.0 + 1;
+    for (pos, ch) in chars {
+        if ch.is_ascii_digit() {
+            after_digits = pos + 1;
+        } else {
+            break;
+        }
+    }
+    // Must be followed by "." then at least one space
+    let rest = &trimmed[after_digits..];
+    let after_dot = rest.strip_prefix('.')?;
+    if !after_dot.starts_with(' ') {
+        return None;
+    }
+    Some(after_dot.trim_start())
 }
 
 /// Normalize code examples in doc comments by re-parsing and re-formatting them.
