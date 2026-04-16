@@ -389,6 +389,7 @@ impl Printer {
             let normalized = normalize_doc_comment(text);
             let normalized = normalize_emphasis(&normalized);
             let normalized = normalize_empty_link_refs(&normalized);
+            let normalized = normalize_markdown_lists(&normalized);
             let normalized = normalize_code_block_indent(&normalized);
             let normalized = normalize_docs_lines(&normalized);
             let normalized = strip_trailing_whitespace_in_doc(&normalized);
@@ -833,11 +834,24 @@ impl Printer {
     }
 
     /// Write a type annotation at the top level of a type alias body
-    /// (ElmFormat mode only). Record types with 2+ fields go multiline.
+    /// (ElmFormat mode only). Record types go multiline when the fields
+    /// span multiple lines in the source; otherwise kept inline.
     fn write_type_pretty_toplevel(&mut self, ty: &TypeAnnotation) {
         match ty {
-            TypeAnnotation::Record(fields) if fields.len() > 2 => {
-                self.write_record_type_fields_multiline(fields, None);
+            TypeAnnotation::Record(fields) if fields.len() >= 2 => {
+                // Check if the record spans multiple lines in the source.
+                let spans_multi_lines = if fields.len() >= 2 {
+                    let first_line = fields.first().map(|f| f.span.start.line).unwrap_or(0);
+                    let last_line = fields.last().map(|f| f.span.end.line).unwrap_or(0);
+                    last_line > first_line
+                } else {
+                    false
+                };
+                if spans_multi_lines {
+                    self.write_record_type_fields_multiline(fields, None);
+                } else {
+                    self.write_type(ty);
+                }
             }
             _ => self.write_type(ty),
         }
@@ -2135,6 +2149,44 @@ fn strip_trailing_whitespace_in_doc(text: &str) -> String {
             result.push_str(line);
         } else {
             result.push_str(line.trim_end());
+        }
+    }
+    result
+}
+
+/// Normalize markdown list indentation in doc comments.
+///
+/// elm-format's Cheapskate markdown parser indents unordered list items
+/// by 2 spaces: `- item` becomes `  - item`. This only applies to lines
+/// that are NOT inside code blocks (4+ space indentation).
+fn normalize_markdown_lists(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut result = String::with_capacity(text.len());
+    let mut in_code_block = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+
+        // Track code block state: lines starting with 4+ spaces after a blank
+        // line enter code block mode; non-indented lines after a blank leave it.
+        if line.starts_with("    ") {
+            if i == 0 || lines[i - 1].trim().is_empty() {
+                in_code_block = true;
+            }
+        } else if !line.trim().is_empty() && !line.starts_with("    ") {
+            in_code_block = false;
+        }
+
+        if in_code_block {
+            result.push_str(line);
+        } else if line.starts_with("- ") || *line == "-" {
+            // Unordered list item: indent by 2 spaces.
+            result.push_str("  ");
+            result.push_str(line);
+        } else {
+            result.push_str(line);
         }
     }
     result
