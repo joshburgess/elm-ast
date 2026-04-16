@@ -129,9 +129,9 @@ println!("{} function calls", counter.0);
 ```
 
 Three traversal traits:
-- **`Visit`** -- immutable traversal (`&` references)
-- **`VisitMut`** -- in-place mutation (`&mut` references)
-- **`Fold`** -- owned transformation (takes ownership, returns new tree)
+- **`Visit`**: immutable traversal (`&` references)
+- **`VisitMut`**: in-place mutation (`&mut` references)
+- **`Fold`**: owned transformation (takes ownership, returns new tree)
 
 ## Builder API
 
@@ -166,8 +166,8 @@ let module2: elm_ast::ElmModule = serde_json::from_str(&json)?;
 For the full story, see the [ARCHITECTURE.md](ARCHITECTURE.md) doc.
 
 The design follows `syn`'s proven patterns:
-- **Enum-of-structs AST** -- each variant wraps a dedicated struct with named fields
-- **`Spanned<T>`** -- every node carries a `Span` (byte offset + line/column)
+- **Enum-of-structs AST**: each variant wraps a dedicated struct with named fields
+- **`Spanned<T>`**: every node carries a `Span` (byte offset + line/column)
 - **`Box<T>`** for recursive sub-expressions
 - **Feature-gated modules** for compile-time control
 
@@ -177,9 +177,9 @@ The printer uses an approach inspired by [`elm-format`](https://github.com/avh4/
 
 The expression parser uses **zero stack recursion**. Traditional recursive-descent parsers can overflow the call stack on deeply nested input. `elm-ast` eliminates this entirely through three techniques:
 
-1. **Iterative Pratt parsing** -- binary operators use an explicit `Vec<PendingOp>` heap-allocated operator stack instead of recursive descent through precedence levels.
-2. **CPS (continuation-passing style)** -- every compound expression (if/case/let/lambda/paren/tuple/list/record) that would normally call `parse_expr` recursively instead returns a `NeedExpr(continuation)` step, where the continuation is a closure capturing the partial parse state.
-3. **Trampoline loop** -- a top-level loop drives execution: when a compound form needs a sub-expression, its continuation is pushed onto a heap-allocated stack and the loop restarts. When a sub-expression completes, the continuation is popped and invoked.
+1. **Iterative Pratt parsing**: binary operators use an explicit `Vec<PendingOp>` heap-allocated operator stack instead of recursive descent through precedence levels.
+2. **CPS (continuation-passing style)**: every compound expression (if/case/let/lambda/paren/tuple/list/record) that would normally call `parse_expr` recursively instead returns a `NeedExpr(continuation)` step, where the continuation is a closure capturing the partial parse state.
+3. **Trampoline loop**: a top-level loop drives execution: when a compound form needs a sub-expression, its continuation is pushed onto a heap-allocated stack and the loop restarts. When a sub-expression completes, the continuation is popped and invoked.
 
 This guarantees **O(1) call-stack depth** regardless of expression nesting. The continuation stack is bounded by `MAX_EXPR_DEPTH` (256) as a resource guard, not a safety requirement.
 

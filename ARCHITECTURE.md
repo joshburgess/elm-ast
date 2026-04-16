@@ -8,7 +8,7 @@ This document describes the internal design of `elm-ast`. Read this if you want 
 src/
   lib.rs                   Re-exports, feature gates
   span.rs                  Position (line/col/offset), Span (half-open interval)
-  node.rs                  Spanned<T> — wraps every AST node with span + comments
+  node.rs                  Spanned<T>: wraps every AST node with span + comments
   token.rs                 Token enum (lexer output)
   literal.rs               Literal enum (Int, Float, String, Char)
   ident.rs                 Ident, ModuleName aliases; QualifiedName struct
@@ -17,11 +17,11 @@ src/
   import.rs                Import struct
   exposing.rs              Exposing, ExposedItem enums
   module_header.rs         ModuleHeader (Normal, Port, Effect)
-  expr.rs                  Expr enum — 20+ expression variants
-  pattern.rs               Pattern enum — destructuring forms
-  type_annotation.rs       TypeAnnotation enum — type syntax
-  declaration.rs           Declaration enum — top-level items
-  file.rs                  ElmModule — root AST node for a .elm file
+  expr.rs                  Expr enum: 20+ expression variants
+  pattern.rs               Pattern enum: destructuring forms
+  type_annotation.rs       TypeAnnotation enum: type syntax
+  declaration.rs           Declaration enum: top-level items
+  file.rs                  ElmModule: root AST node for a .elm file
   lexer.rs                 Lexer struct, tokenization
   parse/
     mod.rs                 Parser struct, ParseError, public parse()/parse_recovering()
@@ -32,9 +32,9 @@ src/
     module.rs              Module header, imports, full file parsing
   print.rs                 Pretty-printer (elm-format-inspired)
   display.rs               Display impls via the printer
-  visit.rs                 Visit trait — immutable traversal
-  visit_mut.rs             VisitMut trait — in-place mutation
-  fold.rs                  Fold trait — owned transformation
+  visit.rs                 Visit trait: immutable traversal
+  visit_mut.rs             VisitMut trait: in-place mutation
+  fold.rs                  Fold trait: owned transformation
   builder.rs               Helpers for programmatic AST construction
   wasm.rs                  WASM bindings via wasm-bindgen
 tests/
@@ -76,7 +76,7 @@ pub struct Spanned<T> {
 }
 ```
 
-This means source locations and comments are carried everywhere without polluting the node types themselves. `Hash` and `PartialEq` on `Spanned<T>` delegate to the inner value only, ignoring span and comments — so two structurally identical ASTs compare equal regardless of where they appeared in source.
+This means source locations and comments are carried everywhere without polluting the node types themselves. `Hash` and `PartialEq` on `Spanned<T>` delegate to the inner value only, ignoring span and comments, so two structurally identical ASTs compare equal regardless of where they appeared in source.
 
 ## Lexer
 
@@ -93,10 +93,10 @@ Key design choices:
 ### Structure
 
 The parser (`parse/mod.rs`) is a cursor over the token stream with lookahead. It tracks:
-- `pos` — current position in the token array
-- `paren_depth` — nesting depth of `()`/`[]`/`{}`; when > 0, indentation rules are suspended
-- `app_context_col` — optional column override for application argument collection inside list/record brackets
-- `collected_comments` — comments accumulated during whitespace skipping
+- `pos`: current position in the token array
+- `paren_depth`: nesting depth of `()`/`[]`/`{}`; when > 0, indentation rules are suspended
+- `app_context_col`: optional column override for application argument collection inside list/record brackets
+- `collected_comments`: comments accumulated during whitespace skipping
 
 ### Indentation
 
@@ -164,14 +164,14 @@ Each trait has one method per AST node type (e.g., `visit_expr`, `visit_pattern`
 
 Tests are layered from unit to integration:
 
-1. **Parser/printer unit tests** — isolated snippets testing specific syntax constructs
-2. **Edge case tests** — serde round-trips, builder API, comment handling
-3. **Property tests** — proptest-generated random ASTs verify parse/print invariants
-4. **Integration tests** — 291 real `.elm` files from 50 packages verify parse, round-trip (parse -> print -> parse produces structurally equal AST), and printer idempotency (print -> parse -> print produces identical text)
+1. **Parser/printer unit tests**: isolated snippets testing specific syntax constructs
+2. **Edge case tests**: serde round-trips, builder API, comment handling
+3. **Property tests**: proptest-generated random ASTs verify parse/print invariants
+4. **Integration tests**: 291 real `.elm` files from 50 packages verify parse, round-trip (parse -> print -> parse produces structurally equal AST), and printer idempotency (print -> parse -> print produces identical text)
 
 ### Regression watchlist
 
 Two files were historically the hardest to handle and are documented in `tests/integration_tests.rs`:
 
-- **typed-svg/GradientsPatterns.elm** — required `app_context_col` to relax column checks inside brackets
-- **elm-animator/Animator.elm** — required vertical application layout and multiline record setter formatting in the printer
+- **typed-svg/GradientsPatterns.elm**: required `app_context_col` to relax column checks inside brackets
+- **elm-animator/Animator.elm**: required vertical application layout and multiline record setter formatting in the printer
