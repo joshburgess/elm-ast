@@ -1190,7 +1190,12 @@ impl Printer {
                     }
                 }
 
-                let use_vertical = self.is_multiline(right_expr);
+                let use_vertical = if self.is_pretty() {
+                    // elm-format: if either operand is multiline, break.
+                    self.is_multiline(&left.value) || self.is_multiline(right_expr)
+                } else {
+                    self.is_multiline(right_expr)
+                };
                 self.write_leading_comments(&left.comments);
                 self.write_expr_operand(&left.value, operator, true);
                 if use_vertical && operator == "<|" {
