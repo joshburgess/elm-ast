@@ -1171,8 +1171,8 @@ impl Printer {
                     }
                 }
 
-                // Same rule for right-associative :: chains.
-                if self.is_pretty() && operator == "::" {
+                // Same rule for right-associative :: and ++ chains.
+                if self.is_pretty() && matches!(operator.as_str(), "::" | "++") {
                     if let Some(chain) = flatten_right_assoc_chain(expr, operator) {
                         let any_ml = chain.iter().any(|op| self.is_multiline(op));
                         if any_ml {
