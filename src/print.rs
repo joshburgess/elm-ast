@@ -1381,13 +1381,13 @@ impl Printer {
                     &right.value
                 };
 
-                // In pretty mode, flatten |>/>>/<< chains. elm-format's rule:
-                // if ANY part of a binops expression contains newlines (i.e.,
-                // any operand is multiline), ALL operators break to vertical.
-                // We detect this via is_multiline on each chain operand.
-                if self.is_pretty()
-                    && matches!(operator.as_str(), "|>" | ">>" | "<<")
-                {
+                // In pretty mode, flatten left-associative pipeline chains.
+                // elm-format's rule: if ANY part of a binops expression
+                // contains newlines (i.e., any operand is multiline), ALL
+                // operators break to vertical. (`>>` / `<<` are handled below
+                // via the right-associative path, since they right-associate
+                // in Elm.)
+                if self.is_pretty() && operator == "|>" {
                     if let Some(chain) = flatten_left_assoc_chain(expr, operator) {
                         let any_ml = chain.iter().any(|op| self.is_multiline(op));
                         if any_ml {
@@ -1408,8 +1408,14 @@ impl Printer {
                     }
                 }
 
-                // Same rule for right-associative :: and ++ chains.
-                if self.is_pretty() && matches!(operator.as_str(), "::" | "++") {
+                // Same rule for right-associative ::, ++, >>, << chains.
+                // (`>>` / `<<` function composition is right-associative in
+                // Elm, so we need `flatten_right_assoc_chain` to lay them out
+                // at a single indent level instead of letting the AST shape
+                // produce stair-stepped nesting.)
+                if self.is_pretty()
+                    && matches!(operator.as_str(), "::" | "++" | ">>" | "<<")
+                {
                     if let Some(chain) = flatten_right_assoc_chain(expr, operator) {
                         let any_ml = chain.iter().any(|op| self.is_multiline(op));
                         if any_ml {
