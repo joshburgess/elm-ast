@@ -394,6 +394,16 @@ impl Printer {
                     &anchor_comments[slot][0].value,
                     Comment::Line(_)
                 );
+                // A single empty block comment (e.g. `{--}`) is treated by
+                // elm-format as an attached marker: normal 2-blank-line
+                // separation before, and no blank line between it and the
+                // following decl/doc-comment.
+                let is_attached_marker = anchor_comments[slot].len() == 1
+                    && matches!(
+                        &anchor_comments[slot][0].value,
+                        Comment::Block(text) if text.trim().is_empty()
+                            || text.trim().chars().all(|c| c == '-')
+                    );
                 if self.is_pretty() {
                     if is_section {
                         if i > 0 {
@@ -410,6 +420,19 @@ impl Printer {
                             self.newline();
                         } else {
                             // After module header/doc: 1 blank line.
+                            self.newline();
+                        }
+                    } else if is_attached_marker {
+                        // Empty block comment marker: 2 blank lines before
+                        // (normal decl separation), matching elm-format.
+                        if i > 0 {
+                            self.newline();
+                            self.newline();
+                            self.newline();
+                        } else if num_imports > 0 {
+                            self.newline();
+                            self.newline();
+                        } else {
                             self.newline();
                         }
                     } else {
@@ -449,10 +472,14 @@ impl Printer {
                     self.write_comment(&c.value);
                     self.newline();
                 }
-                // elm-format puts 2 blank lines after the leading comment
-                // (same spacing as between declarations).
-                self.newline();
-                self.newline();
+                if self.is_pretty() && is_attached_marker {
+                    // Marker comment attaches directly to the following decl.
+                } else {
+                    // elm-format puts 2 blank lines after a leading comment
+                    // (same spacing as between declarations).
+                    self.newline();
+                    self.newline();
+                }
             } else if infix_group {
                 // No extra blank lines between consecutive infix declarations.
                 self.newline();
