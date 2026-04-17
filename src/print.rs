@@ -2269,10 +2269,18 @@ fn normalize_doc_comment(text: &str) -> String {
     // Rule 8: If doc starts with `\n` followed by non-empty content (no
     // intervening blank line), collapse the leading newline to a space.
     // elm-format: `{-|\nText... -}` → `{-| Text...\n-}`
+    // Exception: if the first content line is a 4-space-indented code block,
+    // leave the newline in place (and insert a blank line before the code
+    // block, matching elm-format's behavior).
     let text = if text.starts_with('\n') && !text.starts_with("\n\n") {
         let rest = &text[1..];
         if !rest.is_empty() && !rest.starts_with('\n') && !rest.trim().is_empty() {
-            std::borrow::Cow::Owned(format!(" {}", rest))
+            if rest.starts_with("    ") {
+                // Keep as a code block: `{-|\n\n    code...`
+                std::borrow::Cow::Owned(format!("\n\n{}", rest))
+            } else {
+                std::borrow::Cow::Owned(format!(" {}", rest))
+            }
         } else {
             std::borrow::Cow::Borrowed(text)
         }
@@ -3241,6 +3249,7 @@ fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
     let mut count_4_aligned = 0usize;
     let mut count_non_4_aligned = 0usize;
     let mut has_compact_syntax = false;
+    let mut has_single_line_decl = false;
     for &line in block_lines {
         if line.trim().is_empty() {
             continue;
@@ -3276,9 +3285,80 @@ fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
                 has_compact_syntax = true;
             }
         }
+        // Single-line value declaration at the block base-indent (4 spaces):
+        // `name = expr` fits on one line. elm-format always expands these
+        // to two lines (`name =\n    expr`), so flag for reformat.
+        if leading == 4 && is_single_line_value_decl(trimmed) {
+            has_single_line_decl = true;
+        }
     }
     let has_indent_issues = count_non_4_aligned > 0 && count_non_4_aligned >= count_4_aligned;
-    has_indent_issues || has_compact_syntax
+    has_indent_issues || has_compact_syntax || has_single_line_decl
+}
+
+/// Detect `name = expr` on a single line, where expr is non-empty and the
+/// `=` is not part of `==`, `/=`, `<=`, `>=`. This is the shape elm-format
+/// always expands into two lines inside doc-comment code blocks.
+fn is_single_line_value_decl(trimmed: &str) -> bool {
+    // Must start with a lowercase identifier character.
+    let first = match trimmed.chars().next() {
+        Some(c) => c,
+        None => return false,
+    };
+    if !(first.is_ascii_lowercase() || first == '_') {
+        return false;
+    }
+    // Reject keyword-led lines: these are handled by the parser/printer
+    // directly and don't fit the `name = expr` value-decl shape.
+    let first_word_end = trimmed
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .unwrap_or(trimmed.len());
+    let first_word = &trimmed[..first_word_end];
+    match first_word {
+        "type" | "port" | "module" | "import" | "let" | "in" | "if" | "then"
+        | "else" | "case" | "of" | "where" | "alias" | "exposing" | "as"
+        | "effect" | "infix" => return false,
+        _ => {}
+    }
+    // Find ` = ` that isn't part of `== `, `/= `, etc.
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b' ' && bytes[i + 1] == b'=' && bytes[i + 2] == b' ' {
+            // Reject `== `, `/= `, `<= `, `>= ` (char before the `=` is an op-char).
+            if i > 0 {
+                let prev = bytes[i - 1];
+                if prev == b'=' || prev == b'/' || prev == b'<' || prev == b'>'
+                    || prev == b'!' || prev == b':'
+                {
+                    i += 1;
+                    continue;
+                }
+            }
+            // Reject `= =` (next char after `= ` is `=`).
+            if i + 3 < bytes.len() && bytes[i + 3] == b'=' {
+                i += 1;
+                continue;
+            }
+            // Left side must be an identifier (plus optional argument pattern).
+            let left = trimmed[..i].trim();
+            if left.is_empty() {
+                return false;
+            }
+            let left_first = left.chars().next().unwrap();
+            if !(left_first.is_ascii_lowercase() || left_first == '_') {
+                return false;
+            }
+            // Right side must be non-empty.
+            let right = trimmed[i + 3..].trim();
+            if right.is_empty() {
+                return false;
+            }
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Try to reformat a code block (lines starting with 4+ spaces) as Elm code.
