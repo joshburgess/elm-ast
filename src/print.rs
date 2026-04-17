@@ -558,6 +558,7 @@ impl Printer {
             let normalized = normalize_markdown_lists(&normalized);
             let normalized = normalize_fenced_code_blocks(&normalized);
             let normalized = normalize_code_block_indent(&normalized);
+            let normalized = ensure_blank_before_code_block_with_trailing_comment(&normalized);
             let normalized = normalize_docs_lines(&normalized);
             let normalized = strip_paragraph_leading_whitespace(&normalized);
             let normalized = collapse_prose_internal_spaces(&normalized);
@@ -2991,6 +2992,222 @@ fn collapse_prose_internal_spaces(text: &str) -> String {
         }
     }
     result
+}
+
+/// Return true if a code-block line (already trim-started) looks like an
+/// Elm top-level declaration: a type/alias declaration, an `infix` line,
+/// a port, a type-annotation `name : ...`, or a value binding `name arg = ...`.
+fn looks_like_code_block_decl(line: &str) -> bool {
+    if line.starts_with("type ")
+        || line.starts_with("type alias ")
+        || line.starts_with("port ")
+        || line.starts_with("infix ")
+    {
+        return true;
+    }
+    // `name : ...` — first token is a lowercase identifier and the rest
+    // of the line starts with ` : `.
+    let mut chars = line.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
+    if !first.is_ascii_lowercase() && first != '_' {
+        return false;
+    }
+    let mut idx = first.len_utf8();
+    while idx < line.len() {
+        let c = line.as_bytes()[idx] as char;
+        if c.is_ascii_alphanumeric() || c == '_' || c == '\'' {
+            idx += 1;
+        } else {
+            break;
+        }
+    }
+    let rest = &line[idx..];
+    // `name :` — type annotation.
+    if rest.starts_with(" : ") || rest == " :" {
+        return true;
+    }
+    // `name ... = ...` — value binding, but only if the `=` sits at the
+    // top level (not inside parens, brackets, braces, or a record literal).
+    let bytes = rest.as_bytes();
+    let mut depth_round: i32 = 0;
+    let mut depth_square: i32 = 0;
+    let mut depth_curly: i32 = 0;
+    let mut in_string = false;
+    let mut in_char = false;
+    let mut j = 0;
+    while j < bytes.len() {
+        let b = bytes[j];
+        if in_string {
+            if b == b'\\' && j + 1 < bytes.len() {
+                j += 2;
+                continue;
+            }
+            if b == b'"' {
+                in_string = false;
+            }
+            j += 1;
+            continue;
+        }
+        if in_char {
+            if b == b'\\' && j + 1 < bytes.len() {
+                j += 2;
+                continue;
+            }
+            if b == b'\'' {
+                in_char = false;
+            }
+            j += 1;
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'\'' => in_char = true,
+            b'(' => depth_round += 1,
+            b')' => depth_round -= 1,
+            b'[' => depth_square += 1,
+            b']' => depth_square -= 1,
+            b'{' => depth_curly += 1,
+            b'}' => depth_curly -= 1,
+            b'=' if depth_round == 0 && depth_square == 0 && depth_curly == 0 => {
+                let prev = if j > 0 { bytes[j - 1] as char } else { ' ' };
+                let next = if j + 1 < bytes.len() { bytes[j + 1] as char } else { ' ' };
+                // Exclude `==`, `/=`, `>=`, `<=`.
+                if prev != '=' && prev != '/' && prev != '>' && prev != '<'
+                    && next != '='
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    false
+}
+
+/// Insert an extra blank line before an indented code block when that block
+/// ends with a `-- line comment` whose only trailing lines are blanks.
+///
+/// elm-format's Markdown renderer treats a code block that trails in a
+/// `-- comment` line specially: it separates the block from the preceding
+/// paragraph by two blank lines instead of one. This mirrors that spacing
+/// so `pretty_print ∘ elm-format` is a no-op on such docs.
+fn ensure_blank_before_code_block_with_trailing_comment(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+
+    // Scan for code blocks and mark those that both:
+    //   (a) end with a trailing `-- comment` line, and
+    //   (b) contain at least one declaration-like line
+    //       (`type ...`, `foo : Type`, or `foo arg = ...`).
+    // elm-format's Cheapskate-derived markdown renderer emits two blank
+    // lines between the preceding paragraph and such blocks.
+    let mut block_needs_extra_blank: Vec<bool> = vec![false; lines.len()];
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let starts_code = line.starts_with("    ")
+            && !line.trim().is_empty()
+            && (i == 0 || lines[i - 1].trim().is_empty());
+        if !starts_code {
+            i += 1;
+            continue;
+        }
+        let block_start = i;
+        let mut block_end = i;
+        while block_end + 1 < lines.len() {
+            let next = lines[block_end + 1];
+            if next.trim().is_empty() {
+                block_end += 1;
+                continue;
+            }
+            if next.starts_with("    ") {
+                block_end += 1;
+                continue;
+            }
+            break;
+        }
+        // Walk back over trailing blank lines.
+        let mut last_non_blank = block_end;
+        while last_non_blank > block_start && lines[last_non_blank].trim().is_empty() {
+            last_non_blank -= 1;
+        }
+        // Only count as a trailing comment if it sits at the block's base
+        // indent (4 spaces), not at a deeper continuation indent like 8
+        // spaces — at that depth, `--` is a comment attached to a preceding
+        // expression, not a standalone trailing block line.
+        let last_line = lines[last_non_blank];
+        let last_leading = last_line.len() - last_line.trim_start().len();
+        let ends_with_comment =
+            last_leading == 4 && last_line.trim_start().starts_with("--");
+        let starts_with_import =
+            lines[block_start].trim_start().starts_with("import ");
+
+        // Check that every 4-space-indented non-blank, non-comment line in
+        // the block looks like a declaration (not a free-standing expression
+        // call). elm-format only inserts the extra leading blank when the
+        // block is structurally a sequence of declarations capped by a
+        // comment — an expression at the base indent suppresses that spacing.
+        let mut all_decls = true;
+        let mut saw_any_decl = false;
+        if ends_with_comment && !starts_with_import {
+            for idx in block_start..=last_non_blank {
+                let line = lines[idx];
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let leading = line.len() - line.trim_start().len();
+                if leading != 4 {
+                    continue;
+                }
+                let t = line.trim_start();
+                if t.starts_with("--") {
+                    continue;
+                }
+                if looks_like_code_block_decl(t) {
+                    saw_any_decl = true;
+                } else {
+                    all_decls = false;
+                    break;
+                }
+            }
+        }
+        if ends_with_comment && saw_any_decl && all_decls && !starts_with_import {
+            block_needs_extra_blank[block_start] = true;
+        }
+        i = block_end + 1;
+    }
+
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 8);
+    for (i, line) in lines.iter().enumerate() {
+        if block_needs_extra_blank[i] && i >= 2 {
+            let prev = lines[i - 1];
+            let prev2 = lines[i - 2];
+            let prev_blank = prev.trim().is_empty();
+            let prev2_prose = !prev2.trim().is_empty()
+                && !prev2.starts_with(' ')
+                && !prev2.starts_with('\t')
+                && !prev2.starts_with('#')
+                && !prev2.starts_with("- ")
+                && !prev2.starts_with("* ")
+                && !prev2.starts_with("\\* ")
+                && !prev2.starts_with("@docs ")
+                && !prev2.starts_with("```");
+            if prev_blank && prev2_prose {
+                let n = out.len();
+                let already_double = n >= 2
+                    && out[n - 1].trim().is_empty()
+                    && out[n - 2].trim().is_empty();
+                if !already_double {
+                    out.push(String::new());
+                }
+            }
+        }
+        out.push((*line).to_string());
+    }
+    out.join("\n")
 }
 
 /// Strip trailing whitespace from each line in a doc comment.
