@@ -2424,12 +2424,16 @@ fn normalize_doc_comment(text: &str) -> String {
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
-        let trimmed = line.trim();
+        // Only un-indented lines are markdown headings. An indented `# ...`
+        // (4+ leading spaces) is inside a code block, which in turn may be
+        // inside a string literal where `#` is just content.
+        let is_heading = (line.starts_with("# ") || line.starts_with("## "))
+            && !line.starts_with("    ");
 
         // Rule 4: Double blank line before any `# Heading` or `## Heading` etc.
         // If we see a markdown heading and the preceding output doesn't already
         // have a double blank line, add one.
-        if trimmed.starts_with("# ") || trimmed.starts_with("## ") {
+        if is_heading {
             // Check if preceding content in result ends with \n\n\n (double blank)
             if !result.is_empty() && !result.ends_with("\n\n\n") {
                 // We need at least one more newline. The line separator from the
@@ -2449,7 +2453,7 @@ fn normalize_doc_comment(text: &str) -> String {
             result.push('\n');
 
             // Rule 3: Blank line after any heading before `@docs` or content
-            if trimmed.starts_with("# ") || trimmed.starts_with("## ") {
+            if is_heading {
                 // Check if next non-empty line is `@docs` or other content
                 // and there isn't already a blank line
                 if i + 1 < lines.len() && !lines[i + 1].trim().is_empty() {
