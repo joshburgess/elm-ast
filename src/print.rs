@@ -2930,12 +2930,14 @@ fn normalize_code_block_indent(text: &str) -> String {
 
 /// Check whether a code block needs reformatting.
 ///
-/// Returns true if the block contains lines with non-4-aligned extra
-/// indentation (beyond the 4-space code block prefix), indicating 2-space
-/// indentation that elm-format would normalize to 4-space.
+/// Returns true if the block contains:
+/// - lines with non-4-aligned indentation (2-space indent), OR
+/// - compact list/tuple syntax that elm-format would space out
+///   (e.g., `[1,2]` -> `[ 1, 2 ]`, `(0,"a")` -> `( 0, "a" )`)
 fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
     let mut count_4_aligned = 0usize;
     let mut count_non_4_aligned = 0usize;
+    let mut has_compact_syntax = false;
     for &line in block_lines {
         if line.trim().is_empty() {
             continue;
@@ -2948,8 +2950,32 @@ fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
                 count_non_4_aligned += 1;
             }
         }
+        // Check for compact list syntax [x,y] or tuple syntax (x,y) that
+        // elm-format would normalize to [ x, y ] or ( x, y ).
+        let trimmed = line.trim();
+        if trimmed.contains("[") && trimmed.contains(",") && trimmed.contains("]") {
+            // Look for `[x,` or `[x]` without spaces after [ or before ]
+            if trimmed.contains("[\"") || trimmed.contains("[(")
+                || trimmed.contains("[0") || trimmed.contains("[1")
+                || trimmed.contains("[2") || trimmed.contains("[3")
+                || trimmed.contains("[4") || trimmed.contains("[5")
+                || trimmed.contains("[6") || trimmed.contains("[7")
+                || trimmed.contains("[8") || trimmed.contains("[9")
+            {
+                has_compact_syntax = true;
+            }
+        }
+        if trimmed.contains("(") && trimmed.contains(",") && trimmed.contains(")") {
+            if trimmed.contains("(0") || trimmed.contains("(1")
+                || trimmed.contains("(2") || trimmed.contains("(3")
+                || trimmed.contains("(\"")
+            {
+                has_compact_syntax = true;
+            }
+        }
     }
-    count_non_4_aligned > 0 && count_non_4_aligned >= count_4_aligned
+    let has_indent_issues = count_non_4_aligned > 0 && count_non_4_aligned >= count_4_aligned;
+    has_indent_issues || has_compact_syntax
 }
 
 /// Try to reformat a code block (lines starting with 4+ spaces) as Elm code.
