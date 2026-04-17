@@ -3059,6 +3059,14 @@ fn normalize_markdown_lists(text: &str) -> String {
             result.push_str(line);
             // "  - " = 4 chars of prefix before content
             list_indent = Some(4);
+        } else if line.starts_with("  - ") {
+            // Already-indented unordered list item (common inside doc
+            // comments where the body is rendered with no extra indent
+            // but authors still visually indent bullets by 2 spaces).
+            // Preserve the indent; continuation aligns 2 spaces past the
+            // `- ` marker.
+            result.push_str(line);
+            list_indent = Some(4);
         } else if let Some(rest) = strip_ordered_list_prefix(line) {
             // Ordered list item: strip leading spaces, double-space after period.
             // `  1. text` or `1. text` -> `1.  text`
