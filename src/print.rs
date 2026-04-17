@@ -3053,39 +3053,72 @@ fn transform_assertion_paragraphs(block_lines: &[&str]) -> String {
             run_end += 1;
         }
 
-        // Check if every line in this run is a top-level assertion line:
-        // - starts at the same leading indent
-        // - no continuation (leading indent beyond the first line)
-        // - contains ` == ` in its trimmed form
+        // Check if every line in this run is either a top-level assertion
+        // (`expr == value` / `expr -- comment`) or a line-comment (`-- ...`),
+        // all at the same leading indent, and the run ends in an assertion.
+        // Comments stay attached to the following assertion; assertions are
+        // separated from one another by blank lines.
         let first_indent = block_lines[run_start].len() - block_lines[run_start].trim_start().len();
-        let mut is_assertion_run = (run_end - run_start) >= 1;
+        let mut all_valid = true;
+        let mut assertion_count = 0usize;
         for k in run_start..=run_end {
             let l = block_lines[k];
             let indent = l.len() - l.trim_start().len();
             if indent != first_indent {
-                is_assertion_run = false;
+                all_valid = false;
                 break;
             }
-            if !looks_like_assertion(l.trim()) {
-                is_assertion_run = false;
+            let trimmed = l.trim();
+            if trimmed.starts_with("--") {
+                // comment line — ok in between assertions
+            } else if looks_like_assertion(trimmed) {
+                assertion_count += 1;
+            } else {
+                all_valid = false;
                 break;
             }
         }
+        let last_is_assertion = {
+            let trimmed = block_lines[run_end].trim();
+            !trimmed.starts_with("--") && looks_like_assertion(trimmed)
+        };
+        let is_assertion_run = all_valid && assertion_count >= 2 && last_is_assertion;
 
         if is_assertion_run {
-            for (k, idx) in (run_start..=run_end).enumerate() {
-                let l = block_lines[idx];
-                let indent_str = &l[..first_indent];
-                let content = l[first_indent..].to_string();
-                let normalized = collapse_spaces_outside_strings(&content);
-                if k > 0 {
-                    out.push_str("\n\n");
+            // Split the run into "units": a unit is zero or more consecutive
+            // comment lines followed by one assertion line. Units are
+            // separated by blank lines; within a unit, lines are contiguous.
+            let mut unit_start = run_start;
+            let mut unit_idx: usize = 0;
+            let mut k = run_start;
+            while k <= run_end {
+                let trimmed = block_lines[k].trim();
+                let is_comment = trimmed.starts_with("--");
+                if !is_comment {
+                    if unit_idx == 0 && i > 0 {
+                        out.push('\n');
+                    } else if unit_idx > 0 {
+                        out.push_str("\n\n");
+                    }
+                    for (j, idx) in (unit_start..=k).enumerate() {
+                        if j > 0 {
+                            out.push('\n');
+                        }
+                        let l = block_lines[idx];
+                        if idx == k {
+                            let indent_str = &l[..first_indent];
+                            let content = &l[first_indent..];
+                            let normalized = collapse_spaces_outside_strings(content);
+                            out.push_str(indent_str);
+                            out.push_str(&normalized);
+                        } else {
+                            out.push_str(l);
+                        }
+                    }
+                    unit_idx += 1;
+                    unit_start = k + 1;
                 }
-                if i > 0 && k == 0 {
-                    out.push('\n');
-                }
-                out.push_str(indent_str);
-                out.push_str(&normalized);
+                k += 1;
             }
         } else {
             for (k, idx) in (run_start..=run_end).enumerate() {
