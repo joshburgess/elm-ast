@@ -527,6 +527,7 @@ impl Printer {
             let normalized = normalize_code_block_indent(&normalized);
             let normalized = normalize_docs_lines(&normalized);
             let normalized = strip_paragraph_leading_whitespace(&normalized);
+            let normalized = collapse_prose_internal_spaces(&normalized);
             let normalized = strip_trailing_whitespace_in_doc(&normalized);
             self.write("{-|");
             self.write(&normalized);
@@ -2841,6 +2842,92 @@ fn strip_paragraph_leading_whitespace(text: &str) -> String {
             result.push_str(&line[1..]);
         } else {
             result.push_str(line);
+        }
+    }
+    result
+}
+
+/// Collapse runs of 2+ internal spaces to a single space in prose lines.
+///
+/// elm-format's Cheapskate markdown renderer normalizes internal whitespace
+/// in prose paragraphs. This does NOT apply inside code blocks (4+ space
+/// indent) or inside inline-code spans (backticks).
+fn collapse_prose_internal_spaces(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut result = String::with_capacity(text.len());
+    let mut in_code_block = false;
+
+    for (i, &line) in lines.iter().enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+
+        // Track code block state (4+ space indent after blank line).
+        if line.starts_with("    ") {
+            if i == 0 || lines[i - 1].trim().is_empty() {
+                in_code_block = true;
+            }
+        } else if !line.trim().is_empty() {
+            in_code_block = false;
+        }
+
+        if in_code_block || line.trim().is_empty() {
+            result.push_str(line);
+            continue;
+        }
+
+        // Skip blockquote lines entirely: their internal whitespace may be
+        // significant (continuation alignment, nested code blocks, etc.).
+        if line.trim_start().starts_with('>') {
+            result.push_str(line);
+            continue;
+        }
+
+        // Skip ordered list items: elm-format uses double-space after the
+        // period (`1.  text`), which our collapse would destroy.
+        if strip_ordered_list_prefix(line.trim_start()).is_some() {
+            result.push_str(line);
+            continue;
+        }
+
+        // Preserve leading whitespace.
+        let leading_len = line.len() - line.trim_start().len();
+        result.push_str(&line[..leading_len]);
+
+        // Walk the rest, collapsing 2+ spaces to 1, but preserving spaces
+        // inside inline-code (`...`) spans.
+        let rest = &line[leading_len..];
+        let bytes = rest.as_bytes();
+        let mut j = 0;
+        let mut in_code_span = false;
+        while j < bytes.len() {
+            let b = bytes[j];
+            if b == b'`' {
+                in_code_span = !in_code_span;
+                result.push('`');
+                j += 1;
+                continue;
+            }
+            if !in_code_span && b == b' ' {
+                result.push(' ');
+                j += 1;
+                while j < bytes.len() && bytes[j] == b' ' {
+                    j += 1;
+                }
+                continue;
+            }
+            // Multi-byte UTF-8 safe: find next char boundary.
+            if b < 128 {
+                result.push(b as char);
+                j += 1;
+            } else {
+                let ch_start = j;
+                j += 1;
+                while j < bytes.len() && (bytes[j] & 0b1100_0000) == 0b1000_0000 {
+                    j += 1;
+                }
+                result.push_str(&rest[ch_start..j]);
+            }
         }
     }
     result
