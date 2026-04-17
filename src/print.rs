@@ -273,7 +273,8 @@ impl Printer {
         if !module.imports.is_empty() {
             self.newline();
             if self.is_pretty() {
-                // ElmFormat mode: sort imports alphabetically by module name.
+                // ElmFormat mode: sort imports alphabetically by module name,
+                // then merge duplicates (same module name).
                 let mut sorted_indices: Vec<usize> =
                     (0..module.imports.len()).collect();
                 sorted_indices.sort_by(|&a, &b| {
@@ -283,15 +284,50 @@ impl Printer {
                         .value
                         .cmp(&module.imports[b].value.module_name.value)
                 });
-                for &idx in &sorted_indices {
-                    if !anchor_comments[idx].is_empty() {
-                        for c in &anchor_comments[idx] {
-                            self.write_comment(&c.value);
-                            self.newline();
+
+                // Group consecutive imports with the same module name.
+                let mut i = 0;
+                while i < sorted_indices.len() {
+                    let first_idx = sorted_indices[i];
+                    let first = &module.imports[first_idx].value;
+                    let mod_name = &first.module_name.value;
+
+                    // Collect all indices for this module name.
+                    let mut group_end = i + 1;
+                    while group_end < sorted_indices.len()
+                        && module.imports[sorted_indices[group_end]]
+                            .value
+                            .module_name
+                            .value
+                            == *mod_name
+                    {
+                        group_end += 1;
+                    }
+
+                    // Emit leading comments for all imports in the group.
+                    for &idx in &sorted_indices[i..group_end] {
+                        if !anchor_comments[idx].is_empty() {
+                            for c in &anchor_comments[idx] {
+                                self.write_comment(&c.value);
+                                self.newline();
+                            }
                         }
                     }
-                    self.write_import(&module.imports[idx].value);
+
+                    if group_end - i == 1 {
+                        // Single import — write normally.
+                        self.write_import(first);
+                    } else {
+                        // Multiple imports for the same module — merge them.
+                        self.write_merged_imports(
+                            &sorted_indices[i..group_end]
+                                .iter()
+                                .map(|&idx| &module.imports[idx].value)
+                                .collect::<Vec<_>>(),
+                        );
+                    }
                     self.newline();
+                    i = group_end;
                 }
             } else {
                 for (i, imp) in module.imports.iter().enumerate() {
@@ -668,6 +704,70 @@ impl Printer {
                 self.write_import_exposing_sorted(&exposing.value);
             } else {
                 self.write_exposing(&exposing.value, false);
+            }
+        }
+    }
+
+    /// Merge multiple imports of the same module and write as a single import.
+    /// elm-format merges duplicate imports by combining aliases and exposing lists.
+    fn write_merged_imports(&mut self, imports: &[&Import]) {
+        assert!(!imports.is_empty());
+        let first = imports[0];
+
+        self.write("import ");
+        self.write_module_name(&first.module_name.value);
+
+        // Merge alias: take the first non-None alias found (there should be
+        // at most one alias across duplicates). Strip redundant aliases.
+        let merged_alias = imports.iter().find_map(|imp| {
+            imp.alias.as_ref().and_then(|a| {
+                if a.value == imp.module_name.value {
+                    None // redundant alias
+                } else {
+                    Some(&a.value)
+                }
+            })
+        });
+        if let Some(alias) = merged_alias {
+            self.write(" as ");
+            self.write_module_name(alias);
+        }
+
+        // Merge exposing lists: if any import has `exposing (..)`, use that.
+        // Otherwise, combine all explicit exposing items.
+        let has_expose_all = imports.iter().any(|imp| {
+            matches!(&imp.exposing, Some(e) if matches!(e.value, Exposing::All(_)))
+        });
+        if has_expose_all {
+            self.write(" exposing (..)");
+        } else {
+            // Collect all exposed items from all imports.
+            let mut all_items: Vec<&ExposedItem> = Vec::new();
+            for imp in imports {
+                if let Some(exposing) = &imp.exposing {
+                    if let Exposing::Explicit(items) = &exposing.value {
+                        for item in items {
+                            all_items.push(&item.value);
+                        }
+                    }
+                }
+            }
+            if !all_items.is_empty() {
+                // Deduplicate and sort.
+                all_items.sort_by(|a, b| {
+                    exposed_item_sort_key(a).cmp(&exposed_item_sort_key(b))
+                });
+                all_items.dedup_by(|a, b| {
+                    exposed_item_sort_key(a) == exposed_item_sort_key(b)
+                });
+                self.write(" exposing (");
+                for (i, item) in all_items.iter().enumerate() {
+                    if i > 0 {
+                        self.write(", ");
+                    }
+                    self.write_exposed_item(item);
+                }
+                self.write_char(')');
             }
         }
     }
