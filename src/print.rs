@@ -2103,7 +2103,7 @@ impl Printer {
             '\\' => self.write("\\\\"),
             '\'' => self.write("\\'"),
             '"' => self.write("\\\""),
-            c if c.is_control() => {
+            c if should_unicode_escape(c) => {
                 // \r and other control chars use \u{XXXX} form (Elm has no \r escape)
                 self.write(&format!("\\u{{{:04X}}}", c as u32));
             }
@@ -2120,6 +2120,26 @@ impl Printer {
             }
         }
     }
+}
+
+/// Whether a char should be emitted as a `\u{XXXX}` escape in string/char
+/// literals. Matches elm-format: escape control chars, non-ASCII whitespace
+/// (NBSP, en quad, etc.), invisible format chars, and BOM.
+fn should_unicode_escape(c: char) -> bool {
+    if c.is_control() {
+        return true;
+    }
+    let cp = c as u32;
+    matches!(
+        cp,
+        0x00A0      // NBSP
+        | 0x1680    // OGHAM SPACE MARK
+        | 0x2000..=0x200F   // various spaces + zero-width + directional
+        | 0x2028..=0x202F   // line/paragraph sep, bidi, narrow nbsp
+        | 0x205F..=0x206F   // medium math space, word joiner, invisible format
+        | 0x3000    // IDEOGRAPHIC SPACE
+        | 0xFEFF    // BOM / zero-width non-breaking space
+    )
 }
 
 /// Reindent a multiline block comment's content. `brace_col` is the column
