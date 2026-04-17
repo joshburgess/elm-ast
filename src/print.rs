@@ -2124,7 +2124,8 @@ impl Printer {
 
 /// Whether a char should be emitted as a `\u{XXXX}` escape in string/char
 /// literals. Matches elm-format: escape control chars, non-ASCII whitespace
-/// (NBSP, en quad, etc.), invisible format chars, and BOM.
+/// (NBSP, en quad, etc.), invisible format chars, BOM, and unassigned
+/// codepoints in ranges Haskell's `Char.isPrint` rejects.
 fn should_unicode_escape(c: char) -> bool {
     if c.is_control() {
         return true;
@@ -2137,6 +2138,7 @@ fn should_unicode_escape(c: char) -> bool {
         | 0x2000..=0x200F   // various spaces + zero-width + directional
         | 0x2028..=0x202F   // line/paragraph sep, bidi, narrow nbsp
         | 0x205F..=0x206F   // medium math space, word joiner, invisible format
+        | 0x2E5E..=0x2E7F   // unassigned tail of Supplemental Punctuation block
         | 0x3000    // IDEOGRAPHIC SPACE
         | 0xFEFF    // BOM / zero-width non-breaking space
     )
