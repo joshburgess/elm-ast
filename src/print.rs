@@ -249,10 +249,30 @@ impl Printer {
             anchor_offsets.push(decl.span.start.offset);
         }
 
+        // Build anchor end-offsets for checking whether a comment falls
+        // inside a declaration/import (in which case it's an internal
+        // comment that shouldn't be emitted at the module level).
+        let mut anchor_ends: Vec<usize> = Vec::with_capacity(total_anchors);
+        for imp in &module.imports {
+            anchor_ends.push(imp.span.end.offset);
+        }
+        for decl in &module.declarations {
+            anchor_ends.push(decl.span.end.offset);
+        }
+
         // Assign comments to slots: one per anchor + one trailing slot.
+        // Skip comments that fall inside any anchor's span — those are
+        // internal comments that belong to the AST node (e.g. block
+        // comments inside a record type) and can't be reliably placed
+        // at module scope.
         let mut anchor_comments: Vec<Vec<&Spanned<Comment>>> = vec![vec![]; total_anchors + 1];
-        for c in &comments {
+        'outer: for c in &comments {
             let offset = c.span.start.offset;
+            for (a_start, a_end) in anchor_offsets.iter().zip(anchor_ends.iter()) {
+                if *a_start <= offset && offset < *a_end {
+                    continue 'outer;
+                }
+            }
             let slot = anchor_offsets
                 .iter()
                 .position(|&a| a > offset)
@@ -305,13 +325,20 @@ impl Printer {
                     }
 
                     // Emit leading comments for all imports in the group.
+                    // elm-format separates leading orphan comments from the
+                    // import line with a blank line.
+                    let mut had_comments = false;
                     for &idx in &sorted_indices[i..group_end] {
                         if !anchor_comments[idx].is_empty() {
+                            had_comments = true;
                             for c in &anchor_comments[idx] {
                                 self.write_comment(&c.value);
                                 self.newline();
                             }
                         }
+                    }
+                    if had_comments {
+                        self.newline();
                     }
 
                     if group_end - i == 1 {
@@ -357,34 +384,80 @@ impl Printer {
                 );
             let infix_group = self.is_pretty() && is_infix && prev_is_infix;
 
-            // Blank line separator before each declaration.
-            self.newline();
-
             // Emit leading comments for this declaration.
             if !anchor_comments[slot].is_empty() {
-                self.newline();
-                // elm-format treats section comments as standalone items:
-                // 3 blank lines before (for i > 0), 2 blank lines after.
-                // For the first declaration (i == 0), 2 blank lines before.
+                // elm-format treats a leading line comment as a "section
+                // header" with 3 blank lines before (between decls / after
+                // imports) and 2 blank lines after. Block comments preserve
+                // the number of blank lines from the source.
+                let is_section = matches!(
+                    &anchor_comments[slot][0].value,
+                    Comment::Line(_)
+                );
                 if self.is_pretty() {
-                    if i > 0 {
-                        self.newline();
-                        self.newline();
+                    if is_section {
+                        if i > 0 {
+                            // 4 newlines from end of prev decl = 3 blank lines.
+                            self.newline();
+                            self.newline();
+                            self.newline();
+                            self.newline();
+                        } else if num_imports > 0 {
+                            // Cursor already on new line after last import's
+                            // trailing newline. 3 newlines = 3 blank lines.
+                            self.newline();
+                            self.newline();
+                            self.newline();
+                        } else {
+                            // After module header/doc: 1 blank line.
+                            self.newline();
+                        }
                     } else {
-                        self.newline();
+                        // Block comment: preserve source blank-line count,
+                        // clamped to elm-format's minimums.
+                        let first_comment_line =
+                            anchor_comments[slot][0].span.start.line;
+                        let prev_end_line: u32 = if i > 0 {
+                            module.declarations[i - 1].span.end.line
+                        } else if num_imports > 0 {
+                            module.imports[num_imports - 1].span.end.line
+                        } else if let Some(doc) = &module.module_documentation {
+                            doc.span.end.line
+                        } else {
+                            module.header.span.end.line
+                        };
+                        let source_blanks = first_comment_line
+                            .saturating_sub(prev_end_line + 1);
+                        let min_blanks = if i == 0 && num_imports == 0 {
+                            1u32
+                        } else if i > 0 {
+                            3u32
+                        } else {
+                            2u32
+                        };
+                        let blanks = source_blanks.max(min_blanks);
+                        let newlines = if i > 0 { blanks + 1 } else { blanks };
+                        for _ in 0..newlines {
+                            self.newline();
+                        }
                     }
+                } else {
+                    self.newline();
+                    self.newline();
                 }
                 for c in &anchor_comments[slot] {
                     self.write_comment(&c.value);
                     self.newline();
                 }
-                // elm-format puts 2 blank lines after section comments too
+                // elm-format puts 2 blank lines after the leading comment
                 // (same spacing as between declarations).
                 self.newline();
                 self.newline();
             } else if infix_group {
                 // No extra blank lines between consecutive infix declarations.
+                self.newline();
             } else {
+                self.newline();
                 self.newline();
                 // elm-format uses two blank lines between top-level declarations.
                 // The first declaration already has the right spacing from the
@@ -1998,7 +2071,7 @@ impl Printer {
         }
         self.write("let");
         self.indent();
-        for (i, decl) in declarations.iter().enumerate() {
+        for decl in declarations {
             self.newline_indent();
             self.write_leading_comments(&decl.comments);
             self.write_let_declaration(&decl.value);
@@ -3246,7 +3319,6 @@ fn collapse_spaces_outside_strings(s: &str) -> String {
 /// - compact list/tuple syntax that elm-format would space out
 ///   (e.g., `[1,2]` -> `[ 1, 2 ]`, `(0,"a")` -> `( 0, "a" )`)
 fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
-    let mut count_4_aligned = 0usize;
     let mut count_non_4_aligned = 0usize;
     let mut has_compact_syntax = false;
     let mut has_single_line_decl = false;
@@ -3255,12 +3327,8 @@ fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
             continue;
         }
         let leading = line.len() - line.trim_start().len();
-        if leading > 4 {
-            if (leading - 4) % 4 == 0 {
-                count_4_aligned += 1;
-            } else {
-                count_non_4_aligned += 1;
-            }
+        if leading > 4 && (leading - 4) % 4 != 0 {
+            count_non_4_aligned += 1;
         }
         // Check for compact list syntax [x,y] or tuple syntax (x,y) that
         // elm-format would normalize to [ x, y ] or ( x, y ).
@@ -3292,7 +3360,7 @@ fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
             has_single_line_decl = true;
         }
     }
-    let has_indent_issues = count_non_4_aligned > 0 && count_non_4_aligned >= count_4_aligned;
+    let has_indent_issues = count_non_4_aligned > 0;
     has_indent_issues || has_compact_syntax || has_single_line_decl
 }
 
@@ -3515,6 +3583,26 @@ fn try_parse_and_format_module(wrapped: &str) -> Option<String> {
         }
         collapsed.push(line);
     }
+
+    // In doc-code blocks, elm-format attaches a leading line comment to the
+    // following declaration with no intervening blank line. Collapse
+    // `-- comment\n\n<decl>` to `-- comment\n<decl>`.
+    let mut attached: Vec<&str> = Vec::with_capacity(collapsed.len());
+    let mut i = 0;
+    while i < collapsed.len() {
+        attached.push(collapsed[i]);
+        if collapsed[i].trim_start().starts_with("--")
+            && i + 2 < collapsed.len()
+            && collapsed[i + 1].is_empty()
+            && !collapsed[i + 2].is_empty()
+            && !collapsed[i + 2].trim_start().starts_with("--")
+        {
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    let collapsed = attached;
 
     // Re-indent with 4 spaces.
     let mut output = String::new();
