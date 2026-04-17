@@ -1681,6 +1681,64 @@ impl Printer {
             self.write_expr(&body.value);
             self.write(" else ");
             self.write_expr(else_branch);
+        } else if self.is_pretty() {
+            // In pretty mode, use column-based indentation so that
+            // branches are always indented relative to the `if` keyword,
+            // regardless of the current indent_extra state.
+            let if_col = self.current_column();
+            let saved_indent = self.indent;
+            let saved_extra = self.indent_extra;
+            let saved_stack = self.indent_extra_stack.clone();
+            let w = self.config.indent_width;
+            // Set indent to match the `if` keyword column.
+            self.indent = if_col / w;
+            self.indent_extra = (if_col % w) as u32;
+
+            for (i, (cond, body)) in branches.iter().enumerate() {
+                if i == 0 {
+                    self.write("if ");
+                } else {
+                    self.write("else if ");
+                }
+                self.write_expr(&cond.value);
+                self.write(" then");
+                self.indent();
+                self.newline_indent();
+                self.write_expr(&body.value);
+                self.dedent();
+                self.newline();
+                self.newline_indent();
+            }
+            // Flatten nested if-else into else-if chains.
+            if let Expr::IfElse {
+                branches: nested_branches,
+                else_branch: nested_else,
+            } = else_branch
+            {
+                for (cond, body) in nested_branches {
+                    self.write("else if ");
+                    self.write_expr(&cond.value);
+                    self.write(" then");
+                    self.indent();
+                    self.newline_indent();
+                    self.write_expr(&body.value);
+                    self.dedent();
+                    self.newline();
+                    self.newline_indent();
+                }
+                self.write_if_else_tail(&nested_else.value);
+            } else {
+                self.write("else");
+                self.indent();
+                self.newline_indent();
+                self.write_expr(else_branch);
+                self.dedent();
+            }
+
+            // Restore indent state.
+            self.indent = saved_indent;
+            self.indent_extra = saved_extra;
+            self.indent_extra_stack = saved_stack;
         } else {
             for (i, (cond, body)) in branches.iter().enumerate() {
                 if i == 0 {
@@ -1697,41 +1755,11 @@ impl Printer {
                 self.newline();
                 self.newline_indent();
             }
-            // In ElmFormat mode, flatten nested if-else into else-if chains.
-            if self.is_pretty() {
-                if let Expr::IfElse {
-                    branches: nested_branches,
-                    else_branch: nested_else,
-                } = else_branch
-                {
-                    // Flatten: write `else if` for each nested branch.
-                    for (cond, body) in nested_branches {
-                        self.write("else if ");
-                        self.write_expr(&cond.value);
-                        self.write(" then");
-                        self.indent();
-                        self.newline_indent();
-                        self.write_expr(&body.value);
-                        self.dedent();
-                        self.newline();
-                        self.newline_indent();
-                    }
-                    // Handle the final else (which might itself be nested).
-                    self.write_if_else_tail(&nested_else.value);
-                } else {
-                    self.write("else");
-                    self.indent();
-                    self.newline_indent();
-                    self.write_expr(else_branch);
-                    self.dedent();
-                }
-            } else {
-                self.write("else");
-                self.indent();
-                self.newline_indent();
-                self.write_expr(else_branch);
-                self.dedent();
-            }
+            self.write("else");
+            self.indent();
+            self.newline_indent();
+            self.write_expr(else_branch);
+            self.dedent();
         }
     }
 
@@ -1764,6 +1792,38 @@ impl Printer {
     }
 
     fn write_case_expr(&mut self, subject: &Expr, branches: &[CaseBranch]) {
+        if self.is_pretty() {
+            let case_col = self.current_column();
+            let saved_indent = self.indent;
+            let saved_extra = self.indent_extra;
+            let saved_stack = self.indent_extra_stack.clone();
+            let w = self.config.indent_width;
+            self.indent = case_col / w;
+            self.indent_extra = (case_col % w) as u32;
+            self.write("case ");
+            self.write_expr(subject);
+            self.write(" of");
+            self.indent();
+            for (i, branch) in branches.iter().enumerate() {
+                if i > 0 {
+                    self.newline();
+                }
+                self.newline_indent();
+                self.write_leading_comments(&branch.pattern.comments);
+                self.write_pattern(&branch.pattern.value);
+                self.write(" ->");
+                self.indent();
+                self.newline_indent();
+                self.write_leading_comments(&branch.body.comments);
+                self.write_expr(&branch.body.value);
+                self.dedent();
+            }
+            self.dedent();
+            self.indent = saved_indent;
+            self.indent_extra = saved_extra;
+            self.indent_extra_stack = saved_stack;
+            return;
+        }
         self.write("case ");
         self.write_expr(subject);
         self.write(" of");
@@ -1789,15 +1849,40 @@ impl Printer {
     }
 
     fn write_let_expr(&mut self, declarations: &[Spanned<LetDeclaration>], body: &Expr) {
+        if self.is_pretty() {
+            let let_col = self.current_column();
+            let saved_indent = self.indent;
+            let saved_extra = self.indent_extra;
+            let saved_stack = self.indent_extra_stack.clone();
+            let w = self.config.indent_width;
+            self.indent = let_col / w;
+            self.indent_extra = (let_col % w) as u32;
+
+            self.write("let");
+            self.indent();
+            for (i, decl) in declarations.iter().enumerate() {
+                if i > 0 {
+                    self.newline();
+                }
+                self.newline_indent();
+                self.write_leading_comments(&decl.comments);
+                self.write_let_declaration(&decl.value);
+            }
+            self.dedent();
+            self.newline_indent();
+            self.write("in");
+            self.newline_indent();
+            self.write_expr(body);
+
+            self.indent = saved_indent;
+            self.indent_extra = saved_extra;
+            self.indent_extra_stack = saved_stack;
+            return;
+        }
         self.write("let");
         self.indent();
         for (i, decl) in declarations.iter().enumerate() {
-            // elm-format puts a blank line between let declarations.
-            if self.is_pretty() && i > 0 {
-                self.newline();
-            }
             self.newline_indent();
-            // Emit leading comments on this let declaration.
             self.write_leading_comments(&decl.comments);
             self.write_let_declaration(&decl.value);
         }
