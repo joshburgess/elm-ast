@@ -205,6 +205,14 @@ impl Printer {
         self.indent_extra = self.indent_extra_stack.pop().unwrap_or(0);
     }
 
+    /// Returns the column position (0-based) of the cursor on the current line.
+    fn current_column(&self) -> usize {
+        match self.buf.rfind('\n') {
+            Some(pos) => self.buf.len() - pos - 1,
+            None => self.buf.len(),
+        }
+    }
+
     fn newline_indent(&mut self) {
         self.newline();
         self.write_indent();
@@ -1403,23 +1411,47 @@ impl Printer {
                 } else if self.is_pretty() && matches!(inner.value, Expr::Negation(_)) {
                     self.write_expr_app(&inner.value);
                 } else if self.is_pretty() && self.is_multiline(&inner.value) {
-                    let saved_extra = self.indent_extra;
-                    self.write_char('(');
-                    // Block expressions inside parens need indent_extra so
-                    // that else/in/branches align 1 past the opening `(`.
-                    if matches!(
+                    let is_block = matches!(
                         inner.value,
                         Expr::IfElse { .. }
                             | Expr::CaseOf { .. }
                             | Expr::LetIn { .. }
                             | Expr::Lambda { .. }
-                    ) {
-                        self.indent_extra += 1;
+                    );
+                    if is_block {
+                        // For block expressions inside parens, set the indent
+                        // system to match the column of `(`, so that the block's
+                        // internal indent/dedent produces correct alignment.
+                        let saved_indent = self.indent;
+                        let saved_extra = self.indent_extra;
+                        let saved_stack = self.indent_extra_stack.clone();
+
+                        self.write_char('(');
+                        let col = self.current_column();
+                        let w = self.config.indent_width;
+                        self.indent = col / w;
+                        self.indent_extra = (col % w) as u32;
+
+                        self.write_expr(&inner.value);
+
+                        // Restore indent state and write `)` at `(` column.
+                        self.indent = saved_indent;
+                        self.indent_extra = saved_extra;
+                        self.indent_extra_stack = saved_stack;
+                        self.newline();
+                        // `(` was at col - 1, write spaces to align `)` there.
+                        for _ in 0..(col - 1) {
+                            self.buf.push(' ');
+                        }
+                        self.write_char(')');
+                    } else {
+                        let saved_extra = self.indent_extra;
+                        self.write_char('(');
+                        self.write_expr(&inner.value);
+                        self.indent_extra = saved_extra;
+                        self.newline_indent();
+                        self.write_char(')');
                     }
-                    self.write_expr(&inner.value);
-                    self.indent_extra = saved_extra;
-                    self.newline_indent();
-                    self.write_char(')');
                 } else {
                     self.write_char('(');
                     self.write_expr(&inner.value);
@@ -1535,12 +1567,25 @@ impl Printer {
             | Expr::LetIn { .. }
             | Expr::Lambda { .. } => {
                 if self.is_pretty() {
+                    let saved_indent = self.indent;
                     let saved_extra = self.indent_extra;
+                    let saved_stack = self.indent_extra_stack.clone();
+
                     self.write_char('(');
-                    self.indent_extra += 1;
+                    let col = self.current_column();
+                    let w = self.config.indent_width;
+                    self.indent = col / w;
+                    self.indent_extra = (col % w) as u32;
+
                     self.write_expr_inner(expr);
+
+                    self.indent = saved_indent;
                     self.indent_extra = saved_extra;
-                    self.newline_indent();
+                    self.indent_extra_stack = saved_stack;
+                    self.newline();
+                    for _ in 0..(col - 1) {
+                        self.buf.push(' ');
+                    }
                     self.write_char(')');
                 } else {
                     self.write_char('(');
