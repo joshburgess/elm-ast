@@ -2048,7 +2048,11 @@ impl Printer {
         match lit {
             Literal::Char(c) => {
                 self.write_char('\'');
-                self.write_escaped_char(*c);
+                // In single-quoted char literals, double quotes don't need escaping.
+                match c {
+                    '"' => self.write_char('"'),
+                    _ => self.write_escaped_char(*c),
+                }
                 self.write_char('\'');
             }
             Literal::String(s) => {
