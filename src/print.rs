@@ -3119,7 +3119,48 @@ fn normalize_code_block_indent(text: &str) -> String {
 /// multi-space runs collapsed outside of string literals. Other lines are
 /// emitted unchanged. elm-format re-parses these blocks as expressions and
 /// renders each on its own "top level", which produces this output.
+/// Return true if the code block contains a "preserving" piece of content —
+/// either an import, or a standalone line comment paragraph that appears
+/// after at least one assertion. In those situations elm-format's
+/// reformatter leaves the block unchanged, so we should too.
+fn block_has_non_assertion_content(block_lines: &[&str]) -> bool {
+    let mut seen_assertion = false;
+    for (i, line) in block_lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("import ") || trimmed.starts_with("module ") {
+            return true;
+        }
+        if trimmed.starts_with("--") {
+            // Standalone line-comment paragraph that comes after an
+            // assertion: elm-format preserves the block unchanged.
+            let prev_blank = i == 0 || block_lines[i - 1].trim().is_empty();
+            let next_blank = i + 1 >= block_lines.len()
+                || block_lines[i + 1].trim().is_empty();
+            if seen_assertion && prev_blank && next_blank {
+                return true;
+            }
+            continue;
+        }
+        if looks_like_assertion(trimmed) {
+            seen_assertion = true;
+            continue;
+        }
+        // Any other line shape bails out (prose, decl, etc.).
+        return true;
+    }
+    false
+}
+
 fn transform_assertion_paragraphs(block_lines: &[&str]) -> String {
+    // If the block contains anything other than pure assertion lines,
+    // elm-format does not split adjacent assertions in this block. Emit
+    // the block unchanged in that case.
+    if block_has_non_assertion_content(block_lines) {
+        return block_lines.join("\n");
+    }
     let mut out = String::new();
     let mut i = 0;
     while i < block_lines.len() {
