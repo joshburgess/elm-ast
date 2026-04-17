@@ -401,9 +401,17 @@ impl Printer {
         if !anchor_comments[total_anchors].is_empty() {
             self.newline();
             self.newline();
-            for c in &anchor_comments[total_anchors] {
-                self.write_comment(&c.value);
+            // elm-format places 3 blank lines between the last declaration
+            // and a trailing orphan comment (vs 2 blank lines between decls).
+            if self.is_pretty() {
                 self.newline();
+                self.newline();
+            }
+            for (i, c) in anchor_comments[total_anchors].iter().enumerate() {
+                if i > 0 {
+                    self.newline();
+                }
+                self.write_comment(&c.value);
             }
         }
 
