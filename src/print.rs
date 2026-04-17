@@ -286,6 +286,69 @@ impl Printer {
             anchor_comments[slot].push(c);
         }
 
+        // Hoist trailing line comments on imports that are followed by another
+        // import in the *sorted* output. elm-format attaches such trailing
+        // comments as leading comments on the preceding import so the imports
+        // render as a contiguous block. A slot-i comment is a trailing comment
+        // on import[i-1] iff (a) 1 <= i <= num_imports, (b) its source line
+        // equals import[i-1]'s end line, and (c) slot i corresponds to another
+        // import (i.e. i < num_imports).
+        if self.is_pretty() && num_imports >= 2 {
+            let mut sorted_for_hoist: Vec<usize> = (0..num_imports).collect();
+            sorted_for_hoist.sort_by(|&a, &b| {
+                module.imports[a]
+                    .value
+                    .module_name
+                    .value
+                    .cmp(&module.imports[b].value.module_name.value)
+            });
+            // Build a map: source-order index -> position in sorted output.
+            let mut sort_pos: Vec<usize> = vec![0; num_imports];
+            for (pos, &src_idx) in sorted_for_hoist.iter().enumerate() {
+                sort_pos[src_idx] = pos;
+            }
+            for i in 1..=num_imports {
+                if anchor_comments[i].is_empty() {
+                    continue;
+                }
+                let prev_import = &module.imports[i - 1];
+                let prev_end_line = prev_import.span.end.line;
+                // Partition: trailing line-comments on prev_import vs others.
+                let (trailing, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut anchor_comments[i])
+                    .into_iter()
+                    .partition(|c| {
+                        matches!(c.value, Comment::Line(_))
+                            && c.span.start.line == prev_end_line
+                    });
+                anchor_comments[i] = keep;
+                if trailing.is_empty() {
+                    continue;
+                }
+                // Only hoist when import (i-1) is followed by another import in
+                // the sorted output. Hoist to slot for the FIRST import of the
+                // sorted contiguous group that contains import (i-1).
+                let p = sort_pos[i - 1];
+                let followed_by_import = p + 1 < num_imports;
+                if !followed_by_import {
+                    // No hoist — put comments back where they were.
+                    anchor_comments[i].extend(trailing);
+                    continue;
+                }
+                let target_src_idx = sorted_for_hoist[0]; // leading slot of the sorted import block
+                let _ = target_src_idx;
+                // Hoist onto the source-order slot for import (i-1) itself so
+                // it precedes that import in sorted output. Since the sort is
+                // stable by module name, placing the comment in slot (i-1)
+                // keeps it attached to the same import whose trailing comment
+                // it was.
+                for c in trailing {
+                    anchor_comments[i - 1].push(c);
+                }
+                // Re-sort anchor_comments[i-1] by original offset.
+                anchor_comments[i - 1].sort_by_key(|c| c.span.start.offset);
+            }
+        }
+
         self.write_module_header(&module.header.value);
         self.newline();
 
@@ -390,23 +453,44 @@ impl Printer {
                 );
             let infix_group = self.is_pretty() && is_infix && prev_is_infix;
 
+            // If the first "leading" comment is a line comment on the same
+            // source line as the previous declaration's end, it's really a
+            // trailing comment on that previous decl. Emit it inline now
+            // (on the same line as the just-written decl) and drop it from
+            // the leading list.
+            let inline_trailing = self.is_pretty()
+                && i > 0
+                && !anchor_comments[slot].is_empty()
+                && matches!(&anchor_comments[slot][0].value, Comment::Line(_))
+                && {
+                    let c0 = &anchor_comments[slot][0];
+                    let prev_end_line = module.declarations[i - 1].span.end.line;
+                    c0.span.start.line == prev_end_line
+                };
+            if inline_trailing {
+                self.write_char(' ');
+                self.write_comment(&anchor_comments[slot][0].value);
+            }
+            let skip_first = if inline_trailing { 1 } else { 0 };
+            let remaining: Vec<_> = anchor_comments[slot].iter().skip(skip_first).collect();
+
             // Emit leading comments for this declaration.
-            if !anchor_comments[slot].is_empty() {
+            if !remaining.is_empty() {
                 // elm-format treats a leading line comment as a "section
                 // header" with 3 blank lines before (between decls / after
                 // imports) and 2 blank lines after. Block comments preserve
                 // the number of blank lines from the source.
                 let is_section = matches!(
-                    &anchor_comments[slot][0].value,
+                    &remaining[0].value,
                     Comment::Line(_)
                 );
                 // A single empty block comment (e.g. `{--}`) is treated by
                 // elm-format as an attached marker: normal 2-blank-line
                 // separation before, and no blank line between it and the
                 // following decl/doc-comment.
-                let is_attached_marker = anchor_comments[slot].len() == 1
+                let is_attached_marker = remaining.len() == 1
                     && matches!(
-                        &anchor_comments[slot][0].value,
+                        &remaining[0].value,
                         Comment::Block(text) if text.trim().is_empty()
                             || text.trim().chars().all(|c| c == '-')
                     );
@@ -445,7 +529,7 @@ impl Printer {
                         // Block comment: preserve source blank-line count,
                         // clamped to elm-format's minimums.
                         let first_comment_line =
-                            anchor_comments[slot][0].span.start.line;
+                            remaining[0].span.start.line;
                         let prev_end_line: u32 = if i > 0 {
                             module.declarations[i - 1].span.end.line
                         } else if num_imports > 0 {
@@ -474,7 +558,7 @@ impl Printer {
                     self.newline();
                     self.newline();
                 }
-                for c in &anchor_comments[slot] {
+                for c in &remaining {
                     self.write_comment(&c.value);
                     self.newline();
                 }
@@ -505,19 +589,43 @@ impl Printer {
 
         // Trailing comments after the last anchor.
         if !anchor_comments[total_anchors].is_empty() {
-            self.newline();
-            self.newline();
-            // elm-format places 3 blank lines between the last declaration
-            // and a trailing orphan comment (vs 2 blank lines between decls).
-            if self.is_pretty() {
-                self.newline();
-                self.newline();
+            // If the first trailing comment is a line comment on the same
+            // source line as the last declaration's end, emit it inline.
+            let inline_trailing_orphan = self.is_pretty()
+                && !module.declarations.is_empty()
+                && matches!(
+                    &anchor_comments[total_anchors][0].value,
+                    Comment::Line(_)
+                )
+                && {
+                    let c0 = &anchor_comments[total_anchors][0];
+                    let last_decl = module.declarations.last().unwrap();
+                    c0.span.start.line == last_decl.span.end.line
+                };
+            let skip_first = if inline_trailing_orphan { 1 } else { 0 };
+            if inline_trailing_orphan {
+                self.write_char(' ');
+                self.write_comment(&anchor_comments[total_anchors][0].value);
             }
-            for (i, c) in anchor_comments[total_anchors].iter().enumerate() {
-                if i > 0 {
+            let trailing: Vec<_> = anchor_comments[total_anchors]
+                .iter()
+                .skip(skip_first)
+                .collect();
+            if !trailing.is_empty() {
+                self.newline();
+                self.newline();
+                // elm-format places 3 blank lines between the last declaration
+                // and a trailing orphan comment (vs 2 blank lines between decls).
+                if self.is_pretty() {
+                    self.newline();
                     self.newline();
                 }
-                self.write_comment(&c.value);
+                for (i, c) in trailing.iter().enumerate() {
+                    if i > 0 {
+                        self.newline();
+                    }
+                    self.write_comment(&c.value);
+                }
             }
         }
 
@@ -535,6 +643,16 @@ impl Printer {
                     let brace_col = self.current_column();
                     self.write("{-");
                     let reindented = reindent_block_comment(text, brace_col);
+                    // elm-format normalizes `{-- foo...` (block content
+                    // starting with "- ") by dropping the space after the
+                    // leading dash, keeping `{--` as a single marker.
+                    let reindented = if self.is_pretty()
+                        && reindented.starts_with("- ")
+                    {
+                        format!("-{}", &reindented[2..])
+                    } else {
+                        reindented
+                    };
                     self.write(&reindented);
                     self.write("-}");
                 } else {
@@ -553,12 +671,15 @@ impl Printer {
     fn write_doc_comment_text(&mut self, text: &str) {
         if self.is_pretty() {
             let normalized = normalize_doc_comment(text);
+            let normalized = collapse_blank_lines_in_doc(&normalized);
+            let normalized = normalize_doc_char_literals(&normalized);
             let normalized = normalize_emphasis(&normalized);
             let normalized = normalize_empty_link_refs(&normalized);
             let normalized = normalize_markdown_lists(&normalized);
             let normalized = normalize_fenced_code_blocks(&normalized);
             let normalized = normalize_code_block_indent(&normalized);
             let normalized = ensure_blank_before_code_block_with_trailing_comment(&normalized);
+            let normalized = ensure_blank_before_docs_after_prose(&normalized);
             let normalized = normalize_docs_lines(&normalized);
             let normalized = strip_paragraph_leading_whitespace(&normalized);
             let normalized = collapse_prose_internal_spaces(&normalized);
@@ -662,6 +783,12 @@ impl Printer {
                 let group_items: Vec<&ExposedItem> = group
                     .iter()
                     .filter_map(|name| {
+                        // An item may appear in multiple @docs groups in the
+                        // module doc. elm-format only places it in the first
+                        // group; later mentions are ignored for layout.
+                        if emitted.contains(name.as_str()) {
+                            return None;
+                        }
                         let item = item_map.get(name.as_str()).copied()?;
                         // elm-format's textToRef only recognizes operators with
                         // 1 or 2 symbol characters.  Operators with 3+ chars
@@ -971,7 +1098,14 @@ impl Printer {
         self.write(" =");
         self.indent();
         self.newline_indent();
-        self.write_expr(&imp.body.value);
+        // At the top of a value definition RHS, parens around an operator
+        // application are always redundant. elm-format strips them.
+        let body = if self.is_pretty() {
+            unwrap_parens(&imp.body.value)
+        } else {
+            &imp.body.value
+        };
+        self.write_expr(body);
         self.dedent();
     }
 
@@ -1245,7 +1379,20 @@ impl Printer {
     fn write_pattern_cons(&mut self, pat: &Pattern) {
         match pat {
             Pattern::Cons { head, tail } => {
+                // elm-format wraps constructor patterns with args in parens
+                // on the left side of `::`: `(Ctor a) :: rest`
+                let needs_parens = self.is_pretty()
+                    && matches!(
+                        &head.value,
+                        Pattern::Constructor { args, .. } if !args.is_empty()
+                    );
+                if needs_parens {
+                    self.write_char('(');
+                }
                 self.write_pattern_app(&head.value);
+                if needs_parens {
+                    self.write_char(')');
+                }
                 self.write(" :: ");
                 self.write_pattern_cons(&tail.value);
             }
@@ -1388,18 +1535,21 @@ impl Printer {
                 // operators break to vertical. (`>>` / `<<` are handled below
                 // via the right-associative path, since they right-associate
                 // in Elm.)
-                if self.is_pretty() && operator == "|>" {
-                    if let Some(chain) = flatten_left_assoc_chain(expr, operator) {
-                        let any_ml = chain.iter().any(|op| self.is_multiline(op));
+                if self.is_pretty()
+                    && matches!(operator.as_str(), "|>" | "|." | "|=")
+                {
+                    if let Some((head, rest)) = flatten_mixed_pipe_chain(expr) {
+                        let any_ml = self.is_multiline(head)
+                            || rest.iter().any(|(_, op)| self.is_multiline(op));
                         if any_ml {
                             // Break ALL operators to vertical.
-                            self.write_expr_operand(chain[0], operator, true);
+                            self.write_expr_operand(head, operator, true);
                             self.indent();
-                            for operand in &chain[1..] {
+                            for (op, operand) in &rest {
                                 self.newline_indent();
-                                self.write(operator);
+                                self.write(op);
                                 self.write_char(' ');
-                                self.write_expr_operand(operand, operator, false);
+                                self.write_expr_operand(operand, op, false);
                             }
                             self.dedent();
                             return;
@@ -1414,8 +1564,33 @@ impl Printer {
                 // Elm, so we need `flatten_right_assoc_chain` to lay them out
                 // at a single indent level instead of letting the AST shape
                 // produce stair-stepped nesting.)
+                //
+                // `::` and `++` share precedence 5 right-assoc, and elm-format
+                // unifies mixed chains (e.g. `a :: b :: xs ++ ys`) into a single
+                // vertical layout. Use the mixed flattener for those operators.
                 if self.is_pretty()
-                    && matches!(operator.as_str(), "::" | "++" | ">>" | "<<")
+                    && matches!(operator.as_str(), "::" | "++")
+                {
+                    if let Some((head, rest)) = flatten_mixed_cons_append_chain(expr) {
+                        let any_ml = self.is_multiline(head)
+                            || rest.iter().any(|(_, e)| self.is_multiline(e));
+                        if any_ml {
+                            self.write_expr_operand(head, operator, true);
+                            self.indent();
+                            for (op, operand) in &rest {
+                                self.newline_indent();
+                                self.write(op);
+                                self.write_char(' ');
+                                self.write_expr_operand(operand, op, false);
+                            }
+                            self.dedent();
+                            return;
+                        }
+                    }
+                }
+
+                if self.is_pretty()
+                    && matches!(operator.as_str(), ">>" | "<<")
                 {
                     if let Some(chain) = flatten_right_assoc_chain(expr, operator) {
                         let any_ml = chain.iter().any(|op| self.is_multiline(op));
@@ -1427,6 +1602,34 @@ impl Printer {
                                 self.write(operator);
                                 self.write_char(' ');
                                 self.write_expr_operand(operand, operator, false);
+                            }
+                            self.dedent();
+                            return;
+                        }
+                    }
+                }
+
+                // Same rule for left-associative arithmetic chains (+, -).
+                // elm-format: if any operand in the chain is multiline,
+                // break at every operator.
+                if self.is_pretty()
+                    && matches!(operator.as_str(), "+" | "-")
+                {
+                    let op_owned = operator.clone();
+                    if let Some((head, rest)) = flatten_left_assoc_pred(
+                        expr,
+                        &|o: &str| o == op_owned,
+                    ) {
+                        let any_ml = self.is_multiline(head)
+                            || rest.iter().any(|(_, op)| self.is_multiline(op));
+                        if any_ml {
+                            self.write_expr_operand(head, operator, true);
+                            self.indent();
+                            for (op, operand) in &rest {
+                                self.newline_indent();
+                                self.write(op);
+                                self.write_char(' ');
+                                self.write_expr_operand(operand, op, false);
                             }
                             self.dedent();
                             return;
@@ -1676,11 +1879,27 @@ impl Printer {
                         }
                         self.write_char(')');
                     } else {
+                        // Multi-line non-block expr: align the continuation
+                        // indent to `(` column + 1, and align `)` with `(`.
+                        let saved_indent = self.indent;
                         let saved_extra = self.indent_extra;
+                        let saved_stack = self.indent_extra_stack.clone();
+
                         self.write_char('(');
+                        let col = self.current_column();
+                        let w = self.config.indent_width;
+                        self.indent = col / w;
+                        self.indent_extra = (col % w) as u32;
+
                         self.write_expr(&inner.value);
+
+                        self.indent = saved_indent;
                         self.indent_extra = saved_extra;
-                        self.newline_indent();
+                        self.indent_extra_stack = saved_stack;
+                        self.newline();
+                        for _ in 0..(col - 1) {
+                            self.buf.push(' ');
+                        }
                         self.write_char(')');
                     }
                 } else {
@@ -1837,19 +2056,50 @@ impl Printer {
             // Set indent_extra = 2 so block expressions (if-else, let-in)
             // inside elements align else/in with the element content after
             // the "[ " or ", " prefix.
+            //
+            // Capture the column of the opening bracket so commas and the
+            // closing bracket align with it, even when the list is written
+            // as the RHS of an operator (e.g. `xs ++ [ ...`) where the `[`
+            // is not at the current indent column.
+            let open_col = self.current_column();
+            let standard_indent =
+                self.indent * self.config.indent_width + self.indent_extra as usize;
+            // When the list is written inline on a chain line (open_col >
+            // standard_indent), elm-format bumps the block indent by one
+            // so that block expressions (if/else, case-of) inside an element
+            // are indented two levels past the chain line, not just one.
+            let bump_indent = open_col > standard_indent;
             let saved_extra = self.indent_extra;
             self.write(open);
+            if bump_indent {
+                self.indent();
+            }
             self.indent_extra = saved_extra + 2;
             self.write_expr(&elems[0].value);
             self.indent_extra = saved_extra;
+            if bump_indent {
+                self.dedent();
+            }
             for elem in &elems[1..] {
-                self.newline_indent();
+                self.newline();
+                for _ in 0..open_col {
+                    self.buf.push(' ');
+                }
                 self.write(", ");
+                if bump_indent {
+                    self.indent();
+                }
                 self.indent_extra = saved_extra + 2;
                 self.write_expr(&elem.value);
                 self.indent_extra = saved_extra;
+                if bump_indent {
+                    self.dedent();
+                }
             }
-            self.newline_indent();
+            self.newline();
+            for _ in 0..open_col {
+                self.buf.push(' ');
+            }
             self.write(close.trim_start());
         } else if any_multiline {
             // Compact mode: one element per indented line.
@@ -2227,8 +2477,16 @@ impl Printer {
             }
             Literal::Float(f) => {
                 let s = f.to_string();
-                self.write(&s);
-                if !s.contains('.') {
+                if s.contains('.') {
+                    self.write(&s);
+                } else if let Some(e_pos) = s.find(|c: char| c == 'e' || c == 'E') {
+                    // Scientific form without a dot (e.g. `1e-42`): elm-format
+                    // inserts `.0` before the exponent to make it `1.0e-42`.
+                    self.write(&s[..e_pos]);
+                    self.write(".0");
+                    self.write(&s[e_pos..]);
+                } else {
+                    self.write(&s);
                     self.write(".0");
                 }
             }
@@ -2294,47 +2552,63 @@ fn reindent_block_comment(text: &str, brace_col: usize) -> String {
         return text.to_string();
     }
 
-    let last = lines.last().unwrap();
-    let last_is_ws_only = last.trim().is_empty();
-    let original_base: usize = if last_is_ws_only {
-        last.chars().take_while(|c| *c == ' ').count()
-    } else {
-        let mut min_indent = usize::MAX;
-        for line in &lines[1..] {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let ind = line.chars().take_while(|c| *c == ' ').count();
-            if ind < min_indent {
-                min_indent = ind;
-            }
+    // elm-format's rule: continuation lines in a multi-line block comment are
+    // re-aligned so their minimum indent is `brace_col + 3` (the column where
+    // content after `{- ` begins). Lines that are deeper preserve their extra
+    // depth relative to the original base.
+    //
+    // Compute the current minimum indent among non-blank content lines,
+    // EXCLUDING the final `-}` line (which is special).
+    let last_idx = lines.len() - 1;
+    let mut min_indent: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if i == 0 || i == last_idx {
+            continue;
         }
-        if min_indent == usize::MAX {
-            return text.to_string();
+        if line.trim().is_empty() {
+            continue;
         }
-        min_indent.saturating_sub(3)
-    };
+        let ind = line.chars().take_while(|c| *c == ' ').count();
+        min_indent = Some(match min_indent {
+            None => ind,
+            Some(m) => m.min(ind),
+        });
+    }
 
-    let delta: isize = brace_col as isize - original_base as isize;
+    let target_min = brace_col + 3;
+    // Delta: how much to shift each continuation line so min-indent hits target_min.
+    let delta: isize = match min_indent {
+        Some(m) => target_min as isize - m as isize,
+        None => 0,
+    };
 
     let mut out = String::new();
     for (i, line) in lines.iter().enumerate() {
         if i == 0 {
             out.push_str(line);
-        } else {
-            out.push('\n');
-            let is_last = i == lines.len() - 1;
-            if line.is_empty() && !is_last {
-                continue;
-            }
-            let ind = line.chars().take_while(|c| *c == ' ').count();
-            let rest = &line[ind..];
-            let new_ind = ((ind as isize) + delta).max(0) as usize;
-            for _ in 0..new_ind {
+            continue;
+        }
+        out.push('\n');
+        let is_last = i == last_idx;
+        if is_last {
+            // Normalize the `-}` line to sit at brace_col.
+            let stripped = line.trim_start_matches(' ');
+            for _ in 0..brace_col {
                 out.push(' ');
             }
-            out.push_str(rest);
+            out.push_str(stripped);
+            continue;
         }
+        if line.is_empty() {
+            continue;
+        }
+        let ind = line.chars().take_while(|c| *c == ' ').count();
+        let rest = &line[ind..];
+        let new_ind = ((ind as isize) + delta).max(0) as usize;
+        for _ in 0..new_ind {
+            out.push(' ');
+        }
+        out.push_str(rest);
     }
     out
 }
@@ -2428,7 +2702,12 @@ fn normalize_doc_comment(text: &str) -> String {
         // Only un-indented lines are markdown headings. An indented `# ...`
         // (4+ leading spaces) is inside a code block, which in turn may be
         // inside a string literal where `#` is just content.
-        let is_heading = (line.starts_with("# ") || line.starts_with("## "))
+        let is_heading = (line.starts_with("# ")
+            || line.starts_with("## ")
+            || line.starts_with("### ")
+            || line.starts_with("#### ")
+            || line.starts_with("##### ")
+            || line.starts_with("###### "))
             && !line.starts_with("    ");
 
         // Rule 4: Double blank line before any `# Heading` or `## Heading` etc.
@@ -2509,6 +2788,7 @@ fn normalize_emphasis(text: &str) -> String {
     let mut in_docs_line = false;
     let mut prev_line_blank = false;
     let mut current_line_has_content = false;
+    let mut in_indented_code_block = false;
 
     // Helper: push the UTF-8 character starting at byte position `pos` in
     // `text` into `result` and return the number of bytes consumed.
@@ -2550,9 +2830,31 @@ fn normalize_emphasis(text: &str) -> String {
             }
             at_line_start = false;
             current_line_has_content = true;
+            // Track code-block enter/leave. A line at 4+ indent that starts
+            // after a blank line opens a code block; the block continues on
+            // subsequent 4+-indent lines regardless of blanks in between,
+            // and ends at any non-blank line with less than 4-space indent.
+            if line_indent >= 4 {
+                if prev_line_blank || in_indented_code_block {
+                    in_indented_code_block = true;
+                }
+            } else {
+                in_indented_code_block = false;
+            }
             // Detect @docs lines — skip emphasis processing on these.
             if text[i..].starts_with("@docs") {
                 in_docs_line = true;
+            }
+            // Markdown unordered-list marker. elm-format's Cheapskate
+            // renderer emits these as `- `. A leading `*` followed by a
+            // space at the start of line content is a bullet, not
+            // emphasis. Only apply outside of indented code blocks.
+            if !in_indented_code_block
+                && ch == b'*' && i + 1 < len && bytes[i + 1] == b' '
+            {
+                result.push('-');
+                i += 1;
+                continue;
             }
         }
 
@@ -2564,10 +2866,8 @@ fn normalize_emphasis(text: &str) -> String {
             continue;
         }
 
-        // Inside a code block (4+ spaces indent after a blank line) — pass through unchanged.
-        // Only treat as a code block if preceded by a blank line (proper markdown code block).
-        // List continuation lines with 4+ indent should still have emphasis processed.
-        if line_indent >= 4 && prev_line_blank {
+        // Inside an indented code block — pass through unchanged.
+        if in_indented_code_block {
             result.push(ch as char);
             i += 1;
             continue;
@@ -2786,12 +3086,214 @@ fn normalize_empty_link_refs(text: &str) -> String {
     text.replace("][]", "]")
 }
 
+/// Collapse runs of 3+ consecutive newlines (2+ blank lines) to 2 newlines
+/// (1 blank line) in doc-comment text, matching Cheapskate's paragraph
+/// normalization. Headings intentionally get `\n\n\n` (two blanks) before
+/// them by rule 4 of `normalize_doc_comment`, so preserve `\n\n\n` when the
+/// following non-empty line is a markdown heading.
+/// Normalize character-literal escapes in 4-space-indented doc code blocks.
+/// elm-format lexes+reprints code blocks, which unescapes:
+/// - `'\"'` -> `'"'` (double quote doesn't need escaping inside `'...'`)
+/// - `'\u{XXXX}'` -> the literal character when `XXXX` is a printable
+///   non-control codepoint (BMP or SMP).
+fn normalize_doc_char_literals(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    for line in &lines {
+        if line.starts_with("    ") {
+            out.push(normalize_char_literals_in_code_line(line));
+        } else {
+            out.push((*line).to_string());
+        }
+    }
+    out.join("\n")
+}
+
+fn normalize_char_literals_in_code_line(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\'' && i + 3 < chars.len() {
+            // Look for '\"' -> '"'
+            if chars[i + 1] == '\\' && chars[i + 2] == '"' && chars[i + 3] == '\'' {
+                out.push('\'');
+                out.push('"');
+                out.push('\'');
+                i += 4;
+                continue;
+            }
+            // Look for '\u{HEX}' -> actual char (when printable)
+            if chars[i + 1] == '\\' && chars[i + 2] == 'u' && i + 3 < chars.len() && chars[i + 3] == '{' {
+                let mut j = i + 4;
+                while j < chars.len() && chars[j] != '}' {
+                    j += 1;
+                }
+                if j < chars.len() && j + 1 < chars.len() && chars[j + 1] == '\'' {
+                    let hex: String = chars[i + 4..j].iter().collect();
+                    if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                        if let Some(ch) = char::from_u32(code) {
+                            if !ch.is_control() && !should_unicode_escape(ch) {
+                                out.push('\'');
+                                out.push(ch);
+                                out.push('\'');
+                                i = j + 2;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Inside a string literal, normalize \u{HEX} escapes to literal chars.
+        if chars[i] == '"' {
+            // Find end of string (unescaped " or end of line).
+            let start = i;
+            let mut j = i + 1;
+            let mut buf = String::new();
+            buf.push('"');
+            while j < chars.len() {
+                let c = chars[j];
+                if c == '\\' && j + 1 < chars.len() {
+                    let nx = chars[j + 1];
+                    if nx == 'u' && j + 2 < chars.len() && chars[j + 2] == '{' {
+                        let mut k = j + 3;
+                        while k < chars.len() && chars[k] != '}' {
+                            k += 1;
+                        }
+                        if k < chars.len() {
+                            let hex: String = chars[j + 3..k].iter().collect();
+                            if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                                if let Some(ch) = char::from_u32(code) {
+                                    if !ch.is_control() && !should_unicode_escape(ch) && ch != '"' && ch != '\\' {
+                                        buf.push(ch);
+                                        j = k + 1;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        // Fall through — keep as-is.
+                        buf.push(c);
+                        buf.push(nx);
+                        j += 2;
+                        continue;
+                    }
+                    // Other escape: keep verbatim.
+                    buf.push(c);
+                    buf.push(nx);
+                    j += 2;
+                    continue;
+                }
+                buf.push(c);
+                if c == '"' {
+                    j += 1;
+                    break;
+                }
+                j += 1;
+            }
+            // Only commit the buffer if we reached a closing quote.
+            if buf.ends_with('"') && buf.len() > 1 {
+                out.push_str(&buf);
+                i = j;
+                continue;
+            }
+            // Unterminated — fall back to raw copy.
+            out.push(chars[start]);
+            i += 1;
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Collapse excess blank lines that directly precede a markdown
+/// link-reference definition (`[name]: url`). Cheapskate normalizes any
+/// run of 2+ blank lines before a link-reference block to a single blank
+/// line. Other blank-line runs are preserved as-is (some block transitions
+/// like code blocks rely on specific blank-line counts).
+fn collapse_blank_lines_in_doc(text: &str) -> String {
+    if text.trim().is_empty() {
+        return text.to_string();
+    }
+    let lines: Vec<&str> = text.split('\n').collect();
+    let is_link_ref = |line: &str| -> bool {
+        let t = line.trim_start();
+        // Must start with '[', have ']:' somewhere after, and match the
+        // pattern `[name]: rest`.
+        if !t.starts_with('[') {
+            return false;
+        }
+        if let Some(close) = t.find(']') {
+            let after = &t[close + 1..];
+            after.starts_with(": ") || after.starts_with(":\t")
+        } else {
+            false
+        }
+    };
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if line.trim().is_empty() {
+            // Count consecutive blank lines.
+            let mut j = i;
+            while j < lines.len() && lines[j].trim().is_empty() {
+                j += 1;
+            }
+            let run = j - i;
+            let next_is_link_ref = j < lines.len() && is_link_ref(lines[j]);
+            let emit = if next_is_link_ref && run > 1 { 1 } else { run };
+            for _ in 0..emit {
+                out.push(String::new());
+            }
+            i = j;
+        } else {
+            out.push(line.to_string());
+            i += 1;
+        }
+    }
+    out.join("\n")
+}
+
 
 /// Re-serialize `@docs` lines in doc comment text.
 /// elm-format normalizes multi-line `@docs` with continuation lines
 /// (after a trailing comma) into separate `@docs` directives. Each
 /// continuation line becomes its own `@docs` line. The original `@docs`
 /// line also has its trailing comma removed.
+/// Ensure a blank line separates a prose paragraph from a following `@docs`
+/// line. elm-format renders `@docs` as a block-level directive that needs a
+/// blank line above when preceded by prose on the same paragraph.
+fn ensure_blank_before_docs_after_prose(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 4);
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("@docs") && idx > 0 {
+            let prev = lines[idx - 1];
+            let prev_trimmed = prev.trim_start();
+            // Skip if already separated by a blank or the prev is a heading,
+            // another @docs, a list item, or a code-block line.
+            let needs_blank = !prev.trim().is_empty()
+                && !prev_trimmed.starts_with("@docs")
+                && !prev_trimmed.starts_with('#')
+                && !prev_trimmed.starts_with("- ")
+                && !prev_trimmed.starts_with("* ")
+                && !prev_trimmed.starts_with("\\* ")
+                && !prev.starts_with("    ")
+                && !prev_trimmed.starts_with("```");
+            if needs_blank {
+                out.push(String::new());
+            }
+        }
+        out.push((*line).to_string());
+    }
+    out.join("\n")
+}
+
 fn normalize_docs_lines(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let lines: Vec<&str> = text.split('\n').collect();
@@ -3272,8 +3774,11 @@ fn normalize_markdown_lists(text: &str) -> String {
             result.push_str(line);
         } else if line.starts_with("- ") || *line == "-" {
             // Unordered list item: indent by 2 spaces.
+            if starts_list_after_prose(&lines, i, list_indent) {
+                result.push('\n');
+            }
             result.push_str("  ");
-            result.push_str(line);
+            result.push_str(&escape_bullet_leading_underscore(line, 2));
             // "  - " = 4 chars of prefix before content
             list_indent = Some(4);
         } else if line.starts_with("  - ") {
@@ -3282,11 +3787,17 @@ fn normalize_markdown_lists(text: &str) -> String {
             // but authors still visually indent bullets by 2 spaces).
             // Preserve the indent; continuation aligns 2 spaces past the
             // `- ` marker.
-            result.push_str(line);
+            if starts_list_after_prose(&lines, i, list_indent) {
+                result.push('\n');
+            }
+            result.push_str(&escape_bullet_leading_underscore(line, 4));
             list_indent = Some(4);
         } else if let Some(rest) = strip_ordered_list_prefix(line) {
             // Ordered list item: strip leading spaces, double-space after period.
             // `  1. text` or `1. text` -> `1.  text`
+            if starts_list_after_prose(&lines, i, list_indent) {
+                result.push('\n');
+            }
             let trimmed = line.trim_start();
             // Extract the number and period part
             let prefix_len = trimmed.len() - rest.len();
@@ -3317,6 +3828,69 @@ fn normalize_markdown_lists(text: &str) -> String {
     result
 }
 
+/// Escape word-boundary underscores in a bullet item's content.
+/// Cheapskate (elm-format's markdown renderer) escapes `_word` → `\_word`
+/// and `word_` → `word\_` because `_text_` is italic markdown.
+/// Mid-word underscores (e.g. `foo_bar`) aren't flanking and are left alone.
+/// Underscores inside `[link text]` are left as-is, since cheapskate
+/// preserves emphasis inside link labels.
+///
+/// `marker_len` is the number of characters preceding the content in the
+/// already-extended prefix form: e.g. for `- _blank`, marker_len is 2; for
+/// `  - _blank`, marker_len is 4.
+fn escape_bullet_leading_underscore(line: &str, marker_len: usize) -> String {
+    if line.len() <= marker_len {
+        return line.to_string();
+    }
+    let (prefix, content) = line.split_at(marker_len);
+    let bytes = content.as_bytes();
+    let mut out = String::with_capacity(line.len() + 2);
+    out.push_str(prefix);
+    let mut in_link_text = false;
+    let mut prev_raw: Option<u8> = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'[' if !in_link_text => in_link_text = true,
+            b']' if in_link_text => in_link_text = false,
+            _ => {}
+        }
+        if b == b'_' && !in_link_text {
+            // Skip if already escaped (prev char is an unescaped backslash).
+            let already_escaped = prev_raw == Some(b'\\');
+            if !already_escaped {
+                let prev = if i == 0 { None } else { Some(bytes[i - 1]) };
+                let next = if i + 1 < bytes.len() { Some(bytes[i + 1]) } else { None };
+                // Flanking check: either side is a word char (letter/digit),
+                // and the other side is not a word char (boundary-ish).
+                let left_is_letter = prev.map(|c| c.is_ascii_alphanumeric()).unwrap_or(false);
+                let right_is_letter = next.map(|c| c.is_ascii_alphanumeric()).unwrap_or(false);
+                if left_is_letter != right_is_letter {
+                    out.push('\\');
+                } else if !left_is_letter && !right_is_letter {
+                    // `)_ ` or `)_` at end: cheapskate still treats these as
+                    // potential delimiters if preceded by closing punctuation
+                    // (non-whitespace) and followed by whitespace/EOL.
+                    let prev_is_nonspace = prev.map(|c| !c.is_ascii_whitespace()).unwrap_or(false);
+                    let next_is_space_or_none =
+                        next.map(|c| c.is_ascii_whitespace()).unwrap_or(true);
+                    let prev_is_space_or_none =
+                        prev.map(|c| c.is_ascii_whitespace()).unwrap_or(true);
+                    let next_is_nonspace =
+                        next.map(|c| !c.is_ascii_whitespace()).unwrap_or(false);
+                    if (prev_is_nonspace && next_is_space_or_none)
+                        || (prev_is_space_or_none && next_is_nonspace)
+                    {
+                        out.push('\\');
+                    }
+                }
+            }
+        }
+        out.push(b as char);
+        prev_raw = Some(b);
+    }
+    out
+}
+
 /// Convert fenced code blocks (triple-backtick) to indented code blocks.
 ///
 /// elm-format's Cheapskate markdown parser converts fenced code blocks to
@@ -3328,9 +3902,17 @@ fn normalize_fenced_code_blocks(text: &str) -> String {
 
     while i < lines.len() {
         let trimmed = lines[i].trim();
-        // Detect opening fence: only plain ``` without a language tag.
-        // Fenced blocks with language tags (e.g. ```elm) are preserved by elm-format.
-        if trimmed == "```" {
+        // Detect opening fence: plain ``` or ```<language-tag>.
+        // elm-format's Cheapskate renderer converts all fenced blocks to
+        // 4-space indented blocks, stripping the fences and language tag.
+        let is_fence_open = trimmed == "```"
+            || (trimmed.starts_with("```")
+                && trimmed.len() > 3
+                && !trimmed[3..].contains('`')
+                && trimmed[3..]
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        if is_fence_open {
             // Find the closing fence
             let mut end = i + 1;
             let mut found_close = false;
@@ -3343,21 +3925,31 @@ fn normalize_fenced_code_blocks(text: &str) -> String {
             }
 
             if found_close {
-                // Convert: skip opening fence, indent content lines by 4 spaces,
-                // skip closing fence.
-                for j in (i + 1)..end {
-                    if !result.is_empty() || j > i + 1 {
-                        result.push('\n');
+                // If the fence is inside a list context, cheapskate keeps the
+                // fence (does not convert to 4-space indent). Detect this by
+                // scanning backward: a list item marker before any unindented
+                // paragraph line means we're still in list continuation.
+                let in_list_context = fence_is_in_list_context(&lines, i);
+
+                if in_list_context {
+                    // Preserve the fence as-is; fall through to default copy.
+                } else {
+                    // Convert: skip opening fence, indent content lines by 4
+                    // spaces, skip closing fence.
+                    for j in (i + 1)..end {
+                        if !result.is_empty() || j > i + 1 {
+                            result.push('\n');
+                        }
+                        if lines[j].is_empty() {
+                            // Keep blank lines blank
+                        } else {
+                            result.push_str("    ");
+                            result.push_str(lines[j]);
+                        }
                     }
-                    if lines[j].is_empty() {
-                        // Keep blank lines blank
-                    } else {
-                        result.push_str("    ");
-                        result.push_str(lines[j]);
-                    }
+                    i = end + 1;
+                    continue;
                 }
-                i = end + 1;
-                continue;
             }
         }
 
@@ -3368,6 +3960,72 @@ fn normalize_fenced_code_blocks(text: &str) -> String {
         i += 1;
     }
     result
+}
+
+/// Returns true if the fence opening at `fence_idx` is inside a markdown list
+/// continuation. Scans backward through lines, skipping blank lines and
+/// indented continuation text; if we encounter a list item marker before an
+/// unindented paragraph-style line, the fence is in list context.
+fn fence_is_in_list_context(lines: &[&str], fence_idx: usize) -> bool {
+    if fence_idx == 0 {
+        return false;
+    }
+    let mut k = fence_idx;
+    while k > 0 {
+        k -= 1;
+        let line = lines[k];
+        if line.trim().is_empty() {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        let trimmed = line.trim_start();
+        // List item marker
+        if trimmed.starts_with("- ")
+            || trimmed == "-"
+            || strip_ordered_list_prefix(trimmed).is_some()
+        {
+            return true;
+        }
+        // Indented continuation line — keep walking back
+        if indent >= 2 {
+            continue;
+        }
+        // Unindented, non-list content ends the potential list scope
+        return false;
+    }
+    false
+}
+
+/// Determine whether a list item line should be preceded by a blank line.
+/// elm-format's Cheapskate markdown renderer separates a list from a preceding
+/// paragraph with a blank line, even when the source had none.
+fn starts_list_after_prose(lines: &[&str], i: usize, list_indent: Option<usize>) -> bool {
+    // Already inside a list context (previous item or continuation) — no blank.
+    if list_indent.is_some() {
+        return false;
+    }
+    if i == 0 {
+        return false;
+    }
+    let prev = lines[i - 1];
+    // Previous line blank → already separated.
+    if prev.trim().is_empty() {
+        return false;
+    }
+    let prev_trimmed = prev.trim_start();
+    // Previous line is itself a list item (list_indent should have been set, but
+    // be defensive).
+    if prev_trimmed.starts_with("- ")
+        || prev_trimmed == "-"
+        || strip_ordered_list_prefix(prev_trimmed).is_some()
+    {
+        return false;
+    }
+    // Previous line is a heading or @docs — those act as block separators.
+    if prev_trimmed.starts_with('#') || prev_trimmed.starts_with("@docs") {
+        return false;
+    }
+    true
 }
 
 /// Check if a line is an ordered list item: optional whitespace, digits, period, space(s).
@@ -3460,6 +4118,12 @@ fn normalize_code_block_indent(text: &str) -> String {
         };
 
         if let Some(reformatted) = reformatted {
+            // When elm-format re-parses a doc code block containing both code
+            // and a comment-only paragraph, it treats the block as "loose" and
+            // inserts an extra blank line before the block.
+            if block_has_comment_paragraph(&lines[block_start..=block_end]) {
+                result.push('\n');
+            }
             result.push_str(&reformatted);
             if block_end < lines.len() - 1 {
                 result.push('\n');
@@ -3472,11 +4136,27 @@ fn normalize_code_block_indent(text: &str) -> String {
             // elm-format's behavior.
             let block = &lines[block_start..=block_end];
             let transformed = transform_assertion_paragraphs(block);
+            let transformed = insert_loose_paragraph_breaks(&transformed);
             let end_idx = result.len();
             result.push_str(&transformed);
             let _ = end_idx;
             if block_end < lines.len() - 1 {
                 result.push('\n');
+            }
+            // Code blocks containing only line comments (e.g. `-- foo`) get a
+            // 3-blank-line separator before following content in elm-format's
+            // Cheapskate output, not the usual 1. Force that here and skip the
+            // source's own trailing blanks so they don't add extra newlines.
+            if block_is_all_comments(block) {
+                let mut k = block_end + 1;
+                while k < lines.len() && lines[k].trim().is_empty() {
+                    k += 1;
+                }
+                result.push('\n');
+                result.push('\n');
+                result.push('\n');
+                i = k;
+                continue;
             }
         }
         i = block_end + 1;
@@ -3491,7 +4171,151 @@ fn normalize_code_block_indent(text: &str) -> String {
 /// multi-space runs collapsed outside of string literals. Other lines are
 /// emitted unchanged. elm-format re-parses these blocks as expressions and
 /// renders each on its own "top level", which produces this output.
-/// Return true if the code block contains a "preserving" piece of content —
+fn block_has_comment_paragraph(block_lines: &[&str]) -> bool {
+    let mut paragraphs: Vec<Vec<&str>> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in block_lines {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        paragraphs.push(current);
+    }
+    if paragraphs.len() < 2 {
+        return false;
+    }
+    let last = paragraphs.last().unwrap();
+    let last_is_all_comment = last
+        .iter()
+        .all(|l| l.trim().starts_with("--"));
+    if !last_is_all_comment {
+        return false;
+    }
+    let first = &paragraphs[0];
+    let first_line = first[0].trim();
+    if first_line.starts_with("import ")
+        || first_line.starts_with("--")
+        || first_line.starts_with("module ")
+    {
+        return false;
+    }
+    first_line.starts_with("type ")
+        || first_line.starts_with("port ")
+        || looks_like_type_annotation(first_line)
+        || looks_like_value_decl_start(first_line)
+}
+
+/// Detect a line that starts a value declaration: `name =` or `name args... =`.
+/// Conservative: requires a lowercase identifier at the start followed by an
+/// `=` at the outer level (not inside parens).
+fn looks_like_value_decl_start(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let first = bytes[0];
+    if !(first.is_ascii_lowercase() || first == b'_') {
+        return false;
+    }
+    // Walk identifier chars.
+    let mut i = 0;
+    while i < bytes.len()
+        && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'\'')
+    {
+        i += 1;
+    }
+    if i == 0 || i >= bytes.len() {
+        return false;
+    }
+    if bytes[i] != b' ' {
+        return false;
+    }
+    // Scan for an `=` (surrounded by spaces) at outer level.
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if esc { esc = false; i += 1; continue; }
+        if in_str {
+            if b == b'\\' { esc = true; }
+            else if b == b'"' { in_str = false; }
+            i += 1; continue;
+        }
+        if in_char {
+            if b == b'\\' { esc = true; }
+            else if b == b'\'' { in_char = false; }
+            i += 1; continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'\'' => in_char = true,
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'=' if depth == 0 => {
+                // Ensure it's not `==`, `>=`, `<=`, `/=`, `=>`, `::=`.
+                let prev = if i > 0 { bytes[i - 1] } else { b' ' };
+                let next = if i + 1 < bytes.len() { bytes[i + 1] } else { b' ' };
+                if prev != b' ' { i += 1; continue; }
+                if next == b'=' { i += 1; continue; }
+                return true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+fn looks_like_type_annotation(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut in_string = false;
+    let mut escape = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if escape {
+            escape = false;
+        } else if in_string {
+            if c == b'\\' {
+                escape = true;
+            } else if c == b'"' {
+                in_string = false;
+            }
+        } else if c == b'"' {
+            in_string = true;
+        } else if c == b':' && i + 1 < bytes.len() && bytes[i + 1] == b' '
+            && i > 0 && bytes[i - 1] == b' '
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn block_is_all_comments(block_lines: &[&str]) -> bool {
+    let mut saw_content = false;
+    for line in block_lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !trimmed.starts_with("--") {
+            return false;
+        }
+        saw_content = true;
+    }
+    saw_content
+}
+
+/// Return true if the code block contains a "preserving" piece of content,
 /// either an import, or a standalone line comment paragraph that appears
 /// after at least one assertion. In those situations elm-format's
 /// reformatter leaves the block unchanged, so we should too.
@@ -3526,7 +4350,123 @@ fn block_has_non_assertion_content(block_lines: &[&str]) -> bool {
     false
 }
 
+/// Post-process a (pre-joined) code block, inserting extra blank lines
+/// between certain paragraph pairs that elm-format renders "loose":
+///   - all-imports paragraph followed by all-comments paragraph
+///   - all-comments paragraph followed by all-imports paragraph
+fn insert_loose_paragraph_breaks(joined: &str) -> String {
+    let lines: Vec<&str> = joined.split('\n').collect();
+
+    // Split into paragraphs with their start indices.
+    let mut paragraphs: Vec<Vec<usize>> = Vec::new();
+    let mut current: Vec<usize> = Vec::new();
+    for (idx, line) in lines.iter().enumerate() {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(idx);
+        }
+    }
+    if !current.is_empty() {
+        paragraphs.push(current);
+    }
+    if paragraphs.len() < 2 {
+        return joined.to_string();
+    }
+
+    let is_all_imports = |para: &Vec<usize>| -> bool {
+        para.iter().all(|&i| lines[i].trim_start().starts_with("import "))
+    };
+    let is_all_comments = |para: &Vec<usize>| -> bool {
+        para.iter().all(|&i| lines[i].trim_start().starts_with("--"))
+    };
+
+    // Indices (into `lines`) where an extra blank should be inserted BEFORE.
+    let mut extra_before: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for pair in paragraphs.windows(2) {
+        let prev = &pair[0];
+        let cur = &pair[1];
+        let cur_start = cur[0];
+        let prev_imports_cur_comments = is_all_imports(prev) && is_all_comments(cur);
+        let prev_comments_cur_imports = is_all_comments(prev) && is_all_imports(cur);
+        if prev_imports_cur_comments || prev_comments_cur_imports {
+            extra_before.insert(cur_start);
+        }
+    }
+    if extra_before.is_empty() {
+        return joined.to_string();
+    }
+
+    let mut out = String::with_capacity(joined.len() + extra_before.len());
+    for (idx, line) in lines.iter().enumerate() {
+        if extra_before.contains(&idx) {
+            out.push('\n');
+        }
+        out.push_str(line);
+        if idx + 1 < lines.len() {
+            out.push('\n');
+        }
+    }
+    out
+}
+
 fn transform_assertion_paragraphs(block_lines: &[&str]) -> String {
+    // Pre-process: merge standalone `...` lines into the previous assertion
+    // as a trailing ` ...`. elm-format treats
+    //     expr1 == val1
+    //     ...
+    //     expr2 == val2
+    // identically to
+    //     expr1 == val1 ...
+    //     expr2 == val2
+    // The existing chain logic handles the trailing-dots form.
+    let merged_owned: Vec<String>;
+    let block_lines: Vec<&str> = {
+        let mut out: Vec<String> = Vec::with_capacity(block_lines.len());
+        let mut i = 0;
+        let orig = block_lines;
+        while i < orig.len() {
+            let line = orig[i];
+            let trimmed = line.trim();
+            if trimmed == "..." && !out.is_empty() {
+                // Find the last non-blank line in `out` and append ` ...`.
+                let mut last_idx = out.len();
+                while last_idx > 0 && out[last_idx - 1].trim().is_empty() {
+                    last_idx -= 1;
+                }
+                if last_idx > 0 {
+                    let last = &out[last_idx - 1];
+                    let last_trimmed = last.trim();
+                    if !last_trimmed.is_empty() && !last_trimmed.starts_with("--")
+                        && !last_trimmed.ends_with(" ...")
+                    {
+                        out[last_idx - 1] = format!("{} ...", last.trim_end());
+                        // Drop any blank lines between assertion and `...`, and
+                        // drop any blank lines between `...` and the next line,
+                        // so the three lines become one. Skip trailing blanks
+                        // after the `...` line.
+                        while out.len() > last_idx && out.last().unwrap().trim().is_empty() {
+                            out.pop();
+                        }
+                        let mut j = i + 1;
+                        while j < orig.len() && orig[j].trim().is_empty() {
+                            j += 1;
+                        }
+                        i = j;
+                        continue;
+                    }
+                }
+            }
+            out.push(line.to_string());
+            i += 1;
+        }
+        merged_owned = out;
+        merged_owned.iter().map(|s| s.as_str()).collect()
+    };
+    let block_lines: &[&str] = &block_lines;
+
     // If the block contains anything other than pure assertion lines,
     // elm-format does not split adjacent assertions in this block. Emit
     // the block unchanged in that case.
@@ -3546,13 +4486,37 @@ fn transform_assertion_paragraphs(block_lines: &[&str]) -> String {
             continue;
         }
 
-        // Collect a run of adjacent non-blank lines.
+        // Collect a run of adjacent non-blank lines. Extend across blank lines
+        // when the current last line is an assertion ending with ` ...` and the
+        // next non-blank line is also an assertion — elm-format treats this as
+        // a single multi-line operator chain.
         let run_start = i;
         let mut run_end = i;
-        while run_end + 1 < block_lines.len()
-            && !block_lines[run_end + 1].trim().is_empty()
-        {
-            run_end += 1;
+        loop {
+            let next = run_end + 1;
+            if next >= block_lines.len() {
+                break;
+            }
+            if !block_lines[next].trim().is_empty() {
+                run_end = next;
+                continue;
+            }
+            let last_trimmed = block_lines[run_end].trim();
+            if !last_trimmed.ends_with(" ...") {
+                break;
+            }
+            let mut j = next;
+            while j < block_lines.len() && block_lines[j].trim().is_empty() {
+                j += 1;
+            }
+            if j >= block_lines.len() {
+                break;
+            }
+            let next_trimmed = block_lines[j].trim();
+            if next_trimmed.starts_with("--") || !looks_like_assertion(next_trimmed) {
+                break;
+            }
+            run_end = j;
         }
 
         // Check if every line in this run is either a top-level assertion
@@ -3565,6 +4529,9 @@ fn transform_assertion_paragraphs(block_lines: &[&str]) -> String {
         let mut assertion_count = 0usize;
         for k in run_start..=run_end {
             let l = block_lines[k];
+            if l.trim().is_empty() {
+                continue;
+            }
             let indent = l.len() - l.trim_start().len();
             if indent != first_indent {
                 all_valid = false;
@@ -3586,41 +4553,101 @@ fn transform_assertion_paragraphs(block_lines: &[&str]) -> String {
         };
         let is_assertion_run = all_valid && assertion_count >= 1 && last_is_assertion;
 
-        if is_assertion_run {
-            // Split the run into "units": a unit is zero or more consecutive
-            // comment lines followed by one assertion line. Units are
-            // separated by blank lines; within a unit, lines are contiguous.
-            let mut unit_start = run_start;
-            let mut unit_idx: usize = 0;
-            let mut k = run_start;
-            while k <= run_end {
-                let trimmed = block_lines[k].trim();
-                let is_comment = trimmed.starts_with("--");
-                if !is_comment {
-                    if unit_idx == 0 && i > 0 {
-                        out.push('\n');
-                    } else if unit_idx > 0 {
-                        out.push_str("\n\n");
-                    }
-                    for (j, idx) in (unit_start..=k).enumerate() {
-                        if j > 0 {
-                            out.push('\n');
-                        }
-                        let l = block_lines[idx];
-                        if idx == k {
-                            let indent_str = &l[..first_indent];
-                            let content = &l[first_indent..];
-                            let normalized = collapse_spaces_outside_strings(content);
-                            out.push_str(indent_str);
-                            out.push_str(&normalized);
-                        } else {
-                            out.push_str(l);
-                        }
-                    }
-                    unit_idx += 1;
-                    unit_start = k + 1;
+        // If the run's last non-blank line ends with ` ...`, the chain would
+        // be incomplete. elm-format preserves such blocks without chain
+        // reformatting.
+        let run_last_ends_with_dots = {
+            let mut idx = run_end;
+            while idx > run_start && block_lines[idx].trim().is_empty() {
+                idx -= 1;
+            }
+            block_lines[idx].trim().ends_with(" ...")
+        };
+        if is_assertion_run && run_last_ends_with_dots {
+            for (k, idx) in (run_start..=run_end).enumerate() {
+                if i > 0 || k > 0 {
+                    out.push('\n');
                 }
-                k += 1;
+                out.push_str(block_lines[idx]);
+            }
+            i = run_end + 1;
+            continue;
+        }
+        if is_assertion_run {
+            // Group lines into chains. A chain contains an optional run of
+            // comment lines, one assertion, plus any continuation assertions
+            // triggered by a trailing ` ...` on the prior assertion. Chains
+            // are separated by blank lines; within a chain, a single-line
+            // assertion is emitted normally, while a multi-line chain is
+            // joined and split at ` == ` / ` ... ` operators into the
+            // elm-format multi-line form.
+            let mut chains: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
+            let mut cur_comments: Vec<usize> = Vec::new();
+            let mut cur_assertions: Vec<usize> = Vec::new();
+            for k in run_start..=run_end {
+                let trimmed = block_lines[k].trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if trimmed.starts_with("--") {
+                    cur_comments.push(k);
+                } else {
+                    cur_assertions.push(k);
+                    if !trimmed.ends_with(" ...") {
+                        chains.push((
+                            std::mem::take(&mut cur_comments),
+                            std::mem::take(&mut cur_assertions),
+                        ));
+                    }
+                }
+            }
+            if !cur_comments.is_empty() || !cur_assertions.is_empty() {
+                chains.push((cur_comments, cur_assertions));
+            }
+
+            for (chain_idx, (comments, assertions)) in chains.iter().enumerate() {
+                if chain_idx == 0 && i > 0 {
+                    out.push('\n');
+                } else if chain_idx > 0 {
+                    out.push_str("\n\n");
+                }
+                for &ci in comments {
+                    out.push_str(block_lines[ci]);
+                    out.push('\n');
+                }
+                if assertions.len() == 1 {
+                    let l = block_lines[assertions[0]];
+                    let indent_str = &l[..first_indent];
+                    let content = &l[first_indent..];
+                    let normalized = collapse_spaces_outside_strings(content);
+                    let normalized = space_tight_binary_ops(&normalized);
+                    let normalized = space_tight_tuples_lists(&normalized);
+                    out.push_str(indent_str);
+                    out.push_str(&normalized);
+                } else if !assertions.is_empty() {
+                    let joined = assertions
+                        .iter()
+                        .map(|&idx| block_lines[idx].trim())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let joined = collapse_spaces_outside_strings(&joined);
+                    let joined = space_tight_binary_ops(&joined);
+                    let joined = space_tight_tuples_lists(&joined);
+                    let segments = split_at_chain_operators(&joined);
+                    let indent_str = &block_lines[assertions[0]][..first_indent];
+                    let cont_indent: String = std::iter::repeat(' ')
+                        .take(first_indent + 4)
+                        .collect();
+                    out.push_str(indent_str);
+                    if let Some(first) = segments.first() {
+                        out.push_str(first);
+                    }
+                    for seg in segments.iter().skip(1) {
+                        out.push('\n');
+                        out.push_str(&cont_indent);
+                        out.push_str(seg);
+                    }
+                }
             }
         } else {
             for (k, idx) in (run_start..=run_end).enumerate() {
@@ -3640,16 +4667,25 @@ fn is_assertion_only_paragraph(para: &[String]) -> bool {
     if non_empty.len() < 2 {
         return false;
     }
+    let mut assertion_count = 0usize;
     for line in &non_empty {
         // Must start at column 0 (no leading whitespace beyond what was stripped).
         if line.starts_with(' ') || line.starts_with('\t') {
             return false;
         }
-        if !looks_like_assertion(line.trim()) {
+        let trimmed = line.trim();
+        // Allow `--` line comments mixed in, as long as at least one
+        // line is a real assertion. elm-format treats a `-- comment` line
+        // as attached to the following assertion.
+        if trimmed.starts_with("--") {
+            continue;
+        }
+        if !looks_like_assertion(trimmed) {
             return false;
         }
+        assertion_count += 1;
     }
-    true
+    assertion_count >= 1
 }
 
 fn looks_like_assertion(trimmed: &str) -> bool {
@@ -3698,8 +4734,24 @@ fn looks_like_simple_expr_line(trimmed: &str) -> bool {
         Some(c) => c,
         None => return false,
     };
-    if !(first.is_ascii_alphabetic() || first == '_' || first == '(' || first == '[') {
+    if !(first.is_ascii_alphabetic()
+        || first.is_ascii_digit()
+        || first == '_'
+        || first == '('
+        || first == '['
+        || first == '\''
+        || first == '"'
+        || first == '-')
+    {
         return false;
+    }
+    // `-` only allowed as a leading negation when followed by a digit or paren.
+    if first == '-' {
+        let second = trimmed.chars().nth(1);
+        match second {
+            Some(c) if c.is_ascii_digit() || c == '(' => {}
+            _ => return false,
+        }
     }
     // Reject keyword-led lines (they are parts of a larger expression).
     let first_word_end = trimmed
@@ -3712,10 +4764,11 @@ fn looks_like_simple_expr_line(trimmed: &str) -> bool {
         | "effect" | "infix" => return false,
         _ => {}
     }
-    // Must have balanced parens/brackets, counting string literals.
+    // Must have balanced parens/brackets, counting string/char literals.
     let mut paren = 0i32;
     let mut bracket = 0i32;
     let mut in_str = false;
+    let mut in_char = false;
     let mut esc = false;
     for c in trimmed.chars() {
         if esc {
@@ -3730,8 +4783,17 @@ fn looks_like_simple_expr_line(trimmed: &str) -> bool {
             }
             continue;
         }
+        if in_char {
+            if c == '\\' {
+                esc = true;
+            } else if c == '\'' {
+                in_char = false;
+            }
+            continue;
+        }
         match c {
             '"' => in_str = true,
+            '\'' => in_char = true,
             '(' => paren += 1,
             ')' => {
                 paren -= 1;
@@ -3749,7 +4811,7 @@ fn looks_like_simple_expr_line(trimmed: &str) -> bool {
             _ => {}
         }
     }
-    if paren != 0 || bracket != 0 || in_str {
+    if paren != 0 || bracket != 0 || in_str || in_char {
         return false;
     }
     // Must not end with an operator character (continuation to next line).
@@ -3762,12 +4824,360 @@ fn looks_like_simple_expr_line(trimmed: &str) -> bool {
     true
 }
 
+/// Add spaces around tight binary operators (`1/2` → `1 / 2`, `2^3` → `2 ^ 3`)
+/// outside of string and char literals. Does NOT modify text inside `-- comments`.
+/// Conservative: only applies when the operator is flanked by identifier/digit
+/// characters on both sides.
+fn space_tight_binary_ops(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len() + 8);
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut in_line_comment = false;
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_line_comment {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if esc {
+            out.push(c);
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if c == '\\' {
+                esc = true;
+            } else if c == '\'' {
+                in_char = false;
+            }
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '"' {
+            in_str = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '\'' {
+            in_char = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        // Detect start of a line comment (`--`).
+        if c == '-' && i + 1 < chars.len() && chars[i + 1] == '-' {
+            in_line_comment = true;
+            out.push_str("--");
+            i += 2;
+            continue;
+        }
+        // `//` integer division.
+        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '/'
+            && i > 0 && i + 2 < chars.len()
+            && is_ident(chars[i - 1]) && is_ident(chars[i + 2])
+        {
+            out.push(' ');
+            out.push_str("//");
+            out.push(' ');
+            i += 2;
+            continue;
+        }
+        // Single `/` or `^`.
+        if matches!(c, '/' | '^')
+            && i > 0 && i + 1 < chars.len()
+            && is_ident(chars[i - 1]) && is_ident(chars[i + 1])
+        {
+            // Guard against `//` which was handled above.
+            if c == '/' && chars[i + 1] == '/' {
+                out.push(c);
+                i += 1;
+                continue;
+            }
+            out.push(' ');
+            out.push(c);
+            out.push(' ');
+            i += 1;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+fn split_at_chain_operators(s: &str) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut positions: Vec<usize> = Vec::new();
+    let mut in_str = false;
+    let mut in_ch = false;
+    let mut esc = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_ch {
+            if c == '\\' {
+                esc = true;
+            } else if c == '\'' {
+                in_ch = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if c == '\'' {
+            in_ch = true;
+            i += 1;
+            continue;
+        }
+        if c == ' '
+            && i + 3 < chars.len()
+            && chars[i + 1] == '='
+            && chars[i + 2] == '='
+            && chars[i + 3] == ' '
+        {
+            positions.push(i);
+            i += 4;
+            continue;
+        }
+        if c == ' '
+            && i + 4 < chars.len()
+            && chars[i + 1] == '.'
+            && chars[i + 2] == '.'
+            && chars[i + 3] == '.'
+            && chars[i + 4] == ' '
+        {
+            positions.push(i);
+            i += 5;
+            continue;
+        }
+        i += 1;
+    }
+
+    let mut segments = Vec::new();
+    let mut last = 0;
+    for &pos in &positions {
+        let seg: String = chars[last..pos].iter().collect();
+        segments.push(seg.trim().to_string());
+        last = pos + 1;
+    }
+    let tail: String = chars[last..].iter().collect();
+    segments.push(tail.trim().to_string());
+    segments
+}
+
+fn space_tight_tuples_lists(s: &str) -> String {
+    struct Frame {
+        out_pos: usize,
+        kind: char,
+        tight: bool,
+        has_content: bool,
+        has_comma: bool,
+        has_non_comma_content: bool,
+    }
+    let input: Vec<char> = s.chars().collect();
+    let mut out: Vec<char> = Vec::with_capacity(input.len() + 8);
+    let mut frames: Vec<Frame> = Vec::new();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut in_line_comment = false;
+
+    let mut i = 0;
+    while i < input.len() {
+        let c = input[i];
+
+        if in_line_comment {
+            if c == '\n' {
+                in_line_comment = false;
+            }
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if esc {
+            out.push(c);
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if c == '\\' {
+                esc = true;
+            } else if c == '\'' {
+                in_char = false;
+            }
+            out.push(c);
+            i += 1;
+            continue;
+        }
+
+        if c == '-' && i + 1 < input.len() && input[i + 1] == '-' {
+            in_line_comment = true;
+            out.push('-');
+            out.push('-');
+            i += 2;
+            continue;
+        }
+        if c == '"' {
+            in_str = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '\'' {
+            in_char = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+
+        if c == '(' || c == '[' {
+            let next = input.get(i + 1).copied();
+            let tight = !matches!(next, Some(' ') | Some('\n') | Some('\t'));
+            frames.push(Frame {
+                out_pos: out.len(),
+                kind: c,
+                tight,
+                has_content: false,
+                has_comma: false,
+                has_non_comma_content: false,
+            });
+            out.push(c);
+            i += 1;
+            continue;
+        }
+
+        if c == ')' || c == ']' {
+            if let Some(frame) = frames.pop() {
+                let expected = if c == ')' { '(' } else { '[' };
+                if frame.kind == expected {
+                    let should_expand = if c == ']' {
+                        frame.tight && frame.has_content
+                    } else {
+                        frame.tight && frame.has_comma && frame.has_non_comma_content
+                    };
+                    let should_tighten = c == ')'
+                        && !frame.tight
+                        && !frame.has_comma
+                        && frame.has_content;
+                    if should_expand {
+                        out.insert(frame.out_pos + 1, ' ');
+                        out.push(' ');
+                    } else if should_tighten {
+                        if out.get(frame.out_pos + 1).copied() == Some(' ') {
+                            out.remove(frame.out_pos + 1);
+                        }
+                        while out.last().copied() == Some(' ') {
+                            out.pop();
+                        }
+                    }
+                }
+            }
+            out.push(c);
+            i += 1;
+            continue;
+        }
+
+        if c == ',' {
+            if let Some(top) = frames.last_mut() {
+                top.has_content = true;
+                top.has_comma = true;
+            }
+            out.push(c);
+            let next = input.get(i + 1).copied();
+            if let Some(n) = next {
+                if n.is_ascii_alphanumeric()
+                    || n == '_'
+                    || n == '('
+                    || n == '['
+                    || n == '{'
+                    || n == '\''
+                    || n == '"'
+                    || n == '-'
+                {
+                    out.push(' ');
+                }
+            }
+            i += 1;
+            continue;
+        }
+
+        if !c.is_whitespace() {
+            if let Some(top) = frames.last_mut() {
+                top.has_content = true;
+                top.has_non_comma_content = true;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+
+    out.iter().collect()
+}
+
 fn collapse_spaces_outside_strings(s: &str) -> String {
+    // Track delimiter "style" — whether the opener was followed by a space.
+    // `(x  )` collapses to `(x)`, but `[ 1, 2 ]` preserves the inner space.
+    #[derive(Clone, Copy)]
+    enum Style { Tight, Spaced }
+    let chars: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(s.len());
     let mut in_string = false;
     let mut escape = false;
     let mut prev_space = false;
-    for c in s.chars() {
+    let mut in_line_comment = false;
+    let mut style_stack: Vec<Style> = Vec::new();
+    for (idx, &c) in chars.iter().enumerate() {
+        if in_line_comment {
+            out.push(c);
+            continue;
+        }
         if escape {
             out.push(c);
             escape = false;
@@ -3781,19 +5191,50 @@ fn collapse_spaces_outside_strings(s: &str) -> String {
             }
             out.push(c);
             prev_space = false;
-        } else if c == '"' {
+            continue;
+        }
+        if c == '"' {
             in_string = true;
             out.push(c);
             prev_space = false;
-        } else if c == ' ' {
+            continue;
+        }
+        if c == '-' && chars.get(idx + 1).copied() == Some('-') {
+            in_line_comment = true;
+            out.push(c);
+            prev_space = false;
+            continue;
+        }
+        if c == ' ' {
             if !prev_space {
                 out.push(c);
             }
             prev_space = true;
-        } else {
+            continue;
+        }
+        if matches!(c, '(' | '[' | '{') {
+            // Peek at next char to classify opener style.
+            let next = chars.get(idx + 1).copied();
+            let style = match next {
+                Some(' ') => Style::Spaced,
+                _ => Style::Tight,
+            };
+            style_stack.push(style);
             out.push(c);
             prev_space = false;
+            continue;
         }
+        if matches!(c, ')' | ']' | '}') {
+            let style = style_stack.pop().unwrap_or(Style::Spaced);
+            if prev_space && matches!(style, Style::Tight) {
+                out.pop();
+            }
+            out.push(c);
+            prev_space = false;
+            continue;
+        }
+        out.push(c);
+        prev_space = false;
     }
     out
 }
@@ -3808,6 +5249,7 @@ fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
     let mut count_non_4_aligned = 0usize;
     let mut has_compact_syntax = false;
     let mut has_single_line_decl = false;
+    let mut has_unsorted_import = false;
     for &line in block_lines {
         if line.trim().is_empty() {
             continue;
@@ -3816,13 +5258,19 @@ fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
         if leading > 4 && (leading - 4) % 4 != 0 {
             count_non_4_aligned += 1;
         }
+        // Imports with an out-of-order `exposing` list get re-sorted by
+        // elm-format. Flag the block for reformat so the import re-parses
+        // through the module parser which normalizes exposing order.
+        if leading == 4 && import_has_unsorted_exposing(line.trim()) {
+            has_unsorted_import = true;
+        }
         // Check for compact list syntax [x,y] or [x] or tuple syntax (x,y)
         // that elm-format would normalize to [ x, y ] / [ x ] / ( x, y ).
         let trimmed = line.trim();
         if trimmed.contains('[') && trimmed.contains(']') {
             // Look for `[` immediately followed by a literal or identifier
             // start — the distinguishing marker of a compact list/tuple.
-            if trimmed.contains("[\"") || trimmed.contains("[(")
+            if trimmed.contains("[\"") || trimmed.contains("[(") || trimmed.contains("['")
                 || trimmed.contains("[0") || trimmed.contains("[1")
                 || trimmed.contains("[2") || trimmed.contains("[3")
                 || trimmed.contains("[4") || trimmed.contains("[5")
@@ -3833,10 +5281,10 @@ fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
             }
         }
         if trimmed.contains('(') && trimmed.contains(',') && trimmed.contains(')') {
-            if trimmed.contains("(0") || trimmed.contains("(1")
-                || trimmed.contains("(2") || trimmed.contains("(3")
-                || trimmed.contains("(\"")
-            {
+            // Match `(X` where X is a literal/identifier start — the
+            // distinguishing marker of a compact tuple. A space after `(`
+            // means the tuple is already normalized; skip in that case.
+            if has_compact_tuple(trimmed) {
                 has_compact_syntax = true;
             }
         }
@@ -3846,9 +5294,558 @@ fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
         if leading == 4 && is_single_line_value_decl(trimmed) {
             has_single_line_decl = true;
         }
+        // Single-line type / type-alias declaration at base indent. elm-format
+        // always expands these to multi-line form.
+        if leading == 4
+            && (trimmed.starts_with("type alias ") || trimmed.starts_with("type "))
+            && trimmed.contains(" = ")
+        {
+            has_single_line_decl = true;
+        }
+        // Single-line doc-comment `{-| ... -}` on its own line inside a code
+        // block. elm-format splits these into multi-line form.
+        if leading == 4
+            && trimmed.starts_with("{-|")
+            && trimmed.ends_with("-}")
+            && trimmed.len() > 5
+        {
+            has_single_line_decl = true;
+        }
+        // Tight operator (no space around) like `3^2`. elm-format always
+        // inserts spaces around infix operators.
+        if has_tight_binary_op(trimmed) {
+            has_compact_syntax = true;
+        }
+        // A line that is a single parenthesized operator expression with no
+        // commas, like `(true || false)`. elm-format strips the redundant
+        // outer parens on reformat.
+        if leading == 4 && is_redundant_paren_expr(trimmed) {
+            has_compact_syntax = true;
+        }
+        // A hex literal whose width doesn't match elm-format's padding (2, 4,
+        // 8, or 16 digits). Flag for reformat so the literal gets normalized.
+        if line_has_unpadded_hex(trimmed) {
+            has_compact_syntax = true;
+        }
+        // A float literal in scientific form with no decimal point (e.g.
+        // `1e-42`). elm-format normalizes to `1.0e-42`.
+        if line_has_sci_float_without_dot(trimmed) {
+            has_compact_syntax = true;
+        }
     }
     let has_indent_issues = count_non_4_aligned > 0;
-    has_indent_issues || has_compact_syntax || has_single_line_decl
+    let has_unseparated_assertions = block_has_unseparated_assertions(block_lines);
+    let has_single_line_if = block_has_single_line_if(block_lines);
+    has_indent_issues
+        || has_compact_syntax
+        || has_single_line_decl
+        || has_unsorted_import
+        || has_unseparated_assertions
+        || has_single_line_if
+}
+
+/// Detect a code block containing a line with a single-line `if ... then ... else ...`
+/// expression. elm-format always breaks `if-then-else` across multiple lines, so
+/// such blocks need reformat.
+fn block_has_single_line_if(block_lines: &[&str]) -> bool {
+    for &line in block_lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        if leading < 4 {
+            continue;
+        }
+        if line_has_single_line_if_then_else(trimmed) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when the trimmed line contains both ` then ` and ` else ` outside
+/// string/char literals and comments — markers of an inline if-then-else that
+/// elm-format breaks across multiple lines.
+fn line_has_single_line_if_then_else(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut in_triple = false;
+    let mut esc = false;
+    let mut i = 0;
+    let mut saw_then = false;
+    let mut saw_else = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_triple {
+            if i + 2 < bytes.len() && &bytes[i..i + 3] == b"\"\"\"" {
+                in_triple = false;
+                i += 3;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if b == b'\\' { esc = true; }
+            else if b == b'"' { in_str = false; }
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if b == b'\\' { esc = true; }
+            else if b == b'\'' { in_char = false; }
+            i += 1;
+            continue;
+        }
+        if b == b'-' && i + 1 < bytes.len() && bytes[i + 1] == b'-' {
+            // line comment — stop scanning.
+            break;
+        }
+        if i + 2 < bytes.len() && &bytes[i..i + 3] == b"\"\"\"" {
+            in_triple = true;
+            i += 3;
+            continue;
+        }
+        if b == b'"' { in_str = true; i += 1; continue; }
+        if b == b'\'' { in_char = true; i += 1; continue; }
+        // Match " then " and " else " as whole keywords.
+        if i + 6 <= bytes.len() && &bytes[i..i + 6] == b" then " {
+            saw_then = true;
+        }
+        if i + 6 <= bytes.len() && &bytes[i..i + 6] == b" else " {
+            saw_else = true;
+        }
+        i += 1;
+    }
+    saw_then && saw_else
+}
+
+/// Detect a code block containing multiple assertion-shaped lines with no
+/// blank-line separation between them. elm-format renders each assertion as
+/// its own paragraph separated by blank lines, so such blocks need reformat.
+/// Only considers runs of 2+ consecutive assertion lines (possibly interleaved
+/// with `--` comments that attach to the following assertion).
+fn block_has_unseparated_assertions(block_lines: &[&str]) -> bool {
+    let mut run_assert_count = 0usize;
+    for &line in block_lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if run_assert_count >= 2 {
+                return true;
+            }
+            run_assert_count = 0;
+            continue;
+        }
+        // Only consider lines at the 4-space base indent (code-block content).
+        let leading = line.len() - line.trim_start().len();
+        if leading != 4 {
+            if run_assert_count >= 2 {
+                return true;
+            }
+            run_assert_count = 0;
+            continue;
+        }
+        if trimmed.starts_with("--") {
+            // `-- comment` attaches to the following assertion; skip without
+            // resetting the run.
+            continue;
+        }
+        if looks_like_assertion(trimmed) {
+            run_assert_count += 1;
+        } else {
+            if run_assert_count >= 2 {
+                return true;
+            }
+            run_assert_count = 0;
+        }
+    }
+    run_assert_count >= 2
+}
+
+/// Detect a line that is a single parenthesized operator expression like
+/// `(true || false)` or `(a + b)` — where the outer parens are redundant
+/// at top level. Conservative: requires a `(` at the very start of the
+/// trimmed line, a matching `)` at the end, no commas at the outer level
+/// (so tuples are excluded), and at least one binary-operator character
+/// at the outer level between the parens.
+fn is_redundant_paren_expr(trimmed: &str) -> bool {
+    let bytes = trimmed.as_bytes();
+    if bytes.len() < 4 || bytes[0] != b'(' || *bytes.last().unwrap() != b')' {
+        return false;
+    }
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut saw_outer_op = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        if esc { esc = false; continue; }
+        if in_str {
+            if b == b'\\' { esc = true; }
+            else if b == b'"' { in_str = false; }
+            continue;
+        }
+        if in_char {
+            if b == b'\\' { esc = true; }
+            else if b == b'\'' { in_char = false; }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'\'' => in_char = true,
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 && i != bytes.len() - 1 {
+                    // parens closed before end — not a fully-wrapped expression
+                    return false;
+                }
+            }
+            b',' if depth == 1 => return false,
+            b'|' | b'&' | b'+' | b'*' | b'/' | b'<' | b'>' | b'=' if depth == 1 => {
+                saw_outer_op = true;
+            }
+            b'-' if depth == 1 && i > 1 => {
+                let prev = bytes[i - 1];
+                if prev == b' ' { saw_outer_op = true; }
+            }
+            _ => {}
+        }
+    }
+    depth == 0 && saw_outer_op
+}
+
+/// Detect a hex literal whose digit count is not one of elm-format's
+/// canonical widths (2, 4, 8, or 16). Scans for `0x[0-9A-Fa-f]+` tokens
+/// outside strings and char literals.
+fn line_has_unpadded_hex(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if b == b'\\' { esc = true; }
+            else if b == b'"' { in_str = false; }
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if b == b'\\' { esc = true; }
+            else if b == b'\'' { in_char = false; }
+            i += 1;
+            continue;
+        }
+        if b == b'"' { in_str = true; i += 1; continue; }
+        if b == b'\'' { in_char = true; i += 1; continue; }
+        // Look for `0x` not preceded by an identifier character.
+        if b == b'0' && i + 1 < bytes.len() && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X') {
+            let prev_ok = if i == 0 {
+                true
+            } else {
+                let p = bytes[i - 1];
+                !(p.is_ascii_alphanumeric() || p == b'_')
+            };
+            if prev_ok {
+                let start = i + 2;
+                let mut j = start;
+                while j < bytes.len() && bytes[j].is_ascii_hexdigit() {
+                    j += 1;
+                }
+                let width = j - start;
+                if width > 0 && width != 2 && width != 4 && width != 8 && width != 16 {
+                    return true;
+                }
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Detect a compact tuple like `(Float, Float)` or `(1,2)` where `(` is
+/// immediately followed by a literal / identifier character (no space) and
+/// at least one comma at outer depth closes into a `)`. elm-format
+/// normalizes to `( Float, Float )`.
+fn has_compact_tuple(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if b == b'\\' { esc = true; }
+            else if b == b'"' { in_str = false; }
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if b == b'\\' { esc = true; }
+            else if b == b'\'' { in_char = false; }
+            i += 1;
+            continue;
+        }
+        if b == b'"' { in_str = true; i += 1; continue; }
+        if b == b'\'' { in_char = true; i += 1; continue; }
+        if b == b'(' && i + 1 < bytes.len() {
+            let next = bytes[i + 1];
+            // A space inside `( ` means already normalized; not compact.
+            if next == b' ' || next == b')' {
+                i += 1;
+                continue;
+            }
+            // Scan for a matching `)` at the same depth, tracking commas.
+            let mut depth = 1i32;
+            let mut j = i + 1;
+            let mut inner_in_str = false;
+            let mut inner_in_char = false;
+            let mut inner_esc = false;
+            let mut found_comma = false;
+            while j < bytes.len() && depth > 0 {
+                let c = bytes[j];
+                if inner_esc {
+                    inner_esc = false;
+                    j += 1;
+                    continue;
+                }
+                if inner_in_str {
+                    if c == b'\\' { inner_esc = true; }
+                    else if c == b'"' { inner_in_str = false; }
+                    j += 1;
+                    continue;
+                }
+                if inner_in_char {
+                    if c == b'\\' { inner_esc = true; }
+                    else if c == b'\'' { inner_in_char = false; }
+                    j += 1;
+                    continue;
+                }
+                match c {
+                    b'"' => inner_in_str = true,
+                    b'\'' => inner_in_char = true,
+                    b'(' | b'[' | b'{' => depth += 1,
+                    b')' | b']' | b'}' => depth -= 1,
+                    b',' if depth == 1 => found_comma = true,
+                    _ => {}
+                }
+                j += 1;
+            }
+            if found_comma && j > 0 {
+                // Check that closing `)` isn't preceded by a space (`... )`).
+                // If there's a space before `)` the tuple is already normalized.
+                if bytes[j - 1] == b')' {
+                    let before_close = if j >= 2 { bytes[j - 2] } else { b' ' };
+                    if before_close != b' ' {
+                        return true;
+                    }
+                }
+            }
+            i = j;
+            continue;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Detect a float literal in scientific form without a decimal point, e.g.
+/// `1e-42` or `6e23`. elm-format normalizes these to `1.0e-42` / `6.0e23`.
+fn line_has_sci_float_without_dot(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if b == b'\\' { esc = true; }
+            else if b == b'"' { in_str = false; }
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if b == b'\\' { esc = true; }
+            else if b == b'\'' { in_char = false; }
+            i += 1;
+            continue;
+        }
+        if b == b'"' { in_str = true; i += 1; continue; }
+        if b == b'\'' { in_char = true; i += 1; continue; }
+        // Look for a digit that starts a numeric literal.
+        if b.is_ascii_digit() {
+            let prev_ok = if i == 0 {
+                true
+            } else {
+                let p = bytes[i - 1];
+                !(p.is_ascii_alphanumeric() || p == b'_' || p == b'.')
+            };
+            if prev_ok {
+                let start = i;
+                let mut j = i;
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    j += 1;
+                }
+                let has_dot = j < bytes.len() && bytes[j] == b'.';
+                if has_dot {
+                    // Skip `.digits...`
+                    j += 1;
+                    while j < bytes.len() && bytes[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                }
+                let has_exp = j < bytes.len() && (bytes[j] == b'e' || bytes[j] == b'E');
+                if has_exp && !has_dot {
+                    // Check that a digit follows (possibly after +/-).
+                    let mut k = j + 1;
+                    if k < bytes.len() && (bytes[k] == b'+' || bytes[k] == b'-') {
+                        k += 1;
+                    }
+                    if k < bytes.len() && bytes[k].is_ascii_digit() {
+                        // Don't flag hex literals like `0x1e` (handled elsewhere).
+                        // Here our start was at digit; if digits were `0` then
+                        // `x` then hex — but we already separated hex via `0x` prefix.
+                        let _ = start;
+                        return true;
+                    }
+                }
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Detect tight infix operators like `3^2` or `a^b` with no spaces.
+/// Conservative: checks for `^` operator specifically, only when flanked
+/// by identifier/digit characters on both sides (and not inside a string).
+fn has_tight_binary_op(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut in_str = false;
+    let mut escape = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if escape {
+            escape = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if b == b'\\' {
+                escape = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'^' && i > 0 && i + 1 < bytes.len() {
+            let prev = bytes[i - 1];
+            let next = bytes[i + 1];
+            let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+            if is_ident(prev) && is_ident(next) {
+                return true;
+            }
+        }
+        if b == b'/' && i > 0 && i + 1 < bytes.len() {
+            let prev = bytes[i - 1];
+            let next = bytes[i + 1];
+            // Skip over `//` (integer division) and line comments.
+            // Handle both single `/` and `//` as tight operators.
+            let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+            if next == b'/' {
+                // `//` integer division: look at char before and char after `//`.
+                if i + 2 < bytes.len() {
+                    let after = bytes[i + 2];
+                    if is_ident(prev) && is_ident(after) {
+                        return true;
+                    }
+                }
+                i += 2;
+                continue;
+            }
+            if is_ident(prev) && is_ident(next) {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Returns true if `line` is an `import ... exposing (a, b, c)` line whose
+/// exposing list items are not alphabetically sorted.
+fn import_has_unsorted_exposing(line: &str) -> bool {
+    let t = line.trim();
+    if !t.starts_with("import ") {
+        return false;
+    }
+    let exp_idx = match t.find(" exposing (") {
+        Some(i) => i,
+        None => return false,
+    };
+    let rest = &t[exp_idx + " exposing (".len()..];
+    let close_idx = match rest.rfind(')') {
+        Some(i) => i,
+        None => return false,
+    };
+    let inner = &rest[..close_idx];
+    // Ignore wildcard exposing; don't try to handle nested parentheses
+    // (e.g. `Type(..)`) — item key is the head before any `(`.
+    if inner.trim() == ".." {
+        return false;
+    }
+    let items: Vec<String> = inner
+        .split(',')
+        .map(|s| {
+            let s = s.trim();
+            let head = s.split('(').next().unwrap_or(s).trim();
+            head.to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    if items.len() < 2 {
+        return false;
+    }
+    let mut sorted = items.clone();
+    sorted.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    items != sorted
 }
 
 /// Detect `name = expr` on a single line, where expr is non-empty and the
@@ -3937,6 +5934,35 @@ fn try_reformat_code_block(block_lines: &[&str]) -> Option<String> {
 
     let raw_code = raw_lines.join("\n");
 
+    // If the block already begins with a `module` declaration, use it
+    // directly as the wrapper (don't double-wrap).
+    let trimmed_raw = raw_code.trim_start();
+    if trimmed_raw.starts_with("module ") || trimmed_raw.starts_with("port module ")
+        || trimmed_raw.starts_with("effect module ")
+    {
+        if let Some(result) = try_parse_and_format_full_module(&raw_code) {
+            // Re-indent every non-blank line with the 4-space doc-code prefix.
+            // Inside a markdown code block, elm-format's Cheapskate renderer
+            // collapses runs of blank lines to a single blank line, so skip
+            // consecutive blank lines as we reindent.
+            let mut out_lines: Vec<String> = Vec::new();
+            let mut prev_blank = false;
+            for l in result.split('\n') {
+                if l.is_empty() {
+                    if prev_blank {
+                        continue;
+                    }
+                    prev_blank = true;
+                    out_lines.push(String::new());
+                } else {
+                    prev_blank = false;
+                    out_lines.push(format!("    {}", l));
+                }
+            }
+            return Some(out_lines.join("\n"));
+        }
+    }
+
     // First try: parse as a full module with declarations.
     let wrapped = format!("module DocTemp__ exposing (..)\n\n\n{}\n", raw_code);
     if let Some(result) = try_parse_and_format_module(&wrapped) {
@@ -3956,6 +5982,93 @@ fn try_reformat_code_block(block_lines: &[&str]) -> Option<String> {
         let wrapped_decl = format!("module DocTemp__ exposing (..)\n\n\n{}\n", para_text);
         if let Some(result) = try_parse_and_format_module_raw(&wrapped_decl) {
             formatted_paragraphs.push(result);
+            continue;
+        }
+
+        // If the paragraph consists entirely of assertion-shaped lines, parse
+        // each line as its own expression and render them as separate top-level
+        // expressions. This must run BEFORE whole-paragraph expression parsing
+        // because consecutive assertion lines like `1 == 1\n0 == 0` would
+        // otherwise parse as function application (`1 == 1` applied to
+        // `0 == 0`) and render as a single expression.
+        //
+        // A line starting with `-<digit/paren>` is a binary-subtraction
+        // continuation of the previous expression, so it is *appended* to the
+        // current accumulator rather than starting a new standalone expression.
+        // This matches elm-format's behavior: `14 / 4 == 3.5\n-1 / 4 == -0.25`
+        // parses as one expression `14 / 4 == 3.5 - 1 / 4 == -0.25`.
+        let try_per_line = is_assertion_only_paragraph(para) && {
+            let mut per_line_results: Vec<String> = Vec::new();
+            let mut pending_comments: Vec<String> = Vec::new();
+            let mut current_accum: Option<String> = None;
+            let mut all_ok = true;
+            let flush_accum = |accum: Option<String>,
+                               results: &mut Vec<String>,
+                               pending: &mut Vec<String>|
+             -> bool {
+                let Some(text) = accum else { return true; };
+                let wrapped = format!(
+                    "module DocTemp__ exposing (..)\n\n\ndocTemp__ =\n{}\n",
+                    text
+                );
+                match try_parse_and_format_expr(&wrapped) {
+                    Some(r) => {
+                        let combined = if pending.is_empty() {
+                            r
+                        } else {
+                            let mut s = pending.join("\n");
+                            s.push('\n');
+                            s.push_str(&r);
+                            pending.clear();
+                            s
+                        };
+                        results.push(combined);
+                        true
+                    }
+                    None => false,
+                }
+            };
+            for line in para {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let trimmed = line.trim();
+                if trimmed.starts_with("--") {
+                    pending_comments.push(trimmed.to_string());
+                    continue;
+                }
+                let is_minus_cont = trimmed
+                    .strip_prefix('-')
+                    .is_some_and(|r| r.chars().next().is_some_and(|c| c.is_ascii_digit() || c == '('));
+                if is_minus_cont && current_accum.is_some() {
+                    let cur = current_accum.as_mut().unwrap();
+                    cur.push('\n');
+                    cur.push_str("    ");
+                    cur.push_str(trimmed);
+                } else {
+                    if !flush_accum(current_accum.take(), &mut per_line_results, &mut pending_comments) {
+                        all_ok = false;
+                        break;
+                    }
+                    current_accum = Some(format!("    {}", trimmed));
+                }
+            }
+            if all_ok {
+                if !flush_accum(current_accum, &mut per_line_results, &mut pending_comments) {
+                    all_ok = false;
+                }
+            }
+            if !pending_comments.is_empty() {
+                per_line_results.push(pending_comments.join("\n"));
+            }
+            if all_ok && !per_line_results.is_empty() {
+                formatted_paragraphs.push(per_line_results.join("\n\n"));
+                true
+            } else {
+                false
+            }
+        };
+        if try_per_line {
             continue;
         }
 
@@ -3981,12 +6094,20 @@ fn try_reformat_code_block(block_lines: &[&str]) -> Option<String> {
         // Third try: if every non-empty line in this paragraph looks like an
         // independent assertion (`expr == value`), parse each line as its own
         // expression and join with blank lines. elm-format renders these as
-        // separate "top-level" expressions.
+        // separate "top-level" expressions. A leading `-- comment` line
+        // attaches to the following assertion (no blank between them).
         if is_assertion_only_paragraph(para) {
             let mut per_line_results: Vec<String> = Vec::new();
+            let mut pending_comments: Vec<String> = Vec::new();
             let mut all_ok = true;
             for line in para {
                 if line.trim().is_empty() {
+                    continue;
+                }
+                let trimmed = line.trim();
+                if trimmed.starts_with("--") {
+                    // Queue the comment to attach to the next assertion.
+                    pending_comments.push(trimmed.to_string());
                     continue;
                 }
                 let wrapped_line = format!(
@@ -3994,12 +6115,27 @@ fn try_reformat_code_block(block_lines: &[&str]) -> Option<String> {
                     line
                 );
                 match try_parse_and_format_expr(&wrapped_line) {
-                    Some(r) => per_line_results.push(r),
+                    Some(r) => {
+                        let combined = if pending_comments.is_empty() {
+                            r
+                        } else {
+                            let mut s = pending_comments.join("\n");
+                            s.push('\n');
+                            s.push_str(&r);
+                            pending_comments.clear();
+                            s
+                        };
+                        per_line_results.push(combined);
+                    }
                     None => {
                         all_ok = false;
                         break;
                     }
                 }
+            }
+            // Any trailing orphan comments attach as their own block.
+            if !pending_comments.is_empty() {
+                per_line_results.push(pending_comments.join("\n"));
             }
             if all_ok && !per_line_results.is_empty() {
                 formatted_paragraphs.push(per_line_results.join("\n\n"));
@@ -4007,12 +6143,39 @@ fn try_reformat_code_block(block_lines: &[&str]) -> Option<String> {
             }
         }
 
+        // If the paragraph contains a triple-quoted string, it's probably
+        // hard to parse as a single decl/expr but is still valid Elm in situ.
+        // Keep it verbatim and continue, so other paragraphs can still be
+        // reformatted.
+        if para.iter().any(|l| l.contains("\"\"\"")) {
+            formatted_paragraphs.push(para_text);
+            continue;
+        }
+
         // Can't parse this paragraph — bail out entirely.
         return None;
     }
 
-    // Join paragraphs with blank lines and re-indent with 4 spaces.
-    let joined = formatted_paragraphs.join("\n\n");
+    // Join paragraphs with blank lines. When a paragraph begins with a line
+    // comment (`--`) and the previous paragraph consists of imports, insert
+    // an extra blank line between them — elm-format renders this as a loose
+    // separation.
+    let mut joined = String::new();
+    for (idx, para_text) in formatted_paragraphs.iter().enumerate() {
+        if idx > 0 {
+            let prev_para = &paragraphs[idx - 1];
+            let cur_para = &paragraphs[idx];
+            let sep = if paragraph_is_all_imports(prev_para)
+                && paragraph_starts_with_line_comment(cur_para)
+            {
+                "\n\n\n"
+            } else {
+                "\n\n"
+            };
+            joined.push_str(sep);
+        }
+        joined.push_str(para_text);
+    }
     let mut output = String::new();
     for (idx, line) in joined.split('\n').enumerate() {
         if idx > 0 {
@@ -4027,6 +6190,32 @@ fn try_reformat_code_block(block_lines: &[&str]) -> Option<String> {
     }
 
     Some(output)
+}
+
+fn paragraph_is_all_imports(para: &[String]) -> bool {
+    let mut saw = false;
+    for line in para {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if !t.starts_with("import ") {
+            return false;
+        }
+        saw = true;
+    }
+    saw
+}
+
+fn paragraph_starts_with_line_comment(para: &[String]) -> bool {
+    for line in para {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        return t.starts_with("--");
+    }
+    false
 }
 
 /// Split raw lines into paragraphs separated by blank lines.
@@ -4047,7 +6236,30 @@ fn split_into_paragraphs(lines: &[String]) -> Vec<Vec<String>> {
     if !current.is_empty() {
         paragraphs.push(current);
     }
-    paragraphs
+
+    // Merge consecutive paragraphs where the next paragraph's first line
+    // begins with `-<digit/paren>`. elm-format parses the leading `-` as a
+    // binary subtraction continuation of the previous paragraph's expression,
+    // so the blank line between them is effectively ignored.
+    let mut merged: Vec<Vec<String>> = Vec::new();
+    for para in paragraphs {
+        let is_minus_continuation = para.first().is_some_and(|first| {
+            let t = first.trim();
+            if let Some(rest) = t.strip_prefix('-') {
+                rest.chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit() || c == '(')
+            } else {
+                false
+            }
+        });
+        if is_minus_continuation && !merged.is_empty() {
+            merged.last_mut().unwrap().extend(para);
+        } else {
+            merged.push(para);
+        }
+    }
+    merged
 }
 
 /// Try to parse source as a module and extract formatted declarations.
@@ -4073,23 +6285,67 @@ fn try_parse_and_format_module(wrapped: &str) -> Option<String> {
 
     // In doc-code blocks, elm-format attaches a leading line comment to the
     // following declaration with no intervening blank line. Collapse
-    // `-- comment\n\n<decl>` to `-- comment\n<decl>`.
+    // `-- comment\n\n<decl>` to `-- comment\n<decl>`. Also collapse
+    // `{-| doc -}\n\n<decl>` to `{-| doc -}\n<decl>`.
+    // Exception: when the following line is an `import`, elm-format inserts
+    // an extra blank line rather than attaching.
     let mut attached: Vec<&str> = Vec::with_capacity(collapsed.len());
     let mut i = 0;
     while i < collapsed.len() {
         attached.push(collapsed[i]);
-        if collapsed[i].trim_start().starts_with("--")
+        let trim = collapsed[i].trim_start();
+        let ends_doc_comment = trim.trim_end() == "-}";
+        let next_is_import = i + 2 < collapsed.len()
+            && collapsed[i + 2].trim_start().starts_with("import ");
+        if (trim.starts_with("--") || ends_doc_comment)
             && i + 2 < collapsed.len()
             && collapsed[i + 1].is_empty()
             && !collapsed[i + 2].is_empty()
             && !collapsed[i + 2].trim_start().starts_with("--")
+            && !next_is_import
         {
             i += 2;
+        } else if trim.starts_with("--")
+            && next_is_import
+            && i + 2 < collapsed.len()
+            && collapsed[i + 1].is_empty()
+        {
+            // Insert an extra blank line so that `-- comment\n\nimport` becomes
+            // `-- comment\n\n\nimport` (two blank lines) in the doc code block.
+            attached.push("");
+            i += 1;
         } else {
             i += 1;
         }
     }
     let collapsed = attached;
+
+    // elm-format inserts an extra blank line between an import-only block
+    // and a following line-comment paragraph inside a doc code block.
+    let mut loosened: Vec<String> = Vec::with_capacity(collapsed.len() + 4);
+    let mut j = 0;
+    while j < collapsed.len() {
+        loosened.push(collapsed[j].to_string());
+        if collapsed[j].trim_start().starts_with("import ")
+            && j + 2 < collapsed.len()
+            && collapsed[j + 1].is_empty()
+            && !collapsed[j + 2].is_empty()
+            && collapsed[j + 2].trim_start().starts_with("--")
+        {
+            let mut k = j + 1;
+            while k < collapsed.len()
+                && !collapsed[k].trim_start().starts_with("import ")
+                && !collapsed[k].is_empty()
+            {
+                k += 1;
+            }
+            let _ = k;
+            loosened.push(String::new());
+        }
+        j += 1;
+    }
+    let collapsed_strings = loosened;
+    let collapsed: Vec<&str> = collapsed_strings.iter().map(|s| s.as_str()).collect();
 
     // Re-indent with 4 spaces.
     let mut output = String::new();
@@ -4109,6 +6365,25 @@ fn try_parse_and_format_module(wrapped: &str) -> Option<String> {
 }
 
 /// Parse wrapped source as module and extract raw declaration text (no re-indenting).
+/// Parse `raw` (which already starts with a `module ... exposing (...)`
+/// header) as a full Elm module, pretty-print, and return the full output
+/// (including the header) on idempotency success.
+fn try_parse_and_format_full_module(raw: &str) -> Option<String> {
+    let owned = raw.to_string();
+    let result = std::panic::catch_unwind(|| {
+        let module = crate::parse::parse(&owned).ok()?;
+        let first = pretty_print(&module);
+        let module2 = crate::parse::parse(&first).ok()?;
+        let second = pretty_print(&module2);
+        if first == second { Some(first) } else { None }
+    });
+    let formatted = match result {
+        Ok(Some(f)) => f,
+        _ => return None,
+    };
+    Some(formatted.trim_end_matches('\n').to_string())
+}
+
 fn try_parse_and_format_module_raw(wrapped: &str) -> Option<String> {
     let wrapped_owned = wrapped.to_string();
     let result = std::panic::catch_unwind(|| {
@@ -4334,6 +6609,77 @@ fn flatten_left_assoc_chain<'a>(expr: &'a Expr, target_op: &str) -> Option<Vec<&
     }
 }
 
+/// Check whether a left-associative operator chain spans multiple source
+/// lines — i.e. any two adjacent operands in the chain start on different
+/// lines in the source. Used to force vertical pipeline layout when the
+/// source already had the pipeline broken across lines.
+fn left_chain_spans_multiple_lines(expr: &Expr, target_op: &str) -> bool {
+    match expr {
+        Expr::OperatorApplication {
+            operator,
+            left,
+            right,
+            ..
+        } if operator == target_op => {
+            if left.span.end.line != right.span.start.line {
+                return true;
+            }
+            left_chain_spans_multiple_lines(&left.value, target_op)
+        }
+        _ => false,
+    }
+}
+
+/// Flatten a mixed pipe chain (`|>`, `|.`, `|=`) into a list of
+/// `(operand, operator)` pairs plus the first operand.
+/// Returns `None` if `expr` is not a pipe-chain. Returns the initial
+/// operand and a list of (op, operand) pairs representing the chain.
+fn flatten_mixed_pipe_chain<'a>(
+    expr: &'a Expr,
+) -> Option<(&'a Expr, Vec<(&'a str, &'a Expr)>)> {
+    fn is_pipe(op: &str) -> bool {
+        matches!(op, "|>" | "|." | "|=")
+    }
+    match expr {
+        Expr::OperatorApplication {
+            operator,
+            left,
+            right,
+            ..
+        } if is_pipe(operator) => {
+            let (head, mut tail) =
+                flatten_mixed_pipe_chain(&left.value).unwrap_or((&left.value, Vec::new()));
+            tail.push((operator.as_str(), &right.value));
+            Some((head, tail))
+        }
+        _ => None,
+    }
+}
+
+/// Flatten a single-operator left-associative chain, carrying operator
+/// text for each step (so it can be reused by other callers that want
+/// heterogeneous chains). Accepts a predicate for which operators start/
+/// continue the chain.
+fn flatten_left_assoc_pred<'a>(
+    expr: &'a Expr,
+    pred: &impl Fn(&str) -> bool,
+) -> Option<(&'a Expr, Vec<(&'a str, &'a Expr)>)> {
+    match expr {
+        Expr::OperatorApplication {
+            operator,
+            left,
+            right,
+            ..
+        } if pred(operator) => {
+            let (head, mut tail) = flatten_left_assoc_pred(&left.value, pred)
+                .unwrap_or((&left.value, Vec::new()));
+            tail.push((operator.as_str(), &right.value));
+            Some((head, tail))
+        }
+        _ => None,
+    }
+}
+
 /// Flatten a right-associative operator chain into a list of expressions.
 /// `a :: b :: c` (parsed as `a :: (b :: c)`) becomes `[a, b, c]`.
 fn flatten_right_assoc_chain<'a>(expr: &'a Expr, target_op: &str) -> Option<Vec<&'a Expr>> {
@@ -4350,6 +6696,44 @@ fn flatten_right_assoc_chain<'a>(expr: &'a Expr, target_op: &str) -> Option<Vec<
                 None => chain.push(&right.value),
             }
             Some(chain)
+        }
+        _ => None,
+    }
+}
+
+/// Flatten a right-associative chain where operators may mix between `::` and
+/// `++` (same precedence 5, right-associative in Elm). Returns the head operand
+/// and a list of (operator, operand) pairs. elm-format treats such chains as
+/// one unified vertical layout.
+fn flatten_mixed_cons_append_chain<'a>(
+    expr: &'a Expr,
+) -> Option<(&'a Expr, Vec<(&'a str, &'a Expr)>)> {
+    fn is_cons_or_append(op: &str) -> bool {
+        matches!(op, "::" | "++")
+    }
+    match expr {
+        Expr::OperatorApplication {
+            operator,
+            left,
+            right,
+            ..
+        } if is_cons_or_append(operator) => {
+            let mut rest: Vec<(&'a str, &'a Expr)> = Vec::new();
+            let (head, tail_rest) =
+                match flatten_mixed_cons_append_chain(&right.value) {
+                    Some((head, rest_r)) => {
+                        rest.push((operator.as_str(), head));
+                        for (op, e) in rest_r {
+                            rest.push((op, e));
+                        }
+                        (&left.value, rest)
+                    }
+                    None => {
+                        rest.push((operator.as_str(), &right.value));
+                        (&left.value, rest)
+                    }
+                };
+            Some((head, tail_rest))
         }
         _ => None,
     }

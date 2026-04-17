@@ -27,9 +27,10 @@ pub fn parse_module(p: &mut Parser) -> ParseResult<ElmModule> {
     loop {
         p.skip_whitespace_before_doc();
         if matches!(p.peek(), Token::DocComment(_)) {
-            if module_documentation.is_some() {
-                // Already captured the module doc. This doc comment belongs
-                // to a declaration — break without consuming it.
+            if module_documentation.is_some() || !imports.is_empty() {
+                // Already captured the module doc, or we've parsed imports.
+                // This doc comment belongs to a declaration — break without
+                // consuming it.
                 break;
             }
             // Capture this as the module documentation. In Elm, a {-| ... -}
@@ -348,11 +349,15 @@ pub fn parse_module_recovering(p: &mut Parser) -> (Option<ElmModule>, Vec<ParseE
     loop {
         p.skip_whitespace_before_doc();
         if matches!(p.peek(), Token::DocComment(_)) {
-            if module_documentation.is_none() {
-                if let Token::DocComment(text) = p.peek().clone() {
-                    let tok = p.current().clone();
-                    module_documentation = Some(Spanned::new(tok.span, text));
-                }
+            if module_documentation.is_some() || !imports.is_empty() {
+                // Already captured the module doc, or we've parsed imports.
+                // This doc comment belongs to a declaration — break without
+                // consuming it.
+                break;
+            }
+            if let Token::DocComment(text) = p.peek().clone() {
+                let tok = p.current().clone();
+                module_documentation = Some(Spanned::new(tok.span, text));
             }
             if matches!(p.peek_past_whitespace(), Token::Import) {
                 p.skip_whitespace();
