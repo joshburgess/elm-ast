@@ -3349,7 +3349,7 @@ fn transform_assertion_paragraphs(block_lines: &[&str]) -> String {
             let trimmed = block_lines[run_end].trim();
             !trimmed.starts_with("--") && looks_like_assertion(trimmed)
         };
-        let is_assertion_run = all_valid && assertion_count >= 2 && last_is_assertion;
+        let is_assertion_run = all_valid && assertion_count >= 1 && last_is_assertion;
 
         if is_assertion_run {
             // Split the run into "units": a unit is zero or more consecutive
