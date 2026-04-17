@@ -3004,18 +3004,190 @@ fn normalize_code_block_indent(text: &str) -> String {
                 result.push('\n');
             }
         } else {
-            // Parsing failed or not needed — emit the block unchanged.
-            for j in block_start..=block_end {
-                result.push_str(lines[j]);
-                if j < lines.len() - 1 {
-                    result.push('\n');
-                }
+            // Parsing failed or not needed — emit the block, but apply a
+            // lightweight assertion-paragraph transform: adjacent lines that
+            // look like `expr == value` get a blank line inserted between them
+            // and have multi-space runs (outside strings) collapsed, matching
+            // elm-format's behavior.
+            let block = &lines[block_start..=block_end];
+            let transformed = transform_assertion_paragraphs(block);
+            let end_idx = result.len();
+            result.push_str(&transformed);
+            let _ = end_idx;
+            if block_end < lines.len() - 1 {
+                result.push('\n');
             }
         }
         i = block_end + 1;
     }
 
     result
+}
+
+/// Scan a doc code block for "assertion paragraphs" (runs of adjacent
+/// non-blank lines whose trimmed form contains ` == `) and rewrite each such
+/// paragraph so every assertion line becomes its own paragraph, with
+/// multi-space runs collapsed outside of string literals. Other lines are
+/// emitted unchanged. elm-format re-parses these blocks as expressions and
+/// renders each on its own "top level", which produces this output.
+fn transform_assertion_paragraphs(block_lines: &[&str]) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    while i < block_lines.len() {
+        let line = block_lines[i];
+        if line.trim().is_empty() {
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(line);
+            i += 1;
+            continue;
+        }
+
+        // Collect a run of adjacent non-blank lines.
+        let run_start = i;
+        let mut run_end = i;
+        while run_end + 1 < block_lines.len()
+            && !block_lines[run_end + 1].trim().is_empty()
+        {
+            run_end += 1;
+        }
+
+        // Check if every line in this run is a top-level assertion line:
+        // - starts at the same leading indent
+        // - no continuation (leading indent beyond the first line)
+        // - contains ` == ` in its trimmed form
+        let first_indent = block_lines[run_start].len() - block_lines[run_start].trim_start().len();
+        let mut is_assertion_run = (run_end - run_start) >= 1;
+        for k in run_start..=run_end {
+            let l = block_lines[k];
+            let indent = l.len() - l.trim_start().len();
+            if indent != first_indent {
+                is_assertion_run = false;
+                break;
+            }
+            if !looks_like_assertion(l.trim()) {
+                is_assertion_run = false;
+                break;
+            }
+        }
+
+        if is_assertion_run {
+            for (k, idx) in (run_start..=run_end).enumerate() {
+                let l = block_lines[idx];
+                let indent_str = &l[..first_indent];
+                let content = l[first_indent..].to_string();
+                let normalized = collapse_spaces_outside_strings(&content);
+                if k > 0 {
+                    out.push_str("\n\n");
+                }
+                if i > 0 && k == 0 {
+                    out.push('\n');
+                }
+                out.push_str(indent_str);
+                out.push_str(&normalized);
+            }
+        } else {
+            for (k, idx) in (run_start..=run_end).enumerate() {
+                if i > 0 || k > 0 {
+                    out.push('\n');
+                }
+                out.push_str(block_lines[idx]);
+            }
+        }
+        i = run_end + 1;
+    }
+    out
+}
+
+fn is_assertion_only_paragraph(para: &[String]) -> bool {
+    let non_empty: Vec<&String> = para.iter().filter(|l| !l.trim().is_empty()).collect();
+    if non_empty.len() < 2 {
+        return false;
+    }
+    for line in &non_empty {
+        // Must start at column 0 (no leading whitespace beyond what was stripped).
+        if line.starts_with(' ') || line.starts_with('\t') {
+            return false;
+        }
+        if !looks_like_assertion(line.trim()) {
+            return false;
+        }
+    }
+    true
+}
+
+fn looks_like_assertion(trimmed: &str) -> bool {
+    // Two accepted shapes for "example lines" inside doc code blocks:
+    //   1. `expr == value` (optionally with trailing ` -- comment`)
+    //   2. `expr -- comment` (expression followed by a line comment)
+    // Neither begins with `--` (that's a standalone comment line).
+    if trimmed.starts_with("--") {
+        return false;
+    }
+    if let Some(eq) = trimmed.find(" == ") {
+        let (left, right) = (&trimmed[..eq], &trimmed[eq + 4..]);
+        if left.is_empty() || right.is_empty() {
+            return false;
+        }
+        if right.starts_with('=') {
+            return false;
+        }
+        let last_ch = left.chars().last().unwrap();
+        if "+-*/|&<>".contains(last_ch) {
+            return false;
+        }
+        return true;
+    }
+    // Shape 2: `expr -- comment`. Require ` -- ` separator and non-empty left.
+    if let Some(dash) = trimmed.find(" -- ") {
+        let left = &trimmed[..dash];
+        if left.is_empty() {
+            return false;
+        }
+        let last_ch = left.chars().last().unwrap();
+        if "+-*/|&<>=".contains(last_ch) {
+            return false;
+        }
+        return true;
+    }
+    false
+}
+
+fn collapse_spaces_outside_strings(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_string = false;
+    let mut escape = false;
+    let mut prev_space = false;
+    for c in s.chars() {
+        if escape {
+            out.push(c);
+            escape = false;
+            continue;
+        }
+        if in_string {
+            if c == '\\' {
+                escape = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            out.push(c);
+            prev_space = false;
+        } else if c == '"' {
+            in_string = true;
+            out.push(c);
+            prev_space = false;
+        } else if c == ' ' {
+            if !prev_space {
+                out.push(c);
+            }
+            prev_space = true;
+        } else {
+            out.push(c);
+            prev_space = false;
+        }
+    }
+    out
 }
 
 /// Check whether a code block needs reformatting.
@@ -3128,6 +3300,35 @@ fn try_reformat_code_block(block_lines: &[&str]) -> Option<String> {
         if let Some(result) = try_parse_and_format_expr(&wrapped_expr) {
             formatted_paragraphs.push(result);
             continue;
+        }
+
+        // Third try: if every non-empty line in this paragraph looks like an
+        // independent assertion (`expr == value`), parse each line as its own
+        // expression and join with blank lines. elm-format renders these as
+        // separate "top-level" expressions.
+        if is_assertion_only_paragraph(para) {
+            let mut per_line_results: Vec<String> = Vec::new();
+            let mut all_ok = true;
+            for line in para {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let wrapped_line = format!(
+                    "module DocTemp__ exposing (..)\n\n\ndocTemp__ =\n    {}\n",
+                    line
+                );
+                match try_parse_and_format_expr(&wrapped_line) {
+                    Some(r) => per_line_results.push(r),
+                    None => {
+                        all_ok = false;
+                        break;
+                    }
+                }
+            }
+            if all_ok && !per_line_results.is_empty() {
+                formatted_paragraphs.push(per_line_results.join("\n\n"));
+                continue;
+            }
         }
 
         // Can't parse this paragraph — bail out entirely.
