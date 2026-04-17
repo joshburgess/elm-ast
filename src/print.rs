@@ -261,16 +261,22 @@ impl Printer {
         }
 
         // Assign comments to slots: one per anchor + one trailing slot.
-        // Skip comments that fall inside any anchor's span — those are
-        // internal comments that belong to the AST node (e.g. block
-        // comments inside a record type) and can't be reliably placed
-        // at module scope.
+        // In pretty mode, skip comments that fall inside any anchor's span —
+        // those are internal comments that belong to the AST node (e.g. block
+        // comments inside a record type) and shouldn't be emitted at module
+        // scope where they'd land in the wrong place.
+        // In compact mode, keep them: round-trip correctness relies on every
+        // comment being emitted somewhere so the re-parser recovers the same
+        // comment count.
+        let skip_internal = self.is_pretty();
         let mut anchor_comments: Vec<Vec<&Spanned<Comment>>> = vec![vec![]; total_anchors + 1];
         'outer: for c in &comments {
             let offset = c.span.start.offset;
-            for (a_start, a_end) in anchor_offsets.iter().zip(anchor_ends.iter()) {
-                if *a_start <= offset && offset < *a_end {
-                    continue 'outer;
+            if skip_internal {
+                for (a_start, a_end) in anchor_offsets.iter().zip(anchor_ends.iter()) {
+                    if *a_start <= offset && offset < *a_end {
+                        continue 'outer;
+                    }
                 }
             }
             let slot = anchor_offsets
