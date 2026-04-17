@@ -3368,10 +3368,12 @@ fn is_assertion_only_paragraph(para: &[String]) -> bool {
 }
 
 fn looks_like_assertion(trimmed: &str) -> bool {
-    // Two accepted shapes for "example lines" inside doc code blocks:
+    // Three accepted shapes for "example lines" inside doc code blocks:
     //   1. `expr == value` (optionally with trailing ` -- comment`)
     //   2. `expr -- comment` (expression followed by a line comment)
-    // Neither begins with `--` (that's a standalone comment line).
+    //   3. Simple standalone expression (starts with identifier or constructor,
+    //      balanced delimiters, doesn't end with an operator).
+    // Lines beginning with `--` are standalone comments, not assertions.
     if trimmed.starts_with("--") {
         return false;
     }
@@ -3401,7 +3403,78 @@ fn looks_like_assertion(trimmed: &str) -> bool {
         }
         return true;
     }
-    false
+    // Shape 3: a simple standalone expression line.
+    looks_like_simple_expr_line(trimmed)
+}
+
+fn looks_like_simple_expr_line(trimmed: &str) -> bool {
+    // Must begin with identifier (lower/upper) or opening delimiter.
+    let first = match trimmed.chars().next() {
+        Some(c) => c,
+        None => return false,
+    };
+    if !(first.is_ascii_alphabetic() || first == '_' || first == '(' || first == '[') {
+        return false;
+    }
+    // Reject keyword-led lines (they are parts of a larger expression).
+    let first_word_end = trimmed
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '.')
+        .unwrap_or(trimmed.len());
+    let first_word = &trimmed[..first_word_end];
+    match first_word {
+        "type" | "port" | "module" | "import" | "let" | "in" | "if" | "then"
+        | "else" | "case" | "of" | "where" | "alias" | "exposing" | "as"
+        | "effect" | "infix" => return false,
+        _ => {}
+    }
+    // Must have balanced parens/brackets, counting string literals.
+    let mut paren = 0i32;
+    let mut bracket = 0i32;
+    let mut in_str = false;
+    let mut esc = false;
+    for c in trimmed.chars() {
+        if esc {
+            esc = false;
+            continue;
+        }
+        if in_str {
+            if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '(' => paren += 1,
+            ')' => {
+                paren -= 1;
+                if paren < 0 {
+                    return false;
+                }
+            }
+            '[' => bracket += 1,
+            ']' => {
+                bracket -= 1;
+                if bracket < 0 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    if paren != 0 || bracket != 0 || in_str {
+        return false;
+    }
+    // Must not end with an operator character (continuation to next line).
+    let last_non_ws = trimmed.trim_end();
+    if let Some(lc) = last_non_ws.chars().last() {
+        if "+-*/|&<>=,:".contains(lc) {
+            return false;
+        }
+    }
+    true
 }
 
 fn collapse_spaces_outside_strings(s: &str) -> String {
