@@ -19,9 +19,11 @@
 
 mod block_comment;
 mod doc_markdown;
+mod pipeline_layout;
 
 use block_comment::reindent_block_comment;
 use doc_markdown::*;
+use pipeline_layout::*;
 
 use crate::comment::Comment;
 use crate::declaration::{CustomType, Declaration, InfixDef, TypeAlias, ValueConstructor};
@@ -2679,156 +2681,7 @@ fn unwrap_parens_non_block(expr: &Expr) -> &Expr {
     }
 }
 
-/// Flatten a left-associative operator chain into a list of expressions.
-/// `a |> b |> c` (parsed as `(a |> b) |> c`) becomes `[a, b, c]`.
-fn flatten_left_assoc_chain<'a>(expr: &'a Expr, target_op: &str) -> Option<Vec<&'a Expr>> {
-    match expr {
-        Expr::OperatorApplication {
-            operator,
-            left,
-            right,
-            ..
-        } if operator == target_op => {
-            let mut chain = match flatten_left_assoc_chain(&left.value, target_op) {
-                Some(v) => v,
-                None => vec![&left.value],
-            };
-            chain.push(&right.value);
-            Some(chain)
-        }
-        _ => None,
-    }
-}
-
-/// Check whether a left-associative operator chain spans multiple source
-/// lines — i.e. any two adjacent operands in the chain start on different
-/// lines in the source. Used to force vertical pipeline layout when the
-/// source already had the pipeline broken across lines.
-fn left_chain_spans_multiple_lines(expr: &Expr, target_op: &str) -> bool {
-    match expr {
-        Expr::OperatorApplication {
-            operator,
-            left,
-            right,
-            ..
-        } if operator == target_op => {
-            if left.span.end.line != right.span.start.line {
-                return true;
-            }
-            left_chain_spans_multiple_lines(&left.value, target_op)
-        }
-        _ => false,
-    }
-}
-
-/// Flatten a mixed pipe chain (`|>`, `|.`, `|=`) into a list of
-/// `(operand, operator)` pairs plus the first operand.
-/// Returns `None` if `expr` is not a pipe-chain. Returns the initial
-/// operand and a list of (op, operand) pairs representing the chain.
-fn flatten_mixed_pipe_chain<'a>(
-    expr: &'a Expr,
-) -> Option<(&'a Expr, Vec<(&'a str, &'a Expr)>)> {
-    fn is_pipe(op: &str) -> bool {
-        matches!(op, "|>" | "|." | "|=")
-    }
-    match expr {
-        Expr::OperatorApplication {
-            operator,
-            left,
-            right,
-            ..
-        } if is_pipe(operator) => {
-            let (head, mut tail) =
-                flatten_mixed_pipe_chain(&left.value).unwrap_or((&left.value, Vec::new()));
-            tail.push((operator.as_str(), &right.value));
-            Some((head, tail))
-        }
-        _ => None,
-    }
-}
-
-/// Flatten a single-operator left-associative chain, carrying operator
-/// text for each step (so it can be reused by other callers that want
-/// heterogeneous chains). Accepts a predicate for which operators start/
-/// continue the chain.
-fn flatten_left_assoc_pred<'a>(
-    expr: &'a Expr,
-    pred: &impl Fn(&str) -> bool,
-) -> Option<(&'a Expr, Vec<(&'a str, &'a Expr)>)> {
-    match expr {
-        Expr::OperatorApplication {
-            operator,
-            left,
-            right,
-            ..
-        } if pred(operator) => {
-            let (head, mut tail) = flatten_left_assoc_pred(&left.value, pred)
-                .unwrap_or((&left.value, Vec::new()));
-            tail.push((operator.as_str(), &right.value));
-            Some((head, tail))
-        }
-        _ => None,
-    }
-}
-
-/// Flatten a right-associative operator chain into a list of expressions.
-/// `a :: b :: c` (parsed as `a :: (b :: c)`) becomes `[a, b, c]`.
-fn flatten_right_assoc_chain<'a>(expr: &'a Expr, target_op: &str) -> Option<Vec<&'a Expr>> {
-    match expr {
-        Expr::OperatorApplication {
-            operator,
-            left,
-            right,
-            ..
-        } if operator == target_op => {
-            let mut chain = vec![&left.value];
-            match flatten_right_assoc_chain(&right.value, target_op) {
-                Some(mut rest) => chain.append(&mut rest),
-                None => chain.push(&right.value),
-            }
-            Some(chain)
-        }
-        _ => None,
-    }
-}
-
-/// Flatten a right-associative chain where operators may mix between `::` and
-/// `++` (same precedence 5, right-associative in Elm). Returns the head operand
-/// and a list of (operator, operand) pairs. elm-format treats such chains as
-/// one unified vertical layout.
-fn flatten_mixed_cons_append_chain<'a>(
-    expr: &'a Expr,
-) -> Option<(&'a Expr, Vec<(&'a str, &'a Expr)>)> {
-    fn is_cons_or_append(op: &str) -> bool {
-        matches!(op, "::" | "++")
-    }
-    match expr {
-        Expr::OperatorApplication {
-            operator,
-            left,
-            right,
-            ..
-        } if is_cons_or_append(operator) => {
-            let mut rest: Vec<(&'a str, &'a Expr)> = Vec::new();
-            let (head, tail_rest) =
-                match flatten_mixed_cons_append_chain(&right.value) {
-                    Some((head, rest_r)) => {
-                        rest.push((operator.as_str(), head));
-                        for (op, e) in rest_r {
-                            rest.push((op, e));
-                        }
-                        (&left.value, rest)
-                    }
-                    None => {
-                        rest.push((operator.as_str(), &right.value));
-                        (&left.value, rest)
-                    }
-                };
-            Some((head, tail_rest))
-        }
-        _ => None,
-    }
-}
+// Operator-chain flatteners moved to src/print/pipeline_layout.rs.
 
 /// Convenience function: print an `ElmModule` to a string with default config.
 ///
