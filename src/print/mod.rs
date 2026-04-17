@@ -18,11 +18,15 @@
 //! This produces idempotent output: `print(parse(print(parse(src)))) == print(parse(src))`.
 
 mod block_comment;
+mod comment_slots;
 mod doc_markdown;
+mod import_layout;
 mod pipeline_layout;
 
 use block_comment::reindent_block_comment;
+use comment_slots::CommentSlots;
 use doc_markdown::*;
+use import_layout::build_import_plan;
 use pipeline_layout::*;
 
 use crate::comment::Comment;
@@ -236,126 +240,15 @@ impl Printer {
             }
         }
 
-        // Sort comments by source position.
-        let mut comments: Vec<&Spanned<Comment>> = module.comments.iter().collect();
-        comments.sort_by_key(|c| c.span.start.offset);
-
-        // Build an ordered list of "anchors" — items with start offsets that
-        // comments can be assigned relative to. Each anchor is either an import
-        // or a declaration. A comment belongs before the first anchor whose
-        // start offset is strictly greater than the comment's offset.
-        let num_imports = module.imports.len();
-        let num_decls = module.declarations.len();
-        let total_anchors = num_imports + num_decls;
-
-        // anchor_offsets[i] = start offset of anchor i
-        let mut anchor_offsets: Vec<usize> = Vec::with_capacity(total_anchors);
-        for imp in &module.imports {
-            anchor_offsets.push(imp.span.start.offset);
+        // Assign comments to slots (one per anchor + one trailing) and hoist
+        // trailing import line-comments onto the preceding import in pretty
+        // mode. Compact mode keeps internal comments for round-trip fidelity.
+        let mut slots = CommentSlots::build(module, self.is_pretty());
+        if self.is_pretty() {
+            slots.hoist_import_trailing_comments(&module.imports);
         }
-        for decl in &module.declarations {
-            anchor_offsets.push(decl.span.start.offset);
-        }
-
-        // Build anchor end-offsets for checking whether a comment falls
-        // inside a declaration/import (in which case it's an internal
-        // comment that shouldn't be emitted at the module level).
-        let mut anchor_ends: Vec<usize> = Vec::with_capacity(total_anchors);
-        for imp in &module.imports {
-            anchor_ends.push(imp.span.end.offset);
-        }
-        for decl in &module.declarations {
-            anchor_ends.push(decl.span.end.offset);
-        }
-
-        // Assign comments to slots: one per anchor + one trailing slot.
-        // In pretty mode, skip comments that fall inside any anchor's span —
-        // those are internal comments that belong to the AST node (e.g. block
-        // comments inside a record type) and shouldn't be emitted at module
-        // scope where they'd land in the wrong place.
-        // In compact mode, keep them: round-trip correctness relies on every
-        // comment being emitted somewhere so the re-parser recovers the same
-        // comment count.
-        let skip_internal = self.is_pretty();
-        let mut anchor_comments: Vec<Vec<&Spanned<Comment>>> = vec![vec![]; total_anchors + 1];
-        'outer: for c in &comments {
-            let offset = c.span.start.offset;
-            if skip_internal {
-                for (a_start, a_end) in anchor_offsets.iter().zip(anchor_ends.iter()) {
-                    if *a_start <= offset && offset < *a_end {
-                        continue 'outer;
-                    }
-                }
-            }
-            let slot = anchor_offsets
-                .iter()
-                .position(|&a| a > offset)
-                .unwrap_or(total_anchors);
-            anchor_comments[slot].push(c);
-        }
-
-        // Hoist trailing line comments on imports that are followed by another
-        // import in the *sorted* output. elm-format attaches such trailing
-        // comments as leading comments on the preceding import so the imports
-        // render as a contiguous block. A slot-i comment is a trailing comment
-        // on import[i-1] iff (a) 1 <= i <= num_imports, (b) its source line
-        // equals import[i-1]'s end line, and (c) slot i corresponds to another
-        // import (i.e. i < num_imports).
-        if self.is_pretty() && num_imports >= 2 {
-            let mut sorted_for_hoist: Vec<usize> = (0..num_imports).collect();
-            sorted_for_hoist.sort_by(|&a, &b| {
-                module.imports[a]
-                    .value
-                    .module_name
-                    .value
-                    .cmp(&module.imports[b].value.module_name.value)
-            });
-            // Build a map: source-order index -> position in sorted output.
-            let mut sort_pos: Vec<usize> = vec![0; num_imports];
-            for (pos, &src_idx) in sorted_for_hoist.iter().enumerate() {
-                sort_pos[src_idx] = pos;
-            }
-            for i in 1..=num_imports {
-                if anchor_comments[i].is_empty() {
-                    continue;
-                }
-                let prev_import = &module.imports[i - 1];
-                let prev_end_line = prev_import.span.end.line;
-                // Partition: trailing line-comments on prev_import vs others.
-                let (trailing, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut anchor_comments[i])
-                    .into_iter()
-                    .partition(|c| {
-                        matches!(c.value, Comment::Line(_))
-                            && c.span.start.line == prev_end_line
-                    });
-                anchor_comments[i] = keep;
-                if trailing.is_empty() {
-                    continue;
-                }
-                // Only hoist when import (i-1) is followed by another import in
-                // the sorted output. Hoist to slot for the FIRST import of the
-                // sorted contiguous group that contains import (i-1).
-                let p = sort_pos[i - 1];
-                let followed_by_import = p + 1 < num_imports;
-                if !followed_by_import {
-                    // No hoist — put comments back where they were.
-                    anchor_comments[i].extend(trailing);
-                    continue;
-                }
-                let target_src_idx = sorted_for_hoist[0]; // leading slot of the sorted import block
-                let _ = target_src_idx;
-                // Hoist onto the source-order slot for import (i-1) itself so
-                // it precedes that import in sorted output. Since the sort is
-                // stable by module name, placing the comment in slot (i-1)
-                // keeps it attached to the same import whose trailing comment
-                // it was.
-                for c in trailing {
-                    anchor_comments[i - 1].push(c);
-                }
-                // Re-sort anchor_comments[i-1] by original offset.
-                anchor_comments[i - 1].sort_by_key(|c| c.span.start.offset);
-            }
-        }
+        let num_imports = slots.num_imports;
+        let total_anchors = slots.trailing_slot();
 
         self.write_module_header(&module.header.value);
         self.newline();
@@ -370,45 +263,15 @@ impl Printer {
         if !module.imports.is_empty() {
             self.newline();
             if self.is_pretty() {
-                // ElmFormat mode: sort imports alphabetically by module name,
-                // then merge duplicates (same module name).
-                let mut sorted_indices: Vec<usize> =
-                    (0..module.imports.len()).collect();
-                sorted_indices.sort_by(|&a, &b| {
-                    module.imports[a]
-                        .value
-                        .module_name
-                        .value
-                        .cmp(&module.imports[b].value.module_name.value)
-                });
-
-                // Group consecutive imports with the same module name.
-                let mut i = 0;
-                while i < sorted_indices.len() {
-                    let first_idx = sorted_indices[i];
-                    let first = &module.imports[first_idx].value;
-                    let mod_name = &first.module_name.value;
-
-                    // Collect all indices for this module name.
-                    let mut group_end = i + 1;
-                    while group_end < sorted_indices.len()
-                        && module.imports[sorted_indices[group_end]]
-                            .value
-                            .module_name
-                            .value
-                            == *mod_name
-                    {
-                        group_end += 1;
-                    }
-
-                    // Emit leading comments for all imports in the group.
-                    // elm-format separates leading orphan comments from the
-                    // import line with a blank line.
+                // ElmFormat mode: emit imports sorted and merged by module
+                // name. Leading comments for each import in a group are
+                // flushed before the import line, separated by a blank line.
+                for group in build_import_plan(&module.imports) {
                     let mut had_comments = false;
-                    for &idx in &sorted_indices[i..group_end] {
-                        if !anchor_comments[idx].is_empty() {
+                    for &idx in &group.src_indices {
+                        if !slots.slots[idx].is_empty() {
                             had_comments = true;
-                            for c in &anchor_comments[idx] {
+                            for c in &slots.slots[idx] {
                                 self.write_comment(&c.value);
                                 self.newline();
                             }
@@ -417,27 +280,23 @@ impl Printer {
                     if had_comments {
                         self.newline();
                     }
-
-                    if group_end - i == 1 {
-                        // Single import — write normally.
-                        self.write_import(first);
+                    if group.src_indices.len() == 1 {
+                        self.write_import(&module.imports[group.src_indices[0]].value);
                     } else {
-                        // Multiple imports for the same module — merge them.
                         self.write_merged_imports(
-                            &sorted_indices[i..group_end]
+                            &group
+                                .src_indices
                                 .iter()
                                 .map(|&idx| &module.imports[idx].value)
                                 .collect::<Vec<_>>(),
                         );
                     }
                     self.newline();
-                    i = group_end;
                 }
             } else {
                 for (i, imp) in module.imports.iter().enumerate() {
-                    // Slot i = comments before import i.
-                    if !anchor_comments[i].is_empty() {
-                        for c in &anchor_comments[i] {
+                    if !slots.slots[i].is_empty() {
+                        for c in &slots.slots[i] {
                             self.write_comment(&c.value);
                             self.newline();
                         }
@@ -468,19 +327,19 @@ impl Printer {
             // the leading list.
             let inline_trailing = self.is_pretty()
                 && i > 0
-                && !anchor_comments[slot].is_empty()
-                && matches!(&anchor_comments[slot][0].value, Comment::Line(_))
+                && !slots.slots[slot].is_empty()
+                && matches!(&slots.slots[slot][0].value, Comment::Line(_))
                 && {
-                    let c0 = &anchor_comments[slot][0];
+                    let c0 = &slots.slots[slot][0];
                     let prev_end_line = module.declarations[i - 1].span.end.line;
                     c0.span.start.line == prev_end_line
                 };
             if inline_trailing {
                 self.write_char(' ');
-                self.write_comment(&anchor_comments[slot][0].value);
+                self.write_comment(&slots.slots[slot][0].value);
             }
             let skip_first = if inline_trailing { 1 } else { 0 };
-            let remaining: Vec<_> = anchor_comments[slot].iter().skip(skip_first).collect();
+            let remaining: Vec<_> = slots.slots[slot].iter().skip(skip_first).collect();
 
             // Emit leading comments for this declaration.
             if !remaining.is_empty() {
@@ -596,26 +455,26 @@ impl Printer {
         }
 
         // Trailing comments after the last anchor.
-        if !anchor_comments[total_anchors].is_empty() {
+        if !slots.slots[total_anchors].is_empty() {
             // If the first trailing comment is a line comment on the same
             // source line as the last declaration's end, emit it inline.
             let inline_trailing_orphan = self.is_pretty()
                 && !module.declarations.is_empty()
                 && matches!(
-                    &anchor_comments[total_anchors][0].value,
+                    &slots.slots[total_anchors][0].value,
                     Comment::Line(_)
                 )
                 && {
-                    let c0 = &anchor_comments[total_anchors][0];
+                    let c0 = &slots.slots[total_anchors][0];
                     let last_decl = module.declarations.last().unwrap();
                     c0.span.start.line == last_decl.span.end.line
                 };
             let skip_first = if inline_trailing_orphan { 1 } else { 0 };
             if inline_trailing_orphan {
                 self.write_char(' ');
-                self.write_comment(&anchor_comments[total_anchors][0].value);
+                self.write_comment(&slots.slots[total_anchors][0].value);
             }
-            let trailing: Vec<_> = anchor_comments[total_anchors]
+            let trailing: Vec<_> = slots.slots[total_anchors]
                 .iter()
                 .skip(skip_first)
                 .collect();
