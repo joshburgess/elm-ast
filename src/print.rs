@@ -2263,7 +2263,6 @@ fn normalize_emphasis(text: &str) -> String {
     let len = bytes.len();
     let mut result = String::with_capacity(len);
     let mut i = 0;
-    let mut in_code_span = false;
     let mut at_line_start = true;
     let mut line_indent = 0u32;
     let mut in_docs_line = false;
@@ -2327,24 +2326,141 @@ fn normalize_emphasis(text: &str) -> String {
         // Inside a code block (4+ spaces indent after a blank line) — pass through unchanged.
         // Only treat as a code block if preceded by a blank line (proper markdown code block).
         // List continuation lines with 4+ indent should still have emphasis processed.
-        if line_indent >= 4 && !in_code_span && prev_line_blank {
+        if line_indent >= 4 && prev_line_blank {
             result.push(ch as char);
             i += 1;
             continue;
         }
 
-        // Toggle code span tracking on backticks.
+        // Handle backtick sequences for code spans.
+        // In CommonMark/Cheapskate, a code span is opened by N backticks and
+        // closed by exactly N backticks. If no matching closer exists, the
+        // backticks are literal and should be escaped.
         if ch == b'`' {
-            in_code_span = !in_code_span;
-            result.push('`');
-            i += 1;
-            continue;
-        }
+            // Count consecutive backticks.
+            let bt_start = i;
+            let mut bt_count = 0;
+            while i + bt_count < len && bytes[i + bt_count] == b'`' {
+                bt_count += 1;
+            }
 
-        // Inside a code span — pass through unchanged.
-        if in_code_span {
-            result.push(ch as char);
-            i += 1;
+            // Fenced code blocks: 3+ backticks at the start of a line are fenced
+            // code block markers. Pass through unchanged — they're handled by
+            // normalize_fenced_code_blocks separately.
+            if bt_count >= 3 && (bt_start == 0 || bytes[bt_start - 1] == b'\n') {
+                // Copy the opening fence line.
+                let mut pos = bt_start;
+                while pos < len && bytes[pos] != b'\n' {
+                    pos += 1;
+                }
+                result.push_str(&text[bt_start..pos]);
+                i = pos;
+                // Copy everything until closing fence.
+                if i < len && bytes[i] == b'\n' {
+                    result.push('\n');
+                    i += 1;
+                }
+                while i < len {
+                    let line_start = i;
+                    // Check for closing fence (3+ backticks at start of line).
+                    let mut bc = 0;
+                    while i + bc < len && bytes[i + bc] == b'`' {
+                        bc += 1;
+                    }
+                    if bc >= bt_count {
+                        // Check rest of line is whitespace.
+                        let mut j = i + bc;
+                        let mut rest_ws = true;
+                        while j < len && bytes[j] != b'\n' {
+                            if bytes[j] != b' ' && bytes[j] != b'\t' {
+                                rest_ws = false;
+                                break;
+                            }
+                            j += 1;
+                        }
+                        if rest_ws {
+                            result.push_str(&text[line_start..j]);
+                            i = j;
+                            break;
+                        }
+                    }
+                    // Not a closing fence — copy line.
+                    while i < len {
+                        if bytes[i] > 127 {
+                            let ch = text[i..].chars().next().unwrap();
+                            result.push(ch);
+                            i += ch.len_utf8();
+                        } else {
+                            result.push(bytes[i] as char);
+                            i += 1;
+                        }
+                        if i > 0 && bytes[i - 1] == b'\n' {
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Inline code span: look for a matching closer on the same line
+            // (for single backtick) or within the same paragraph (for multi-backtick).
+            let after_open = bt_start + bt_count;
+            let mut found_close = false;
+            let mut close_start = after_open;
+            // Determine search boundary.
+            let mut search_end = after_open;
+            if bt_count == 1 {
+                // Don't cross newlines for single-backtick spans.
+                while search_end < len && bytes[search_end] != b'\n' {
+                    search_end += 1;
+                }
+            } else {
+                // Multi-backtick spans stop at blank lines.
+                while search_end < len {
+                    if bytes[search_end] == b'\n' {
+                        let nls = search_end + 1;
+                        if nls >= len {
+                            search_end = len;
+                            break;
+                        }
+                        let mut ws = nls;
+                        while ws < len && bytes[ws] == b' ' {
+                            ws += 1;
+                        }
+                        if ws >= len || bytes[ws] == b'\n' {
+                            break;
+                        }
+                    }
+                    search_end += 1;
+                }
+            }
+
+            while close_start < search_end {
+                if bytes[close_start] == b'`' {
+                    let mut cc = 0;
+                    while close_start + cc < len && bytes[close_start + cc] == b'`' {
+                        cc += 1;
+                    }
+                    if cc == bt_count {
+                        found_close = true;
+                        result.push_str(&text[bt_start..close_start + cc]);
+                        i = close_start + cc;
+                        break;
+                    }
+                    close_start += cc;
+                } else {
+                    close_start += 1;
+                }
+            }
+
+            if !found_close {
+                // No matching closer — escape each backtick.
+                for _ in 0..bt_count {
+                    result.push('\\');
+                    result.push('`');
+                }
+                i = bt_start + bt_count;
+            }
             continue;
         }
 
