@@ -2162,7 +2162,8 @@ fn reindent_block_comment(text: &str, brace_col: usize) -> String {
             out.push_str(line);
         } else {
             out.push('\n');
-            if line.is_empty() {
+            let is_last = i == lines.len() - 1;
+            if line.is_empty() && !is_last {
                 continue;
             }
             let ind = line.chars().take_while(|c| *c == ' ').count();
