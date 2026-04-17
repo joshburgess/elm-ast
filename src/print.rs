@@ -417,9 +417,17 @@ impl Printer {
                 self.write(text);
             }
             Comment::Block(text) => {
-                self.write("{-");
-                self.write(text);
-                self.write("-}");
+                if self.is_pretty() && text.contains('\n') {
+                    let brace_col = self.current_column();
+                    self.write("{-");
+                    let reindented = reindent_block_comment(text, brace_col);
+                    self.write(&reindented);
+                    self.write("-}");
+                } else {
+                    self.write("{-");
+                    self.write(text);
+                    self.write("-}");
+                }
             }
             Comment::Doc(text) => {
                 self.write_doc_comment_text(text);
@@ -2108,6 +2116,61 @@ impl Printer {
             }
         }
     }
+}
+
+/// Reindent a multiline block comment's content. `brace_col` is the column
+/// where `{-` is being emitted in the new output. We estimate the original
+/// `{-` column from the indent of the line preceding `-}` (or the min
+/// non-empty indent of middle lines - 3), then shift continuation lines so
+/// they land at the corresponding position relative to the new `{-`.
+fn reindent_block_comment(text: &str, brace_col: usize) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    if lines.len() <= 1 {
+        return text.to_string();
+    }
+
+    let last = lines.last().unwrap();
+    let last_is_ws_only = last.trim().is_empty();
+    let original_base: usize = if last_is_ws_only {
+        last.chars().take_while(|c| *c == ' ').count()
+    } else {
+        let mut min_indent = usize::MAX;
+        for line in &lines[1..] {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let ind = line.chars().take_while(|c| *c == ' ').count();
+            if ind < min_indent {
+                min_indent = ind;
+            }
+        }
+        if min_indent == usize::MAX {
+            return text.to_string();
+        }
+        min_indent.saturating_sub(3)
+    };
+
+    let delta: isize = brace_col as isize - original_base as isize;
+
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        if i == 0 {
+            out.push_str(line);
+        } else {
+            out.push('\n');
+            if line.is_empty() {
+                continue;
+            }
+            let ind = line.chars().take_while(|c| *c == ' ').count();
+            let rest = &line[ind..];
+            let new_ind = ((ind as isize) + delta).max(0) as usize;
+            for _ in 0..new_ind {
+                out.push(' ');
+            }
+            out.push_str(rest);
+        }
+    }
+    out
 }
 
 // ── Multiline detection ──────────────────────────────────────────────
