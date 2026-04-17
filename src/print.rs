@@ -3591,11 +3591,12 @@ fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
         if leading > 4 && (leading - 4) % 4 != 0 {
             count_non_4_aligned += 1;
         }
-        // Check for compact list syntax [x,y] or tuple syntax (x,y) that
-        // elm-format would normalize to [ x, y ] or ( x, y ).
+        // Check for compact list syntax [x,y] or [x] or tuple syntax (x,y)
+        // that elm-format would normalize to [ x, y ] / [ x ] / ( x, y ).
         let trimmed = line.trim();
-        if trimmed.contains("[") && trimmed.contains(",") && trimmed.contains("]") {
-            // Look for `[x,` or `[x]` without spaces after [ or before ]
+        if trimmed.contains('[') && trimmed.contains(']') {
+            // Look for `[` immediately followed by a literal or identifier
+            // start — the distinguishing marker of a compact list/tuple.
             if trimmed.contains("[\"") || trimmed.contains("[(")
                 || trimmed.contains("[0") || trimmed.contains("[1")
                 || trimmed.contains("[2") || trimmed.contains("[3")
@@ -3606,7 +3607,7 @@ fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
                 has_compact_syntax = true;
             }
         }
-        if trimmed.contains("(") && trimmed.contains(",") && trimmed.contains(")") {
+        if trimmed.contains('(') && trimmed.contains(',') && trimmed.contains(')') {
             if trimmed.contains("(0") || trimmed.contains("(1")
                 || trimmed.contains("(2") || trimmed.contains("(3")
                 || trimmed.contains("(\"")
