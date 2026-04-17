@@ -401,6 +401,7 @@ impl Printer {
             let normalized = normalize_fenced_code_blocks(&normalized);
             let normalized = normalize_code_block_indent(&normalized);
             let normalized = normalize_docs_lines(&normalized);
+            let normalized = strip_paragraph_leading_whitespace(&normalized);
             let normalized = strip_trailing_whitespace_in_doc(&normalized);
             self.write("{-|");
             self.write(&normalized);
@@ -2166,6 +2167,8 @@ fn normalize_emphasis(text: &str) -> String {
     let mut at_line_start = true;
     let mut line_indent = 0u32;
     let mut in_docs_line = false;
+    let mut prev_line_blank = false;
+    let mut current_line_has_content = false;
 
     // Helper: push the UTF-8 character starting at byte position `pos` in
     // `text` into `result` and return the number of bytes consumed.
@@ -2191,9 +2194,11 @@ fn normalize_emphasis(text: &str) -> String {
         if ch == b'\n' {
             result.push('\n');
             i += 1;
+            prev_line_blank = !current_line_has_content;
             at_line_start = true;
             line_indent = 0;
             in_docs_line = false;
+            current_line_has_content = false;
             continue;
         }
         if at_line_start {
@@ -2204,6 +2209,7 @@ fn normalize_emphasis(text: &str) -> String {
                 continue;
             }
             at_line_start = false;
+            current_line_has_content = true;
             // Detect @docs lines — skip emphasis processing on these.
             if text[i..].starts_with("@docs") {
                 in_docs_line = true;
@@ -2218,8 +2224,10 @@ fn normalize_emphasis(text: &str) -> String {
             continue;
         }
 
-        // Inside a code block (4+ spaces indent) — pass through unchanged.
-        if line_indent >= 4 && !in_code_span {
+        // Inside a code block (4+ spaces indent after a blank line) — pass through unchanged.
+        // Only treat as a code block if preceded by a blank line (proper markdown code block).
+        // List continuation lines with 4+ indent should still have emphasis processed.
+        if line_indent >= 4 && !in_code_span && prev_line_blank {
             result.push(ch as char);
             i += 1;
             continue;
@@ -2384,6 +2392,65 @@ fn normalize_docs_lines(text: &str) -> String {
     result
 }
 
+/// Strip leading whitespace from paragraph continuation lines in doc comments.
+///
+/// In Cheapskate (elm-format's markdown engine), paragraph continuation lines
+/// have their leading whitespace normalized. This strips up to 1 space of
+/// consistent leading indent from non-first lines within each paragraph,
+/// but preserves code blocks (4+ space indent after blank line) and list items.
+fn strip_paragraph_leading_whitespace(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut result = String::with_capacity(text.len());
+    let mut in_code_block = false;
+
+    for (i, &line) in lines.iter().enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+
+        // Track code block state (4+ space indent after blank line).
+        if line.starts_with("    ") {
+            if i == 0 || lines[i - 1].trim().is_empty() {
+                in_code_block = true;
+            }
+        } else if !line.trim().is_empty() {
+            in_code_block = false;
+        }
+
+        if in_code_block || line.trim().is_empty() {
+            result.push_str(line);
+            continue;
+        }
+
+        // Skip the first line (it's the space after {-|).
+        if i == 0 {
+            result.push_str(line);
+            continue;
+        }
+
+        // Skip list items (already handled by normalize_markdown_lists).
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("- ")
+            || trimmed.starts_with("@docs")
+            || trimmed.starts_with('#')
+            || strip_ordered_list_prefix(trimmed).is_some()
+        {
+            result.push_str(line);
+            continue;
+        }
+
+        // Strip a single leading space if the line starts with " X" where X
+        // is a non-space character. This matches Cheapskate's paragraph
+        // whitespace normalization.
+        if line.starts_with(' ') && line.len() > 1 && !line.as_bytes()[1].is_ascii_whitespace() {
+            result.push_str(&line[1..]);
+        } else {
+            result.push_str(line);
+        }
+    }
+    result
+}
+
 /// Strip trailing whitespace from each line in a doc comment.
 ///
 /// elm-format removes trailing spaces from doc comment lines. We do the same
@@ -2418,6 +2485,10 @@ fn normalize_markdown_lists(text: &str) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut result = String::with_capacity(text.len());
     let mut in_code_block = false;
+    // Track list item continuation: if we're inside a list item, continuation
+    // lines (non-blank, non-list-marker lines) get indented to align with the
+    // list item content.
+    let mut list_indent: Option<usize> = None; // indent width for continuation lines
 
     for (i, line) in lines.iter().enumerate() {
         if i > 0 {
@@ -2436,10 +2507,16 @@ fn normalize_markdown_lists(text: &str) -> String {
 
         if in_code_block {
             result.push_str(line);
+        } else if line.trim().is_empty() {
+            // Blank line ends list continuation context.
+            list_indent = None;
+            result.push_str(line);
         } else if line.starts_with("- ") || *line == "-" {
             // Unordered list item: indent by 2 spaces.
             result.push_str("  ");
             result.push_str(line);
+            // "  - " = 4 chars of prefix before content
+            list_indent = Some(4);
         } else if let Some(rest) = strip_ordered_list_prefix(line) {
             // Ordered list item: strip leading spaces, double-space after period.
             // `  1. text` or `1. text` -> `1.  text`
@@ -2451,6 +2528,21 @@ fn normalize_markdown_lists(text: &str) -> String {
             result.push_str(number_dot);
             result.push_str("  ");
             result.push_str(rest);
+            // Continuation indent = length of "N.  " prefix
+            list_indent = Some(number_dot.len() + 2);
+        } else if let Some(indent_width) = list_indent {
+            // Continuation line of a list item: indent to align with content.
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("@docs") || trimmed.starts_with('#') {
+                // New heading or @docs ends the list context.
+                list_indent = None;
+                result.push_str(line);
+            } else {
+                for _ in 0..indent_width {
+                    result.push(' ');
+                }
+                result.push_str(trimmed);
+            }
         } else {
             result.push_str(line);
         }
