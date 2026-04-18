@@ -138,14 +138,17 @@ pub(in crate::print) fn insert_loose_paragraph_breaks(joined: &str) -> String {
     };
 
     // Indices (into `lines`) where an extra blank should be inserted BEFORE.
+    // elm-format's Cheapskate inserts a double blank between an
+    // imports-paragraph and a following comments-paragraph. A
+    // comments-paragraph followed by imports gets only a single blank,
+    // so don't insert in that direction (see Task.elm where a split-out
+    // inline comment leads the paragraph).
     let mut extra_before: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for pair in paragraphs.windows(2) {
         let prev = &pair[0];
         let cur = &pair[1];
         let cur_start = cur[0];
-        let prev_imports_cur_comments = is_all_imports(prev) && is_all_comments(cur);
-        let prev_comments_cur_imports = is_all_comments(prev) && is_all_imports(cur);
-        if prev_imports_cur_comments || prev_comments_cur_imports {
+        if is_all_imports(prev) && is_all_comments(cur) {
             extra_before.insert(cur_start);
         }
     }
