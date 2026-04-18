@@ -1587,13 +1587,20 @@ impl Printer {
     fn write_expr_app(&mut self, expr: &Expr) {
         match expr {
             Expr::Application(args) => {
-                // When any argument (beyond the function) is multiline,
-                // use vertical layout so each arg starts on a new indented
-                // line — this ensures args are always at a column greater
-                // than the function name, satisfying the parser's indent rules.
+                // Two reasons to go vertical: (1) any individual argument is
+                // itself multi-line, or (2) the source had consecutive args
+                // split across different lines (the author chose vertical
+                // layout even though each arg is individually simple).
+                let pretty = self.is_pretty();
                 let any_arg_ml =
                     args.len() > 1 && args.iter().skip(1).any(|a| self.is_multiline(&a.value));
-                if any_arg_ml {
+                let source_vertical = pretty
+                    && args.windows(2).any(|w| {
+                        let end = w[0].span.end.line;
+                        let start = w[1].span.start.line;
+                        end != 0 && start != 0 && start > end
+                    });
+                if any_arg_ml || source_vertical {
                     self.write_application_vertical(args);
                 } else {
                     for (i, arg) in args.iter().enumerate() {
