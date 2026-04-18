@@ -321,6 +321,86 @@ pub(in crate::print) fn block_mixes_decls_and_bare_exprs(block_lines: &[&str]) -
     false
 }
 
+/// Classify a single code block by whether its base-indent (4-space) lines
+/// are all declaration-flavored (type/value binding/type annotation/module/
+/// import) with at least one such line. Ignores blank lines, comment-only
+/// lines, and continuation lines past the base indent.
+pub(in crate::print) fn block_looks_decl_only(block_lines: &[&str]) -> bool {
+    let mut has_decl = false;
+    let mut has_bare = false;
+    let mut in_triple = false;
+    for &line in block_lines {
+        if line.contains("\"\"\"") {
+            let count = line.matches("\"\"\"").count();
+            if count % 2 == 1 {
+                in_triple = !in_triple;
+            }
+            continue;
+        }
+        if in_triple {
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("--") {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        if leading != 4 {
+            continue;
+        }
+        let is_header = trimmed.starts_with("module ")
+            || trimmed.starts_with("import ")
+            || trimmed.starts_with("port module ")
+            || trimmed.starts_with("effect module ");
+        if is_header || looks_like_code_block_decl(trimmed) {
+            has_decl = true;
+        } else if line_looks_like_bare_expression(trimmed) {
+            has_bare = true;
+        }
+    }
+    has_decl && !has_bare
+}
+
+/// Mirror of `block_looks_decl_only`, but for blocks consisting only of
+/// bare expressions at base indent. Used to detect "sample code" docs where
+/// decl-flavored blocks sit alongside bare-expression blocks; elm-format
+/// preserves every block in such docs verbatim.
+pub(in crate::print) fn block_looks_bare_only(block_lines: &[&str]) -> bool {
+    let mut has_decl = false;
+    let mut has_bare = false;
+    let mut in_triple = false;
+    for &line in block_lines {
+        if line.contains("\"\"\"") {
+            let count = line.matches("\"\"\"").count();
+            if count % 2 == 1 {
+                in_triple = !in_triple;
+            }
+            continue;
+        }
+        if in_triple {
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("--") {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        if leading != 4 {
+            continue;
+        }
+        let is_header = trimmed.starts_with("module ")
+            || trimmed.starts_with("import ")
+            || trimmed.starts_with("port module ")
+            || trimmed.starts_with("effect module ");
+        if is_header || looks_like_code_block_decl(trimmed) {
+            has_decl = true;
+        } else if line_looks_like_bare_expression(trimmed) {
+            has_bare = true;
+        }
+    }
+    has_bare && !has_decl
+}
+
 /// Accept any line that starts like an Elm expression: identifiers, literals,
 /// opening brackets/braces/parens, backslash lambdas, or leading negation.
 fn line_looks_like_bare_expression(trimmed: &str) -> bool {
@@ -478,6 +558,26 @@ pub(in crate::print) fn code_block_needs_reformat(block_lines: &[&str]) -> bool 
         || has_unsorted_import
         || has_unseparated_assertions
         || has_single_line_if
+}
+
+/// Narrower variant of `code_block_needs_reformat` for use by the
+/// "sample-code doc" detector: checks for 2-space-style indent (leading 2/6
+/// at base indent) but ignores alignment artifacts past a list/tuple open
+/// bracket column, which legitimately produce non-4-aligned leading.
+pub(in crate::print) fn code_block_has_narrow_indent(block_lines: &[&str]) -> bool {
+    for &line in block_lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        if leading > 0 && leading < 4 {
+            return true;
+        }
+        if leading > 4 && leading < 8 && (leading - 4) % 4 != 0 {
+            return true;
+        }
+    }
+    false
 }
 
 /// Detect a code block containing a line with a single-line `if ... then ... else ...`

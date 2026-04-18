@@ -569,6 +569,8 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
 /// 2. Any block contains one or more `-->` result-comment lines used to show
 ///    expected output of the preceding expression.
 fn doc_comment_has_mixed_block(lines: &[&str]) -> bool {
+    let mut any_decl_block = false;
+    let mut any_bare_block = false;
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
@@ -598,6 +600,22 @@ fn doc_comment_has_mixed_block(lines: &[&str]) -> bool {
             || block_has_result_arrow_comment(block)
         {
             return true;
+        }
+        // Track whether sibling blocks mix decl-flavored content with
+        // bare-expression content across the whole doc; elm-format treats
+        // any such doc as an "example" and preserves every block verbatim.
+        // Only count blocks that already look normalized (4-space indent,
+        // no compact tuples, etc.) — if a block needs reformatting we
+        // shouldn't preserve it just because another sibling is declish.
+        if !super::reformat::code_block_has_narrow_indent(block) {
+            if super::reformat::block_looks_decl_only(block) {
+                any_decl_block = true;
+            } else if super::reformat::block_looks_bare_only(block) {
+                any_bare_block = true;
+            }
+            if any_decl_block && any_bare_block {
+                return true;
+            }
         }
         i = block_end + 1;
     }
