@@ -301,6 +301,12 @@ pub(in crate::print) fn looks_like_assertion(trimmed: &str) -> bool {
 }
 
 pub(in crate::print) fn looks_like_simple_expr_line(trimmed: &str) -> bool {
+    // Reject lines that contain non-Elm operators or syntax, so non-Elm
+    // prose inside fenced code blocks (ASCII tables, bitstrings with `=>`,
+    // etc.) isn't mistaken for a simple expression and reformatted.
+    if trimmed.contains("=>") || trimmed.contains("|>>") {
+        return false;
+    }
     // Must begin with identifier (lower/upper) or opening delimiter.
     let first = match trimmed.chars().next() {
         Some(c) => c,

@@ -204,13 +204,17 @@ pub(in crate::print) fn normalize_fenced_code_blocks(text: &str) -> String {
         // Detect opening fence: plain ``` or ```<language-tag>.
         // elm-format's Cheapskate renderer converts all fenced blocks to
         // 4-space indented blocks, stripping the fences and language tag.
+        // Cheapskate only converts fences with no language tag or the `elm`
+        // language tag to indented code blocks. Fences tagged for other
+        // languages (e.g. `javascript`) are left intact.
         let is_fence_open = trimmed == "```"
             || (trimmed.starts_with("```")
                 && trimmed.len() > 3
                 && !trimmed[3..].contains('`')
                 && trimmed[3..]
                     .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                && trimmed[3..].eq_ignore_ascii_case("elm"));
         if is_fence_open {
             // Find the closing fence
             let mut end = i + 1;
