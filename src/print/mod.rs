@@ -43,6 +43,7 @@ use crate::module_header::ModuleHeader;
 use crate::node::Spanned;
 use crate::operator::InfixDirection;
 use crate::pattern::Pattern;
+use crate::span::Span;
 use crate::type_annotation::{RecordField, TypeAnnotation};
 
 /// Controls how aggressively the printer breaks lines.
@@ -125,6 +126,23 @@ impl Printer {
 
     fn is_pretty(&self) -> bool {
         self.config.style == PrintStyle::ElmFormat
+    }
+
+    /// True when the two spans sit on different source lines (both non-dummy).
+    /// Used by container layout decisions so that multi-line source stays
+    /// multi-line in pretty output — mirroring elm-format's "preserve source
+    /// layout" behavior. Also lets synthesized ASTs (codegen) opt into
+    /// multi-line layout by setting operand spans on different lines.
+    fn spans_cross_lines(a: Span, b: Span) -> bool {
+        a.start.line != 0 && b.end.line != 0 && b.end.line > a.start.line
+    }
+
+    /// True when a sequence of spanned nodes spans multiple source lines.
+    fn spans_multi_lines<T>(items: &[Spanned<T>]) -> bool {
+        match (items.first(), items.last()) {
+            (Some(first), Some(last)) => Self::spans_cross_lines(first.span, last.span),
+            _ => false,
+        }
     }
 
     /// Check if an expression will produce multi-line output.
@@ -1204,8 +1222,9 @@ impl Printer {
                     && matches!(operator.as_str(), "|>" | "|." | "|=")
                     && let Some((head, rest)) = flatten_mixed_pipe_chain(expr)
                 {
-                    let any_ml =
-                        self.is_multiline(head) || rest.iter().any(|(_, op)| self.is_multiline(op));
+                    let any_ml = self.is_multiline(head)
+                        || rest.iter().any(|(_, op)| self.is_multiline(op))
+                        || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
                         // Break ALL operators to vertical.
                         self.write_expr_operand(head, operator, true);
@@ -1236,8 +1255,9 @@ impl Printer {
                     && matches!(operator.as_str(), "::" | "++")
                     && let Some((head, rest)) = flatten_mixed_cons_append_chain(expr)
                 {
-                    let any_ml =
-                        self.is_multiline(head) || rest.iter().any(|(_, e)| self.is_multiline(e));
+                    let any_ml = self.is_multiline(head)
+                        || rest.iter().any(|(_, e)| self.is_multiline(e))
+                        || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
                         self.write_expr_operand(head, operator, true);
                         self.indent();
@@ -1256,7 +1276,8 @@ impl Printer {
                     && matches!(operator.as_str(), ">>" | "<<")
                     && let Some(chain) = flatten_right_assoc_chain(expr, operator)
                 {
-                    let any_ml = chain.iter().any(|op| self.is_multiline(op));
+                    let any_ml = chain.iter().any(|op| self.is_multiline(op))
+                        || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
                         self.write_expr_operand(chain[0], operator, true);
                         self.indent();
@@ -1280,7 +1301,8 @@ impl Printer {
                         flatten_left_assoc_pred(expr, &|o: &str| o == op_owned)
                     {
                         let any_ml = self.is_multiline(head)
-                            || rest.iter().any(|(_, op)| self.is_multiline(op));
+                            || rest.iter().any(|(_, op)| self.is_multiline(op))
+                            || Self::spans_cross_lines(left.span, right.span);
                         if any_ml {
                             self.write_expr_operand(head, operator, true);
                             self.indent();
@@ -1298,7 +1320,9 @@ impl Printer {
 
                 let use_vertical = if self.is_pretty() {
                     // elm-format: if either operand is multiline, break.
-                    self.is_multiline(&left.value) || self.is_multiline(right_expr)
+                    self.is_multiline(&left.value)
+                        || self.is_multiline(right_expr)
+                        || Self::spans_cross_lines(left.span, right.span)
                 } else {
                     self.is_multiline(right_expr)
                 };
@@ -1582,7 +1606,8 @@ impl Printer {
                 } else {
                     let any_ml = fields
                         .iter()
-                        .any(|f| self.is_multiline(&f.value.value.value));
+                        .any(|f| self.is_multiline(&f.value.value.value))
+                        || (self.is_pretty() && Self::spans_multi_lines(fields));
                     if any_ml {
                         self.write("{ ");
                         self.write_record_setter(&fields[0].value);
@@ -1609,7 +1634,8 @@ impl Printer {
             Expr::RecordUpdate { base, updates } => {
                 let any_ml = updates
                     .iter()
-                    .any(|f| self.is_multiline(&f.value.value.value));
+                    .any(|f| self.is_multiline(&f.value.value.value))
+                    || (self.is_pretty() && Self::spans_multi_lines(updates));
                 if any_ml {
                     self.write("{ ");
                     self.write(&base.value);
@@ -1705,7 +1731,8 @@ impl Printer {
     /// Write a comma-separated list of expressions with adaptive layout.
     /// Uses single-line when all elements are single-line, multi-line otherwise.
     fn write_comma_sep(&mut self, open: &str, close: &str, elems: &[Spanned<Expr>]) {
-        let any_multiline = elems.iter().any(|e| self.is_multiline(&e.value));
+        let any_multiline = elems.iter().any(|e| self.is_multiline(&e.value))
+            || (self.is_pretty() && Self::spans_multi_lines(elems));
         if any_multiline && self.is_pretty() {
             // elm-format style: first element on same line as open bracket,
             // subsequent elements aligned with ", " prefix at same indent.
