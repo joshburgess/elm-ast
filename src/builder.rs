@@ -264,6 +264,7 @@ pub fn custom_type(
                 spanned(ValueConstructor {
                     name: spanned(name.into()),
                     args,
+                    pre_pipe_comments: Vec::new(),
                 })
             })
             .collect(),

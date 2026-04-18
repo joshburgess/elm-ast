@@ -106,6 +106,11 @@ pub struct Printer {
     /// Each inner Vec is one `@docs` line. Used by `write_exposing_pretty` to
     /// match elm-format's grouping of exposing items.
     doc_groups: Vec<Vec<String>>,
+    /// Stack of the current expression's source span. Pushed/popped by
+    /// `write_spanned_expr`. Used by List/Tuple/etc. to detect when the
+    /// outer brackets spanned multiple source lines even if the inner
+    /// elements are all single-line.
+    expr_span_stack: Vec<Span>,
 }
 
 impl Printer {
@@ -118,6 +123,7 @@ impl Printer {
             indent_extra_stack: Vec::new(),
             in_vertical_chain: false,
             doc_groups: Vec::new(),
+            expr_span_stack: Vec::new(),
         }
     }
 
@@ -791,7 +797,7 @@ impl Printer {
                 self.write(" =");
                 self.indent();
                 self.newline_indent();
-                self.write_expr(&body.value);
+                self.write_spanned_expr(&body);
                 self.dedent();
             }
         }
@@ -815,7 +821,7 @@ impl Printer {
             self.write(" :");
             self.indent();
             self.newline_indent();
-            self.write_type_multiline(&sig.type_annotation.value);
+            self.write_type_multiline(&sig.type_annotation);
             self.dedent();
         } else {
             self.write(" : ");
@@ -833,16 +839,16 @@ impl Printer {
     /// Write a type annotation broken across lines: function arrows on their
     /// own lines, record arguments expanded multi-line. Matches elm-format's
     /// layout when the source annotation spans multiple lines.
-    fn write_type_multiline(&mut self, ty: &TypeAnnotation) {
-        match ty {
+    fn write_type_multiline(&mut self, ty: &Spanned<TypeAnnotation>) {
+        match &ty.value {
             TypeAnnotation::FunctionType { from, to } => {
-                self.write_type_arm_multiline(&from.value);
-                let mut cur: &TypeAnnotation = &to.value;
+                self.write_type_arm_multiline(from);
+                let mut cur: &Spanned<TypeAnnotation> = to;
                 loop {
-                    match cur {
+                    match &cur.value {
                         TypeAnnotation::FunctionType { from, to } => {
-                            self.write_function_arm_arrow(&from.value);
-                            cur = &to.value;
+                            self.write_function_arm_arrow(from);
+                            cur = to;
                         }
                         _ => {
                             self.write_function_arm_arrow(cur);
@@ -854,15 +860,16 @@ impl Printer {
             TypeAnnotation::Record(fields) if fields.len() >= 2 => {
                 self.write_record_type_fields_multiline(fields, None);
             }
-            _ => self.write_type(ty),
+            _ => self.write_type(&ty.value),
         }
     }
 
     /// Emit one `-> <arm>` step of a multi-line function type. When the arm
-    /// itself will expand onto multiple lines (e.g. a 2+ field record),
-    /// elm-format puts the arrow alone on its own line and indents the arm
-    /// below it; otherwise the arrow and arm sit on the same line.
-    fn write_function_arm_arrow(&mut self, arm: &TypeAnnotation) {
+    /// itself will expand onto multiple lines (e.g. a 2+ field record whose
+    /// source span is multi-line), elm-format puts the arrow alone on its
+    /// own line and indents the arm below it; otherwise the arrow and arm
+    /// sit on the same line.
+    fn write_function_arm_arrow(&mut self, arm: &Spanned<TypeAnnotation>) {
         self.newline_indent();
         if Self::type_arm_is_multiline(arm) {
             self.write("->");
@@ -876,18 +883,29 @@ impl Printer {
         }
     }
 
-    fn type_arm_is_multiline(ty: &TypeAnnotation) -> bool {
-        matches!(ty, TypeAnnotation::Record(fields) if fields.len() >= 2)
+    fn type_arm_is_multiline(arm: &Spanned<TypeAnnotation>) -> bool {
+        match &arm.value {
+            TypeAnnotation::Record(fields) if fields.len() >= 2 => {
+                // Only treat as multi-line if the record's SOURCE spans
+                // multiple lines. A single-line record stays inline.
+                arm.span.end.line > arm.span.start.line && arm.span.start.line != 0
+            }
+            _ => false,
+        }
     }
 
     /// Write a single arm of a multi-line function type. Records expand
     /// multi-line; other forms stay on one line (parenthesized if needed).
-    fn write_type_arm_multiline(&mut self, ty: &TypeAnnotation) {
-        match ty {
+    fn write_type_arm_multiline(&mut self, arm: &Spanned<TypeAnnotation>) {
+        match &arm.value {
             TypeAnnotation::Record(fields) if fields.len() >= 2 => {
-                self.write_record_type_fields_multiline(fields, None);
+                if arm.span.end.line > arm.span.start.line && arm.span.start.line != 0 {
+                    self.write_record_type_fields_multiline(fields, None);
+                } else {
+                    self.write_type_non_arrow(&arm.value);
+                }
             }
-            _ => self.write_type_non_arrow(ty),
+            _ => self.write_type_non_arrow(&arm.value),
         }
     }
 
@@ -949,12 +967,6 @@ impl Printer {
         }
         self.indent();
         for (i, ctor) in ct.constructors.iter().enumerate() {
-            let has_line_comment = ctor
-                .comments
-                .iter()
-                .any(|c| matches!(c.value, Comment::Line(_)));
-
-            let _ = has_line_comment;
             if i == 0 {
                 self.newline_indent();
                 self.write("= ");
@@ -964,11 +976,11 @@ impl Printer {
                     self.write_indent();
                     self.write("  ");
                 }
+                self.write_value_constructor(&ctor.value);
             } else {
-                // elm-format places both line AND block comments between
-                // constructors at the constructor-name column (indent + 2),
-                // on their own line(s), with NO blank line before, and then
-                // emits `| Ctor` on the next line.
+                // Post-pipe comments (ctor.comments) sit on their own line(s)
+                // at the constructor-name column (indent + 2), BEFORE the `|`,
+                // with no blank line above.
                 for c in &ctor.comments {
                     self.newline();
                     self.write_indent();
@@ -977,8 +989,18 @@ impl Printer {
                 }
                 self.newline_indent();
                 self.write("| ");
+                // Pre-pipe comments (ctor.value.pre_pipe_comments) sit INLINE
+                // with the `|`, each followed by a newline + indent + 2 so the
+                // following constructor name aligns at the `|` column + 2.
+                let pre = &ctor.value.pre_pipe_comments;
+                for c in pre {
+                    self.write_comment(&c.value);
+                    self.newline();
+                    self.write_indent();
+                    self.write("  ");
+                }
+                self.write_value_constructor(&ctor.value);
             }
-            self.write_value_constructor(&ctor.value);
         }
         self.dedent();
     }
@@ -1102,25 +1124,51 @@ impl Printer {
                     self.write_record_field_leading_comments_inline(&field.comments);
                 }
                 self.write(&field.value.name.value);
-                self.write(" : ");
-                self.write_type(&field.value.type_annotation.value);
+                self.write_field_type_with_possible_break(&field.value.type_annotation);
             }
             self.dedent();
         } else {
             self.write("{ ");
             self.write_record_field_leading_comments_inline(&fields[0].comments);
             self.write(&fields[0].value.name.value);
-            self.write(" : ");
-            self.write_type(&fields[0].value.type_annotation.value);
+            self.write_field_type_with_possible_break(&fields[0].value.type_annotation);
             for field in &fields[1..] {
                 self.write_record_field_separator_with_comments(&field.comments);
                 self.write(&field.value.name.value);
-                self.write(" : ");
-                self.write_type(&field.value.type_annotation.value);
+                self.write_field_type_with_possible_break(&field.value.type_annotation);
             }
         }
         self.newline_indent();
         self.write("}");
+    }
+
+    /// Write ` : <type>` for a record field's type annotation. If the value
+    /// is a record type whose source spans multiple lines, break it onto its
+    /// own indented line: ` :\n    { ... }`.
+    fn write_field_type_with_possible_break(&mut self, ta: &Spanned<TypeAnnotation>) {
+        if self.is_pretty() && Self::type_ann_spans_multi_lines(ta) {
+            match &ta.value {
+                TypeAnnotation::Record(rfields) if !rfields.is_empty() => {
+                    self.write(" :");
+                    self.indent();
+                    self.newline_indent();
+                    self.write_record_type_fields_multiline(rfields, None);
+                    self.dedent();
+                    return;
+                }
+                TypeAnnotation::GenericRecord { base, fields: rfields } => {
+                    self.write(" :");
+                    self.indent();
+                    self.newline_indent();
+                    self.write_record_type_fields_multiline(rfields, Some(&base.value));
+                    self.dedent();
+                    return;
+                }
+                _ => {}
+            }
+        }
+        self.write(" : ");
+        self.write_type(&ta.value);
     }
 
     fn write_type_non_arrow(&mut self, ty: &TypeAnnotation) {
@@ -1354,6 +1402,19 @@ impl Printer {
     /// expressions (case/if/let/lambda) can appear directly.
     pub fn write_expr(&mut self, expr: &Expr) {
         self.write_expr_inner(expr);
+    }
+
+    /// Write a spanned expression, pushing its source span onto the span
+    /// stack so children (List, Tuple, etc.) can consult it for multi-line
+    /// detection based on the outer brackets' lines, not just element spans.
+    pub fn write_spanned_expr(&mut self, spanned: &Spanned<Expr>) {
+        self.expr_span_stack.push(spanned.span);
+        self.write_expr_inner(&spanned.value);
+        self.expr_span_stack.pop();
+    }
+
+    fn current_expr_span(&self) -> Option<Span> {
+        self.expr_span_stack.last().copied()
     }
 
     /// Emit leading comments attached to a node.
@@ -1841,9 +1902,11 @@ impl Printer {
                     for (i, arg) in args.iter().enumerate() {
                         if i > 0 {
                             self.write_char(' ');
-                            self.write_app_arg(&arg.value);
+                            self.write_app_arg_spanned(arg);
                         } else {
+                            self.expr_span_stack.push(arg.span);
                             self.write_expr_atomic(&arg.value);
+                            self.expr_span_stack.pop();
                         }
                     }
                 }
@@ -1866,6 +1929,12 @@ impl Printer {
         } else {
             self.write_expr_atomic(expr);
         }
+    }
+
+    fn write_app_arg_spanned(&mut self, spanned: &Spanned<Expr>) {
+        self.expr_span_stack.push(spanned.span);
+        self.write_app_arg(&spanned.value);
+        self.expr_span_stack.pop();
     }
 
     fn write_application_vertical(&mut self, args: &[Spanned<Expr>]) {
@@ -1909,10 +1978,10 @@ impl Printer {
             } else {
                 self.newline_indent();
             }
-            self.write_app_arg(&first.value);
+            self.write_app_arg_spanned(first);
             for arg in &args[2..] {
                 self.newline_indent();
-                self.write_app_arg(&arg.value);
+                self.write_app_arg_spanned(arg);
             }
         }
         self.dedent();
@@ -1983,7 +2052,7 @@ impl Printer {
                         self.indent_extra = (col % w) as u32;
 
                         let start_len = self.buf.len();
-                        self.write_expr(&inner.value);
+                        self.write_spanned_expr(&inner);
                         let wrote_newline = self.buf[start_len..].contains('\n');
 
                         // Restore indent state and write `)` at `(` column.
@@ -2011,7 +2080,7 @@ impl Printer {
                         self.indent = col / w;
                         self.indent_extra = (col % w) as u32;
 
-                        self.write_expr(&inner.value);
+                        self.write_spanned_expr(&inner);
 
                         self.indent = saved_indent;
                         self.indent_extra = saved_extra;
@@ -2024,7 +2093,7 @@ impl Printer {
                     }
                 } else {
                     self.write_char('(');
-                    self.write_expr(&inner.value);
+                    self.write_spanned_expr(&inner);
                     self.write_char(')');
                 }
             }
@@ -2037,7 +2106,7 @@ impl Printer {
                 if elems.is_empty() {
                     self.write("[]");
                 } else {
-                    self.write_comma_sep("[ ", " ]", elems);
+                    self.write_comma_sep_force_multi("[ ", " ]", elems);
                 }
             }
 
@@ -2200,8 +2269,42 @@ impl Printer {
     /// Write a comma-separated list of expressions with adaptive layout.
     /// Uses single-line when all elements are single-line, multi-line otherwise.
     fn write_comma_sep(&mut self, open: &str, close: &str, elems: &[Spanned<Expr>]) {
+        self.write_comma_sep_inner(open, close, elems, false);
+    }
+
+    /// Like `write_comma_sep` but force multi-line when the enclosing span
+    /// crosses source lines (used for lists where elm-format preserves
+    /// user-chosen multi-line layout even with single-element lists).
+    fn write_comma_sep_force_multi(
+        &mut self,
+        open: &str,
+        close: &str,
+        elems: &[Spanned<Expr>],
+    ) {
+        self.write_comma_sep_inner(open, close, elems, true);
+    }
+
+    fn write_comma_sep_inner(
+        &mut self,
+        open: &str,
+        close: &str,
+        elems: &[Spanned<Expr>],
+        respect_outer_multi_line: bool,
+    ) {
+        let open_col = self.current_column();
+        let standard_indent =
+            self.indent * self.config.indent_width + self.indent_extra as usize;
+        let at_standard_indent = (open_col as usize) == standard_indent;
+        let outer_multi_line = respect_outer_multi_line
+            && self.is_pretty()
+            && at_standard_indent
+            && self
+                .current_expr_span()
+                .map(|s| s.end.line > s.start.line && s.start.line != 0)
+                .unwrap_or(false);
         let any_multiline = elems.iter().any(|e| self.is_multiline(&e.value))
-            || (self.is_pretty() && Self::spans_multi_lines(elems));
+            || (self.is_pretty() && Self::spans_multi_lines(elems))
+            || outer_multi_line;
         if any_multiline && self.is_pretty() {
             // elm-format style: first element on same line as open bracket,
             // subsequent elements aligned with ", " prefix at same indent.
@@ -2242,7 +2345,7 @@ impl Printer {
                     self.indent();
                 }
                 self.indent_extra = saved_extra + 2;
-                self.write_expr(&elem.value);
+                self.write_spanned_expr(&elem);
                 self.indent_extra = saved_extra;
                 if bump_indent {
                     self.dedent();
@@ -2264,7 +2367,7 @@ impl Printer {
                 } else {
                     self.write(", ");
                 }
-                self.write_expr(&elem.value);
+                self.write_spanned_expr(&elem);
             }
             self.newline_indent();
             self.write(close.trim_start());
@@ -2276,7 +2379,7 @@ impl Printer {
                 if i > 0 {
                     self.write(", ");
                 }
-                self.write_expr(&elem.value);
+                self.write_spanned_expr(&elem);
             }
             self.write(close);
         }
@@ -2292,11 +2395,11 @@ impl Printer {
             self.write(" =");
             self.indent();
             self.newline_indent();
-            self.write_expr(&setter.value.value);
+            self.write_spanned_expr(&setter.value);
             self.dedent();
         } else {
             self.write(" = ");
-            self.write_expr(&setter.value.value);
+            self.write_spanned_expr(&setter.value);
         }
     }
 
@@ -2312,14 +2415,14 @@ impl Printer {
             self.write(keyword);
             self.indent();
             self.newline_indent();
-            self.write_expr(&cond.value);
+            self.write_spanned_expr(&cond);
             self.dedent();
             self.newline_indent();
             self.write("then");
         } else {
             self.write(keyword);
             self.write_char(' ');
-            self.write_expr(&cond.value);
+            self.write_spanned_expr(&cond);
             self.write(" then");
         }
     }
@@ -2343,11 +2446,11 @@ impl Printer {
         if all_simple {
             let (cond, body) = &branches[0];
             self.write("if ");
-            self.write_expr(&cond.value);
+            self.write_spanned_expr(&cond);
             self.write(" then ");
-            self.write_expr(&body.value);
+            self.write_spanned_expr(&body);
             self.write(" else ");
-            self.write_expr(&else_branch.value);
+            self.write_spanned_expr(&else_branch);
         } else if self.is_pretty() {
             // In pretty mode, use column-based indentation so that
             // branches are always indented relative to the `if` keyword,
@@ -2367,7 +2470,7 @@ impl Printer {
                 self.indent();
                 self.newline_indent();
                 self.write_leading_comments(&body.comments);
-                self.write_expr(&body.value);
+                self.write_spanned_expr(&body);
                 self.dedent();
                 self.newline();
                 self.newline_indent();
@@ -2383,7 +2486,7 @@ impl Printer {
                     self.indent();
                     self.newline_indent();
                     self.write_leading_comments(&body.comments);
-                    self.write_expr(&body.value);
+                    self.write_spanned_expr(&body);
                     self.dedent();
                     self.newline();
                     self.newline_indent();
@@ -2394,7 +2497,7 @@ impl Printer {
                 self.indent();
                 self.newline_indent();
                 self.write_leading_comments(&else_branch.comments);
-                self.write_expr(&else_branch.value);
+                self.write_spanned_expr(&else_branch);
                 self.dedent();
             }
 
@@ -2409,12 +2512,12 @@ impl Printer {
                 } else {
                     self.write("else if ");
                 }
-                self.write_expr(&cond.value);
+                self.write_spanned_expr(&cond);
                 self.write(" then");
                 self.indent();
                 self.newline_indent();
                 self.write_leading_comments(&body.comments);
-                self.write_expr(&body.value);
+                self.write_spanned_expr(&body);
                 self.dedent();
                 self.newline();
                 self.newline_indent();
@@ -2423,7 +2526,7 @@ impl Printer {
             self.indent();
             self.newline_indent();
             self.write_leading_comments(&else_branch.comments);
-            self.write_expr(&else_branch.value);
+            self.write_spanned_expr(&else_branch);
             self.dedent();
         }
     }
@@ -2437,12 +2540,12 @@ impl Printer {
         {
             for (cond, body) in nested_branches {
                 self.write("else if ");
-                self.write_expr(&cond.value);
+                self.write_spanned_expr(&cond);
                 self.write(" then");
                 self.indent();
                 self.newline_indent();
                 self.write_leading_comments(&body.comments);
-                self.write_expr(&body.value);
+                self.write_spanned_expr(&body);
                 self.dedent();
                 self.newline();
                 self.newline_indent();
@@ -2453,7 +2556,7 @@ impl Printer {
             self.indent();
             self.newline_indent();
             self.write_leading_comments(&else_branch.comments);
-            self.write_expr(&else_branch.value);
+            self.write_spanned_expr(&else_branch);
             self.dedent();
         }
     }
@@ -2501,7 +2604,7 @@ impl Printer {
                 self.indent();
                 self.newline_indent();
                 self.write_leading_comments(&branch.body.comments);
-                self.write_expr(&branch.body.value);
+                self.write_spanned_expr(&branch.body);
                 self.dedent();
             }
             self.dedent();
@@ -2528,7 +2631,7 @@ impl Printer {
             self.newline_indent();
             // Emit leading comments on the branch body.
             self.write_leading_comments(&branch.body.comments);
-            self.write_expr(&branch.body.value);
+            self.write_spanned_expr(&branch.body);
             self.dedent();
         }
         self.dedent();
@@ -2559,7 +2662,7 @@ impl Printer {
             self.write("in");
             self.newline_indent();
             self.write_leading_comments(&body.comments);
-            self.write_expr(&body.value);
+            self.write_spanned_expr(&body);
 
             self.indent = saved_indent;
             self.indent_extra = saved_extra;
@@ -2578,7 +2681,7 @@ impl Printer {
         self.write("in");
         self.newline_indent();
         self.write_leading_comments(&body.comments);
-        self.write_expr(&body.value);
+        self.write_spanned_expr(&body);
     }
 
     fn write_let_declaration(&mut self, decl: &LetDeclaration) {
@@ -2596,7 +2699,7 @@ impl Printer {
                 self.indent();
                 self.newline_indent();
                 self.write_leading_comments(&body.comments);
-                self.write_expr(&body.value);
+                self.write_spanned_expr(&body);
                 self.dedent();
             }
         }
@@ -2623,11 +2726,11 @@ impl Printer {
             self.write(" ->");
             self.indent();
             self.newline_indent();
-            self.write_expr(&body.value);
+            self.write_spanned_expr(&body);
             self.dedent();
         } else {
             self.write(" -> ");
-            self.write_expr(&body.value);
+            self.write_spanned_expr(&body);
         }
     }
 

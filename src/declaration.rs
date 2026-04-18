@@ -1,3 +1,4 @@
+use crate::comment::Comment;
 use crate::expr::{Function, Signature};
 use crate::ident::Ident;
 use crate::node::Spanned;
@@ -104,6 +105,14 @@ pub struct CustomType {
 pub struct ValueConstructor {
     pub name: Spanned<Ident>,
     pub args: Vec<Spanned<TypeAnnotation>>,
+    /// Comments that appeared BEFORE the preceding `|` separator (or for the
+    /// first constructor, before `=`). elm-format preserves these as
+    /// "trailing on previous constructor" style: they appear on their own
+    /// line(s) at the constructor-name column, with the `|` for THIS
+    /// constructor coming afterward on a new line. Leave empty for the
+    /// first constructor.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub pre_pipe_comments: Vec<Spanned<Comment>>,
 }
 
 /// An infix operator definition.

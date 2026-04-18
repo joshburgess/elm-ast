@@ -216,31 +216,73 @@ fn parse_custom_type(p: &mut Parser, doc: Option<Spanned<String>>) -> ParseResul
 
     p.expect(&Token::Equals)?;
 
-    // Parse constructors separated by `|`. Capture any line/block comments
-    // that appear between the pipe and the next constructor as leading
-    // comments on that constructor.
-    let start_snapshot = p.pending_comments_snapshot();
+    // Parse constructors separated by `|`. Capture comments between
+    // constructors and split them into "pre-pipe" (appearing BEFORE the
+    // `|` separator, printed as trailing on previous constructor) vs
+    // "post-pipe" (appearing AFTER `|`, printed inline with the pipe).
+    // elm-format distinguishes these by byte offset relative to the `|`.
+    let snapshot_outer = p.pending_comments_snapshot();
     let mut constructors = Vec::new();
-    constructors.push(parse_value_constructor(p)?);
+    let mut first_ctor = parse_value_constructor(p)?;
+    // Comments between `=` and the first ctor name are leading on first ctor.
+    let first_name_start = first_ctor.value.name.span.start.offset;
+    let before_first = p.take_pending_comments_since(snapshot_outer);
+    let (leading_first, other_first): (Vec<_>, Vec<_>) = before_first
+        .into_iter()
+        .partition(|c| c.span.end.offset <= first_name_start);
+    p.restore_pending_comments(other_first);
+    if !leading_first.is_empty() {
+        let mut all_leading = leading_first;
+        all_leading.extend(std::mem::take(&mut first_ctor.comments));
+        first_ctor.comments = all_leading;
+    }
+    constructors.push(first_ctor);
 
-    while p.eat(&Token::Pipe) {
+    loop {
+        // Find the next `|` and capture its offset. skip_whitespace pushes
+        // comments BEFORE `|` onto pending so they're available to split.
+        p.skip_whitespace();
+        if !matches!(p.peek(), Token::Pipe) {
+            break;
+        }
+        let pipe_offset = p.peek_span().start.offset;
+        p.advance(); // consume `|`
+
         let mut ctor = parse_value_constructor(p)?;
 
         let prev_end = constructors.last().unwrap().span.end.offset;
-        // Use the constructor NAME's start, not the outer span's start —
-        // the outer start is captured before skip_whitespace, which would
-        // put it at the position of any preceding block comment and make
-        // the comment fail the `end <= ctor_start` filter below.
-        let ctor_start = ctor.value.name.span.start.offset;
-        let all = p.take_pending_comments_since(start_snapshot);
-        let (leading, other): (Vec<_>, Vec<_>) = all.into_iter().partition(|c| {
-            c.span.start.offset > prev_end && c.span.end.offset <= ctor_start
-        });
+        let ctor_name_start = ctor.value.name.span.start.offset;
+
+        let all = p.take_pending_comments_since(snapshot_outer);
+
+        let mut pre_pipe: Vec<Spanned<crate::comment::Comment>> = Vec::new();
+        let mut post_pipe: Vec<Spanned<crate::comment::Comment>> = Vec::new();
+        let mut other: Vec<Spanned<crate::comment::Comment>> = Vec::new();
+        for c in all {
+            let in_gap =
+                c.span.start.offset > prev_end && c.span.end.offset <= ctor_name_start;
+            if !in_gap {
+                other.push(c);
+            } else if c.span.start.offset < pipe_offset {
+                pre_pipe.push(c);
+            } else {
+                post_pipe.push(c);
+            }
+        }
         p.restore_pending_comments(other);
-        if !leading.is_empty() {
-            let mut all_leading = leading;
+
+        // pre_pipe: comments BEFORE `|` in source. Attach to CURRENT ctor's
+        //   `comments` so the printer emits them detached above `|`.
+        // post_pipe: comments AFTER `|` in source. Store separately so the
+        //   printer emits them inline with `|` (via pre_pipe_comments field,
+        //   which despite its name stores the inline-with-pipe comments).
+        if !pre_pipe.is_empty() {
+            let mut all_leading = pre_pipe;
             all_leading.extend(std::mem::take(&mut ctor.comments));
             ctor.comments = all_leading;
+        }
+        if !post_pipe.is_empty() {
+            ctor.value.pre_pipe_comments = post_pipe;
         }
         constructors.push(ctor);
     }
@@ -278,7 +320,14 @@ fn parse_value_constructor(p: &mut Parser) -> ParseResult<Spanned<ValueConstruct
         args.push(super::type_annotation::parse_type_atomic_public(p)?);
     }
 
-    Ok(p.spanned_from(start, ValueConstructor { name, args }))
+    Ok(p.spanned_from(
+        start,
+        ValueConstructor {
+            name,
+            args,
+            pre_pipe_comments: Vec::new(),
+        },
+    ))
 }
 
 fn parse_infix_declaration(p: &mut Parser) -> ParseResult<InfixDef> {

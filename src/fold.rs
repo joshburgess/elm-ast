@@ -241,6 +241,7 @@ pub fn fold_value_constructor<F: Fold + ?Sized>(
             .into_iter()
             .map(|a| f.fold_type_annotation(a))
             .collect(),
+        pre_pipe_comments: ctor.value.pre_pipe_comments,
     };
     Spanned::new(span, value)
 }
