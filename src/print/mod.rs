@@ -2422,7 +2422,7 @@ impl Printer {
                 self.indent();
             }
             self.indent_extra = saved_extra + 2;
-            self.write_expr(&elems[0].value);
+            self.write_spanned_expr(&elems[0]);
             self.indent_extra = saved_extra;
             if bump_indent {
                 self.dedent();
