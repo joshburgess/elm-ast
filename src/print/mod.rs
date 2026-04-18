@@ -2209,7 +2209,11 @@ impl Printer {
 
     fn write_record_setter(&mut self, setter: &RecordSetter) {
         self.write(&setter.field.value);
-        if self.is_multiline(&setter.value.value) {
+        // In pretty mode, preserve source layout: if the value started on a
+        // line after the field name, keep the break. elm-format respects this.
+        let source_was_multiline = self.is_pretty()
+            && setter.field.span.end.line < setter.value.span.start.line;
+        if self.is_multiline(&setter.value.value) || source_was_multiline {
             self.write(" =");
             self.indent();
             self.newline_indent();
