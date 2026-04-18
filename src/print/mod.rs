@@ -1074,8 +1074,9 @@ impl Printer {
             self.write("| ");
             for (i, field) in fields.iter().enumerate() {
                 if i > 0 {
-                    self.newline_indent();
-                    self.write(", ");
+                    self.write_record_field_separator_with_comments(&field.comments);
+                } else {
+                    self.write_record_field_leading_comments_inline(&field.comments);
                 }
                 self.write(&field.value.name.value);
                 self.write(" : ");
@@ -1084,12 +1085,12 @@ impl Printer {
             self.dedent();
         } else {
             self.write("{ ");
+            self.write_record_field_leading_comments_inline(&fields[0].comments);
             self.write(&fields[0].value.name.value);
             self.write(" : ");
             self.write_type(&fields[0].value.type_annotation.value);
             for field in &fields[1..] {
-                self.newline_indent();
-                self.write(", ");
+                self.write_record_field_separator_with_comments(&field.comments);
                 self.write(&field.value.name.value);
                 self.write(" : ");
                 self.write_type(&field.value.type_annotation.value);
@@ -1338,6 +1339,54 @@ impl Printer {
             self.write_comment(&c.value);
             self.newline();
             self.write_indent();
+        }
+    }
+
+    /// Emit inline leading comments for the FIRST record-type field (after
+    /// `{ ` or `| `). Block comments stay inline; line comments get promoted
+    /// to their own line at base indent + 2 so the field name aligns with the
+    /// column after `{ `.
+    fn write_record_field_leading_comments_inline(&mut self, comments: &[Spanned<Comment>]) {
+        for c in comments {
+            self.write_comment(&c.value);
+            self.newline();
+            self.write_indent();
+            self.write("  ");
+        }
+    }
+
+    /// Emit the separator between two record-type fields, placing any leading
+    /// comments appropriately. elm-format handles block vs. line comments
+    /// differently:
+    ///   - Block comment: `, {- .. -}\n<indent>  field` (+2 col for field)
+    ///   - Line comment: blank line, then `<indent>-- line\n<indent>, field`
+    fn write_record_field_separator_with_comments(&mut self, comments: &[Spanned<Comment>]) {
+        let has_line_comment = comments
+            .iter()
+            .any(|c| matches!(c.value, Comment::Line(_)));
+
+        if has_line_comment {
+            for (i, c) in comments.iter().enumerate() {
+                if i == 0 {
+                    self.newline();
+                    self.newline();
+                } else {
+                    self.newline();
+                }
+                self.write_indent();
+                self.write_comment(&c.value);
+            }
+            self.newline_indent();
+            self.write(", ");
+        } else {
+            self.newline_indent();
+            self.write(", ");
+            for c in comments {
+                self.write_comment(&c.value);
+                self.newline();
+                self.write_indent();
+                self.write("  ");
+            }
         }
     }
 

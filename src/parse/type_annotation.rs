@@ -182,11 +182,35 @@ fn parse_record_type(p: &mut Parser) -> ParseResult<Spanned<TypeAnnotation>> {
 
 /// Parse comma-separated record fields: `name : Type, age : Type`
 fn parse_record_fields(p: &mut Parser) -> ParseResult<Vec<Spanned<RecordField>>> {
+    // Snapshot once: trailing `skip_whitespace` at the end of one field's
+    // type parse may have pushed a `-- comment` between fields onto the
+    // pending buffer BEFORE we get a chance to snapshot locally. By
+    // snapshotting at the top, then partitioning by position after each
+    // subsequent field, we can attach those between-field comments to the
+    // next field and restore anything that doesn't belong.
+    let start_snapshot = p.pending_comments_snapshot();
     let mut fields = Vec::new();
     fields.push(parse_record_field(p)?);
 
     while p.eat(&Token::Comma) {
-        fields.push(parse_record_field(p)?);
+        p.skip_whitespace();
+        let mut field = parse_record_field(p)?;
+
+        let prev_end = fields.last().unwrap().span.end.offset;
+        let field_start = field.span.start.offset;
+
+        let all = p.take_pending_comments_since(start_snapshot);
+        let (leading, other): (Vec<_>, Vec<_>) = all.into_iter().partition(|c| {
+            c.span.start.offset > prev_end && c.span.end.offset <= field_start
+        });
+        p.restore_pending_comments(other);
+
+        if !leading.is_empty() {
+            let mut all_leading = leading;
+            all_leading.extend(std::mem::take(&mut field.comments));
+            field.comments = all_leading;
+        }
+        fields.push(field);
     }
 
     Ok(fields)
