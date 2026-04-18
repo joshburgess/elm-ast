@@ -860,6 +860,9 @@ impl Printer {
             TypeAnnotation::Record(fields) if fields.len() >= 2 => {
                 self.write_record_type_fields_multiline(fields, None);
             }
+            TypeAnnotation::GenericRecord { base, fields } if !fields.is_empty() => {
+                self.write_record_type_fields_multiline(fields, Some(&base.value));
+            }
             _ => self.write_type(&ty.value),
         }
     }
@@ -884,12 +887,10 @@ impl Printer {
     }
 
     fn type_arm_is_multiline(arm: &Spanned<TypeAnnotation>) -> bool {
+        let source_multi = arm.span.end.line > arm.span.start.line && arm.span.start.line != 0;
         match &arm.value {
-            TypeAnnotation::Record(fields) if fields.len() >= 2 => {
-                // Only treat as multi-line if the record's SOURCE spans
-                // multiple lines. A single-line record stays inline.
-                arm.span.end.line > arm.span.start.line && arm.span.start.line != 0
-            }
+            TypeAnnotation::Record(fields) if fields.len() >= 2 => source_multi,
+            TypeAnnotation::GenericRecord { fields, .. } if !fields.is_empty() => source_multi,
             _ => false,
         }
     }
@@ -897,13 +898,13 @@ impl Printer {
     /// Write a single arm of a multi-line function type. Records expand
     /// multi-line; other forms stay on one line (parenthesized if needed).
     fn write_type_arm_multiline(&mut self, arm: &Spanned<TypeAnnotation>) {
+        let source_multi = arm.span.end.line > arm.span.start.line && arm.span.start.line != 0;
         match &arm.value {
-            TypeAnnotation::Record(fields) if fields.len() >= 2 => {
-                if arm.span.end.line > arm.span.start.line && arm.span.start.line != 0 {
-                    self.write_record_type_fields_multiline(fields, None);
-                } else {
-                    self.write_type_non_arrow(&arm.value);
-                }
+            TypeAnnotation::Record(fields) if fields.len() >= 2 && source_multi => {
+                self.write_record_type_fields_multiline(fields, None);
+            }
+            TypeAnnotation::GenericRecord { base, fields } if !fields.is_empty() && source_multi => {
+                self.write_record_type_fields_multiline(fields, Some(&base.value));
             }
             _ => self.write_type_non_arrow(&arm.value),
         }
