@@ -1792,14 +1792,38 @@ impl Printer {
                         .any(|f| self.is_multiline(&f.value.value.value))
                         || (self.is_pretty() && Self::spans_multi_lines(fields));
                     if any_ml {
+                        // Align commas and closing brace with the column of `{`.
+                        // elm-format uses `open_col`-based alignment so that
+                        // records laid out after a binary operator or on a
+                        // non-indent column (e.g. `x == { a = 1\n   , b = 2 }`)
+                        // keep commas visually flush with the opening brace.
+                        let open_col = if self.is_pretty() {
+                            Some(self.current_column())
+                        } else {
+                            None
+                        };
                         self.write("{ ");
                         self.write_record_setter(&fields[0].value);
                         for field in &fields[1..] {
-                            self.newline_indent();
+                            if let Some(col) = open_col {
+                                self.newline();
+                                for _ in 0..col {
+                                    self.buf.push(' ');
+                                }
+                            } else {
+                                self.newline_indent();
+                            }
                             self.write(", ");
                             self.write_record_setter(&field.value);
                         }
-                        self.newline_indent();
+                        if let Some(col) = open_col {
+                            self.newline();
+                            for _ in 0..col {
+                                self.buf.push(' ');
+                            }
+                        } else {
+                            self.newline_indent();
+                        }
                         self.write("}");
                     } else {
                         self.write("{ ");
