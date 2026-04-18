@@ -1844,6 +1844,12 @@ impl Printer {
                         }
                         self.in_vertical_chain = true;
                         for (op, operand) in head_rest.iter().chain(rest.iter()) {
+                            for c in &operand.comments {
+                                if matches!(c.value, Comment::Line(_)) {
+                                    self.newline_indent();
+                                    self.write_comment(&c.value);
+                                }
+                            }
                             self.newline_indent();
                             self.write(op);
                             self.write_char(' ');
@@ -2026,13 +2032,20 @@ impl Printer {
                     }
                 }
 
+                let is_pipe = matches!(operator.as_str(), "|>" | "|." | "|=");
+                let right_has_line_leading = is_pipe
+                    && right
+                        .comments
+                        .iter()
+                        .any(|c| matches!(c.value, Comment::Line(_)));
                 let use_vertical = if self.is_pretty() {
                     // elm-format: if either operand is multiline, break.
                     self.is_multiline(&left.value)
                         || self.is_multiline(right_expr)
                         || Self::spans_cross_lines(left.span, right.span)
+                        || right_has_line_leading
                 } else {
-                    self.is_multiline(right_expr)
+                    self.is_multiline(right_expr) || right_has_line_leading
                 };
                 self.write_leading_comments(&left.comments);
                 let left_multiline = self.is_pretty() && self.is_multiline(&left.value);
@@ -2090,11 +2103,28 @@ impl Printer {
                     if !outer_chain {
                         self.indent();
                     }
-                    self.newline_indent();
-                    self.write(operator);
-                    self.write_char(' ');
-                    self.write_leading_comments(&right.comments);
-                    self.write_expr_operand(right.as_ref(), operator, false);
+                    // For pipe steps with leading line comments, emit them
+                    // on their own indented line BEFORE the operator so that
+                    // the output re-parses with the comments attached back
+                    // to the same operand.
+                    if right_has_line_leading {
+                        for c in &right.comments {
+                            if matches!(c.value, Comment::Line(_)) {
+                                self.newline_indent();
+                                self.write_comment(&c.value);
+                            }
+                        }
+                        self.newline_indent();
+                        self.write(operator);
+                        self.write_char(' ');
+                        self.write_expr_operand(right.as_ref(), operator, false);
+                    } else {
+                        self.newline_indent();
+                        self.write(operator);
+                        self.write_char(' ');
+                        self.write_leading_comments(&right.comments);
+                        self.write_expr_operand(right.as_ref(), operator, false);
+                    }
                     if !outer_chain {
                         self.dedent();
                     }
