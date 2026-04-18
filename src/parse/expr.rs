@@ -357,7 +357,11 @@ fn application_loop(
 ) -> ParseResult<Step> {
     loop {
         p.skip_whitespace();
-        let is_unary_neg_arg = is_unary_minus_arg(p);
+        // Whitespace must precede `-` for it to be treated as unary negation
+        // consumed as an arg (`f -x`). Otherwise `n-1` is binary subtraction.
+        let prev_end = args.last().map(|a| a.span.end.offset).unwrap_or(0);
+        let has_ws_before_minus = p.current().span.start.offset > prev_end;
+        let is_unary_neg_arg = has_ws_before_minus && is_unary_minus_arg(p);
         if !can_start_atomic_expr(p.peek()) && !is_unary_neg_arg {
             break;
         }
