@@ -2476,6 +2476,8 @@ impl Printer {
                     let any_ml = fields
                         .iter()
                         .any(|f| self.is_multiline(&f.value.value.value))
+                        || (self.is_pretty()
+                            && fields.iter().any(|f| f.value.trailing_comment.is_some()))
                         || (self.is_pretty() && Self::spans_multi_lines(fields));
                     if any_ml {
                         // Align commas and closing brace with the column of `{`.
@@ -2528,6 +2530,8 @@ impl Printer {
                 let any_ml = updates
                     .iter()
                     .any(|f| self.is_multiline(&f.value.value.value))
+                    || (self.is_pretty()
+                        && updates.iter().any(|f| f.value.trailing_comment.is_some()))
                     || (self.is_pretty() && Self::spans_multi_lines(updates));
                 if any_ml {
                     self.write("{ ");
@@ -2759,6 +2763,12 @@ impl Printer {
         } else {
             self.write(" = ");
             self.write_spanned_expr(&setter.value);
+        }
+        if let Some(trailing) = &setter.trailing_comment
+            && self.is_pretty()
+        {
+            self.write_char(' ');
+            self.write_comment(&trailing.value);
         }
     }
 

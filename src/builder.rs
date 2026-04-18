@@ -94,6 +94,7 @@ pub fn record(fields: Vec<(impl Into<String>, Spanned<Expr>)>) -> Spanned<Expr> 
                 spanned(RecordSetter {
                     field: spanned(name.into()),
                     value,
+                    trailing_comment: None,
                 })
             })
             .collect(),

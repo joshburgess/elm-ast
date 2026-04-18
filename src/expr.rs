@@ -1,3 +1,4 @@
+use crate::comment::Comment;
 use crate::ident::{Ident, ModuleName};
 use crate::literal::Literal;
 use crate::node::Spanned;
@@ -142,6 +143,15 @@ impl Eq for Expr {}
 pub struct RecordSetter {
     pub field: Spanned<Ident>,
     pub value: Spanned<Expr>,
+    /// Optional trailing inline comment: `field = value -- comment`.
+    /// elm-format keeps a short comment attached at the end of the setter,
+    /// before the next `,` or `}`. Preserved only when the comment appears
+    /// on the same source line as the value.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub trailing_comment: Option<Spanned<Comment>>,
 }
 
 /// A branch in a case-of expression.

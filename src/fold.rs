@@ -508,6 +508,7 @@ pub fn fold_record_setter<F: Fold + ?Sized>(
     let value = RecordSetter {
         field: setter.value.field,
         value: f.fold_expr(setter.value.value),
+        trailing_comment: setter.value.trailing_comment,
     };
     Spanned::new(span, value)
 }

@@ -1222,7 +1222,27 @@ fn record_after_value(
     value: Spanned<Expr>,
     context: RecordContext,
 ) -> ParseResult<Step> {
-    let setter = RecordSetter { field, value };
+    // Claim a trailing inline comment on the same source line as the value end,
+    // e.g. `field = expr -- comment`. `binary_loop`'s post-value `skip_whitespace`
+    // will already have collected it into `collected_comments`.
+    let trailing_comment = {
+        let value_end_line = value.span.end.line;
+        let value_end_offset = value.span.end.offset;
+        let pending = &p.collected_comments;
+        if let Some(last) = pending.last()
+            && last.span.start.line == value_end_line
+            && last.span.start.offset >= value_end_offset
+        {
+            p.collected_comments.pop()
+        } else {
+            None
+        }
+    };
+    let setter = RecordSetter {
+        field,
+        value,
+        trailing_comment,
+    };
     setters.push(p.spanned_from(setter_start, setter));
 
     if p.eat(&Token::Comma) {
