@@ -1085,22 +1085,19 @@ impl Printer {
     fn write_value_constructor(&mut self, ctor: &ValueConstructor) {
         self.write(&ctor.name.value);
         // Only force multi-line constructor layout when an arg's printed
-        // form will genuinely span multiple lines. Function types,
-        // tuples, and applied types are always printed single-line via
-        // `write_type_atomic`, so forcing a break after the ctor name
-        // would be rewrapped by elm-format into a single line, breaking
-        // round-trip stability. Records with >=2 fields are the only
-        // arg kind that reliably print multi-line.
+        // form will genuinely span multiple lines. Tuples and applied
+        // types are always printed single-line via `write_type_atomic`,
+        // so forcing a break would be rewrapped by elm-format. The two
+        // arg kinds that reliably print multi-line are records with 2+
+        // fields, and function types that span multiple source lines
+        // (printed in the parenthesized aligned-arrow form).
         let any_multiline = self.is_pretty()
-            && ctor.args.iter().any(|a| {
-                Self::type_ann_spans_multi_lines(a)
-                    && matches!(&a.value, TypeAnnotation::Record(fs) if fs.len() >= 2)
-            });
+            && ctor.args.iter().any(|a| Self::ctor_arg_prints_multiline(a));
         if any_multiline {
             self.indent();
             for arg in &ctor.args {
                 self.newline_indent();
-                self.write_ctor_arg_multiline(&arg.value);
+                self.write_ctor_arg_multiline(arg);
             }
             self.dedent();
         } else {
@@ -1111,13 +1108,63 @@ impl Printer {
         }
     }
 
-    fn write_ctor_arg_multiline(&mut self, ty: &TypeAnnotation) {
-        match ty {
+    fn ctor_arg_prints_multiline(a: &Spanned<TypeAnnotation>) -> bool {
+        if !Self::type_ann_spans_multi_lines(a) {
+            return false;
+        }
+        matches!(&a.value, TypeAnnotation::Record(fs) if fs.len() >= 2)
+            || matches!(&a.value, TypeAnnotation::FunctionType { .. })
+    }
+
+    fn write_ctor_arg_multiline(&mut self, ty: &Spanned<TypeAnnotation>) {
+        match &ty.value {
             TypeAnnotation::Record(fields) if fields.len() >= 2 => {
                 self.write_record_type_fields_multiline(fields, None);
             }
-            _ => self.write_type_atomic(ty),
+            TypeAnnotation::FunctionType { .. } if Self::type_ann_spans_multi_lines(ty) => {
+                self.write_parenthesized_function_type_multiline(&ty.value);
+            }
+            _ => self.write_type_atomic(&ty.value),
         }
+    }
+
+    /// Write a multi-line function type wrapped in parens, with each arrow
+    /// aligned one column past the opening paren and the closing paren on
+    /// its own line aligned with the opening. Used for custom-type ctor
+    /// args whose source function type spanned multiple lines.
+    ///
+    /// ```text
+    /// (Location
+    ///  -> ResolvedNames
+    ///  -> Result err a
+    /// )
+    /// ```
+    fn write_parenthesized_function_type_multiline(&mut self, ty: &TypeAnnotation) {
+        self.write_char('(');
+        // Collect arms so we can emit the first inline with `(` and the
+        // rest on subsequent lines.
+        let mut arms: Vec<&TypeAnnotation> = Vec::new();
+        let mut cur = ty;
+        loop {
+            if let TypeAnnotation::FunctionType { from, to } = cur {
+                arms.push(&from.value);
+                cur = &to.value;
+            } else {
+                arms.push(cur);
+                break;
+            }
+        }
+        if let Some((first, rest)) = arms.split_first() {
+            self.write_type_atomic(first);
+            for arm in rest {
+                self.newline_indent();
+                self.write_char(' ');
+                self.write("-> ");
+                self.write_type_non_arrow(arm);
+            }
+        }
+        self.newline_indent();
+        self.write_char(')');
     }
 
     fn write_infix_decl(&mut self, infix: &InfixDef) {
