@@ -212,6 +212,28 @@ pub(in crate::print) fn looks_like_type_annotation(line: &str) -> bool {
     false
 }
 
+/// Return true if the paragraph consists of exactly one non-comment line
+/// plus one or more standalone `-- ...` line comments (no blank separators).
+/// elm-format leaves such blocks verbatim when they fail to parse as
+/// declarations, so we mirror that to avoid introducing unrelated spacing
+/// differences inside example code.
+pub(in crate::print) fn paragraph_is_single_expr_with_line_comment(para: &[String]) -> bool {
+    let mut expr_lines = 0usize;
+    let mut comment_lines = 0usize;
+    for line in para {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("--") {
+            comment_lines += 1;
+        } else {
+            expr_lines += 1;
+        }
+    }
+    expr_lines == 1 && comment_lines >= 1
+}
+
 pub(in crate::print) fn is_assertion_only_paragraph(para: &[String]) -> bool {
     let non_empty: Vec<&String> = para.iter().filter(|l| !l.trim().is_empty()).collect();
     if non_empty.len() < 2 {

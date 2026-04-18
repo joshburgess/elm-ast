@@ -439,6 +439,15 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
             continue;
         }
 
+        // A single bare expression followed by `-- comment` lines is left
+        // verbatim by elm-format when it can't parse the paragraph as
+        // declarations. Mirror that to avoid adding unrelated spacing inside
+        // example code.
+        if paragraph_is_single_expr_with_line_comment(para) {
+            formatted_paragraphs.push(para_text);
+            continue;
+        }
+
         // If the paragraph consists entirely of assertion-shaped lines, parse
         // each line as its own expression and render them as separate top-level
         // expressions. This must run BEFORE whole-paragraph expression parsing
