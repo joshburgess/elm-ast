@@ -1581,10 +1581,23 @@ impl Printer {
                 ..
             } => {
                 // elm-format strips redundant Parenthesized wrappers on the
-                // right side of `<|` since `<|` has the lowest precedence and
-                // is right-associative, so parens are never required there.
+                // right side of `<|` since `<|` is right-associative at the
+                // lowest precedence. The only exception is `|>` (same
+                // precedence, opposite associativity), which cannot be mixed
+                // with `<|` without parens — stripping would produce invalid
+                // Elm.
                 let right_expr = if self.is_pretty() && operator == "<|" {
-                    unwrap_parens(&right.value)
+                    let inner = unwrap_parens(&right.value);
+                    let inner_needs_parens = matches!(
+                        inner,
+                        Expr::OperatorApplication { operator: inner_op, .. }
+                            if matches!(inner_op.as_str(), "|>" | "|." | "|=")
+                    );
+                    if inner_needs_parens {
+                        &right.value
+                    } else {
+                        inner
+                    }
                 } else {
                     &right.value
                 };
