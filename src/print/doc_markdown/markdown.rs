@@ -607,7 +607,7 @@ fn doc_comment_has_mixed_block(lines: &[&str]) -> bool {
         // Only count blocks that already look normalized (4-space indent,
         // no compact tuples, etc.) — if a block needs reformatting we
         // shouldn't preserve it just because another sibling is declish.
-        if !super::reformat::code_block_has_narrow_indent(block) {
+        if !super::reformat::code_block_has_structural_reformat_signal(block) {
             if super::reformat::block_looks_decl_only(block) {
                 any_decl_block = true;
             } else if super::reformat::block_looks_bare_only(block) {

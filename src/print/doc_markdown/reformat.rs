@@ -580,6 +580,102 @@ pub(in crate::print) fn code_block_has_narrow_indent(block_lines: &[&str]) -> bo
     false
 }
 
+/// Does the block contain structural signals that definitely require
+/// reformatting (compact syntax, single-line decls, unsorted imports, etc.),
+/// excluding the broad "non-4-aligned indent" check that the primary
+/// `code_block_needs_reformat` uses — that one has false positives from
+/// legitimate deep-alignment artifacts in sample code. Use this as a gate
+/// for the cross-block "sample code doc" detector.
+pub(in crate::print) fn code_block_has_structural_reformat_signal(
+    block_lines: &[&str],
+) -> bool {
+    if block_mixes_decls_and_bare_exprs(block_lines) {
+        return false;
+    }
+    if code_block_has_narrow_indent(block_lines) {
+        return true;
+    }
+    for &line in block_lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        let trimmed = line.trim();
+        if leading == 4 && import_has_unsorted_exposing(trimmed) {
+            return true;
+        }
+        // Import/module/port header lines can contain exposing `(x, y)` lists
+        // that look like compact tuples to the lexical checks below; skip them.
+        let is_header_line = trimmed.starts_with("import ")
+            || trimmed.starts_with("module ")
+            || trimmed.starts_with("port module ")
+            || trimmed.starts_with("effect module ");
+        if is_header_line {
+            continue;
+        }
+        if trimmed.contains('[') && trimmed.contains(']') {
+            if trimmed.contains("[\"")
+                || trimmed.contains("[(")
+                || trimmed.contains("['")
+                || trimmed.contains("[0")
+                || trimmed.contains("[1")
+                || trimmed.contains("[2")
+                || trimmed.contains("[3")
+                || trimmed.contains("[4")
+                || trimmed.contains("[5")
+                || trimmed.contains("[6")
+                || trimmed.contains("[7")
+                || trimmed.contains("[8")
+                || trimmed.contains("[9")
+            {
+                return true;
+            }
+        }
+        if trimmed.contains('(')
+            && trimmed.contains(',')
+            && trimmed.contains(')')
+            && has_compact_tuple(trimmed)
+        {
+            return true;
+        }
+        if leading == 4 && is_single_line_value_decl(trimmed) {
+            return true;
+        }
+        if leading == 4
+            && (trimmed.starts_with("type alias ") || trimmed.starts_with("type "))
+            && trimmed.contains(" = ")
+        {
+            return true;
+        }
+        if leading == 4
+            && trimmed.starts_with("{-|")
+            && trimmed.ends_with("-}")
+            && trimmed.len() > 5
+        {
+            return true;
+        }
+        if has_tight_binary_op(trimmed) {
+            return true;
+        }
+        if leading == 4 && is_redundant_paren_expr(trimmed) {
+            return true;
+        }
+        if line_has_unpadded_hex(trimmed) {
+            return true;
+        }
+        if line_has_sci_float_without_dot(trimmed) {
+            return true;
+        }
+    }
+    if block_has_unseparated_assertions(block_lines) {
+        return true;
+    }
+    if block_has_single_line_if(block_lines) {
+        return true;
+    }
+    false
+}
+
 /// Detect a code block containing a line with a single-line `if ... then ... else ...`
 /// expression. elm-format always breaks `if-then-else` across multiple lines, so
 /// such blocks need reformat.
