@@ -1446,24 +1446,25 @@ impl Printer {
                     }
                 }
 
-                // `&&` and `||` are right-associative in Elm. elm-format
-                // lays out logical chains vertically with all operators
-                // aligned at the same column, mirroring the pipeline /
-                // arithmetic rules.
+                // `&&` and `||` are right-associative in Elm but mix across
+                // precedences 2 and 3. elm-format lays out such mixed chains
+                // as a single vertical sequence with all operators aligned at
+                // the same indent column, regardless of parse-tree grouping.
                 if self.is_pretty()
                     && matches!(operator.as_str(), "&&" | "||")
-                    && let Some(chain) = flatten_right_assoc_chain(expr, operator)
+                    && let Some((head, rest)) = flatten_mixed_logical_chain(expr)
                 {
-                    let any_ml = chain.iter().any(|op| self.is_multiline(op))
+                    let any_ml = self.is_multiline(head)
+                        || rest.iter().any(|(_, e)| self.is_multiline(e))
                         || Self::spans_cross_lines(left.span, right.span);
-                    if any_ml && chain.len() >= 2 {
-                        self.write_expr_operand(chain[0], operator, true);
+                    if any_ml {
+                        self.write_expr_operand(head, operator, true);
                         self.indent();
-                        for operand in &chain[1..] {
+                        for (op, operand) in &rest {
                             self.newline_indent();
-                            self.write(operator);
+                            self.write(op);
                             self.write_char(' ');
-                            self.write_expr_operand(operand, operator, false);
+                            self.write_expr_operand(operand, op, false);
                         }
                         self.dedent();
                         return;
