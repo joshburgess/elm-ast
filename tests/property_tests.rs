@@ -41,14 +41,11 @@ fn arb_expr(depth: u32) -> impl Strategy<Value = elm_ast::node::Spanned<elm_ast:
                 .prop_filter("finite", |f| f.is_finite() && !f.is_nan())
                 .prop_map(float),
             Just(unit()),
-            arb_ident().prop_map(|s| var(s)),
+            arb_ident().prop_map(var),
         ]
         .boxed()
     } else {
-        let leaf = prop_oneof![
-            (0i64..1_000_000).prop_map(int),
-            arb_ident().prop_map(|s| var(s)),
-        ];
+        let leaf = prop_oneof![(0i64..1_000_000).prop_map(int), arb_ident().prop_map(var),];
         prop_oneof![
             // leaf
             leaf,
@@ -143,7 +140,7 @@ proptest! {
         n in 1..8usize,
     ) {
         let decls: Vec<_> = (0..n)
-            .map(|i| func(&format!("f{}", i), vec![pvar("x")], var("x")))
+            .map(|i| func(format!("f{}", i), vec![pvar("x")], var("x")))
             .collect();
         let m = module(vec!["Main"], decls);
         let printed = print(&m);

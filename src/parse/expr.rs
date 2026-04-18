@@ -616,10 +616,14 @@ fn if_after_then(
 
 fn parse_case_expr_cps(p: &mut Parser) -> ParseResult<Step> {
     let start = p.current_pos();
+    // Snapshot the pending-comments buffer so branch-comment capture
+    // only picks up comments that appear inside this case expression,
+    // not module-level or earlier comments already pending.
+    let comments_snapshot = p.pending_comments_snapshot();
     p.expect(&Token::Case)?;
     // Need subject
     Ok(Step::NeedExpr(Box::new(move |p, subject| {
-        case_after_subject(p, start, subject)
+        case_after_subject(p, start, subject, comments_snapshot)
     })))
 }
 
@@ -627,12 +631,13 @@ fn case_after_subject(
     p: &mut Parser,
     start: Position,
     subject: Spanned<Expr>,
+    comments_snapshot: usize,
 ) -> ParseResult<Step> {
     p.expect(&Token::Of)?;
     p.skip_whitespace();
     let branch_col = p.current_column();
 
-    case_next_branch(p, start, subject, Vec::new(), branch_col)
+    case_next_branch(p, start, subject, Vec::new(), branch_col, comments_snapshot)
 }
 
 fn case_next_branch(
@@ -641,6 +646,7 @@ fn case_next_branch(
     subject: Spanned<Expr>,
     branches: Vec<CaseBranch>,
     branch_col: u32,
+    comments_snapshot: usize,
 ) -> ParseResult<Step> {
     p.skip_whitespace();
 
@@ -658,8 +664,10 @@ fn case_next_branch(
         )));
     }
 
-    // Attach comments to the branch pattern.
-    let branch_comments = p.take_pending_comments();
+    // Attach comments to the branch pattern. Only take comments that were
+    // collected after the case expression started — leave outer comments
+    // in place for the enclosing module/declaration to pick up.
+    let branch_comments = p.take_pending_comments_since(comments_snapshot);
     let mut pat = parse_pattern(p)?;
     if !branch_comments.is_empty() {
         pat.comments = branch_comments;
@@ -674,7 +682,7 @@ fn case_next_branch(
     Ok(Step::NeedExpr(Box::new(move |p, body| {
         let mut branches = branches;
         branches.push(CaseBranch { pattern: pat, body });
-        case_next_branch(p, start, subject, branches, branch_col)
+        case_next_branch(p, start, subject, branches, branch_col, comments_snapshot)
     })))
 }
 
@@ -707,13 +715,16 @@ fn case_should_continue(
 
 fn parse_let_expr_cps(p: &mut Parser) -> ParseResult<Step> {
     let start = p.current_pos();
+    // Snapshot pending comments so that per-let-decl comment capture
+    // only takes comments collected inside this let block.
+    let comments_snapshot = p.pending_comments_snapshot();
     p.expect(&Token::Let)?;
 
     let let_col = start.column;
     p.skip_whitespace();
     let decl_col = p.current_column();
 
-    let_next_decl(p, start, let_col, decl_col, Vec::new())
+    let_next_decl(p, start, let_col, decl_col, Vec::new(), comments_snapshot)
 }
 
 fn let_next_decl(
@@ -722,6 +733,7 @@ fn let_next_decl(
     let_col: u32,
     decl_col: u32,
     declarations: Vec<Spanned<LetDeclaration>>,
+    comments_snapshot: usize,
 ) -> ParseResult<Step> {
     p.skip_whitespace();
 
@@ -746,8 +758,10 @@ fn let_next_decl(
         })));
     }
 
-    // Attach comments before this let declaration.
-    let let_decl_comments = p.take_pending_comments();
+    // Attach comments before this let declaration. Only take comments that
+    // were collected after the let expression started — outer comments
+    // remain available for the enclosing context.
+    let let_decl_comments = p.take_pending_comments_since(comments_snapshot);
     let decl_start = p.current_pos();
 
     match p.peek().clone() {
@@ -791,7 +805,7 @@ fn let_next_decl(
                     }
                     let mut declarations = declarations;
                     declarations.push(spanned_decl);
-                    let_next_decl(p, start, let_col, decl_col, declarations)
+                    let_next_decl(p, start, let_col, decl_col, declarations, comments_snapshot)
                 })))
             } else {
                 // Function implementation (no signature).
@@ -829,7 +843,7 @@ fn let_next_decl(
                     }
                     let mut declarations = declarations;
                     declarations.push(spanned_decl);
-                    let_next_decl(p, start, let_col, decl_col, declarations)
+                    let_next_decl(p, start, let_col, decl_col, declarations, comments_snapshot)
                 })))
             }
         }
@@ -853,7 +867,7 @@ fn let_next_decl(
                 }
                 let mut declarations = declarations;
                 declarations.push(spanned_decl);
-                let_next_decl(p, start, let_col, decl_col, declarations)
+                let_next_decl(p, start, let_col, decl_col, declarations, comments_snapshot)
             })))
         }
     }

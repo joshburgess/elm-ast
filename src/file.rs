@@ -16,6 +16,17 @@ pub struct ElmModule {
     /// The module header declaration.
     pub header: Spanned<ModuleHeader>,
 
+    /// Module-level documentation comment (appears after the header, before imports).
+    ///
+    /// In Elm, a `{-| ... -}` comment immediately after the `module ... exposing (...)`
+    /// header is the module's documentation. It is distinct from comments attached
+    /// to individual declarations.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub module_documentation: Option<Spanned<String>>,
+
     /// Import declarations, in source order.
     pub imports: Vec<Spanned<Import>>,
 

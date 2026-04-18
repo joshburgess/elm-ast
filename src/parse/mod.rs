@@ -84,6 +84,22 @@ impl Parser {
         std::mem::take(&mut self.collected_comments)
     }
 
+    /// Snapshot the current number of pending comments. Pair with
+    /// `take_pending_comments_since` to take only comments collected
+    /// after the snapshot, preserving earlier comments.
+    pub fn pending_comments_snapshot(&self) -> usize {
+        self.collected_comments.len()
+    }
+
+    /// Take pending comments collected after the given snapshot, leaving
+    /// earlier comments in place so they remain available for later attachment.
+    pub fn take_pending_comments_since(&mut self, snapshot: usize) -> Vec<Spanned<Comment>> {
+        if snapshot >= self.collected_comments.len() {
+            return Vec::new();
+        }
+        self.collected_comments.split_off(snapshot)
+    }
+
     /// Returns true if currently inside parens/brackets/braces.
     /// When true, indentation-sensitive layout rules are suspended.
     pub fn in_paren_context(&self) -> bool {
@@ -149,7 +165,7 @@ impl Parser {
     pub fn skip_whitespace(&mut self) {
         while matches!(
             self.peek(),
-            Token::Newline | Token::LineComment(_) | Token::BlockComment(_) | Token::DocComment(_)
+            Token::Newline | Token::LineComment(_) | Token::BlockComment(_)
         ) {
             let tok = self.peek().clone();
             let spanned_tok = self.advance();
@@ -162,7 +178,7 @@ impl Parser {
                     self.collected_comments
                         .push(Spanned::new(spanned_tok.span, Comment::Block(text)));
                 }
-                _ => {} // Newline, DocComment
+                _ => {} // Newline
             }
         }
     }
@@ -349,10 +365,27 @@ impl Parser {
 
     // ── Span helpers ─────────────────────────────────────────────────
 
-    /// Create a span from `start` to the end of the previously consumed token.
+    /// Create a span from `start` to the end of the previously consumed
+    /// token, skipping back past any trailing whitespace or comment tokens.
+    ///
+    /// This keeps declaration/expression spans tight (ending at the last
+    /// meaningful token) even when the parser has peeked past trailing
+    /// newlines and comments while searching for a continuation.
     pub fn span_from(&self, start: Position) -> Span {
-        let end = if self.pos > 0 {
-            self.tokens[self.pos - 1].span.end
+        let mut i = self.pos;
+        while i > 0
+            && matches!(
+                self.tokens[i - 1].value,
+                Token::Newline
+                    | Token::LineComment(_)
+                    | Token::BlockComment(_)
+                    | Token::DocComment(_)
+            )
+        {
+            i -= 1;
+        }
+        let end = if i > 0 {
+            self.tokens[i - 1].span.end
         } else {
             start
         };

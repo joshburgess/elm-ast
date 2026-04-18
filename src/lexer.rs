@@ -341,8 +341,19 @@ impl<'src> Lexer<'src> {
             b if is_operator_char(b) => self.lex_operator(start),
 
             _ => {
+                // Skip any UTF-8 continuation bytes we may have landed inside.
+                while self.offset < self.source.len() && !self.source.is_char_boundary(self.offset)
+                {
+                    self.advance();
+                }
+                if self.offset >= self.source.len() {
+                    return Err(self.make_error(start, "unexpected end of input".to_string()));
+                }
                 let ch = self.source[self.offset..].chars().next().unwrap();
-                self.advance();
+                let ch_len = ch.len_utf8();
+                for _ in 0..ch_len {
+                    self.advance();
+                }
                 Err(self.make_error(start, format!("unexpected character: '{ch}'")))
             }
         }

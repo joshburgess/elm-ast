@@ -133,6 +133,7 @@ pub fn fold_module<F: Fold + ?Sized>(f: &mut F, module: ElmModule) -> ElmModule 
         .collect();
     ElmModule {
         header,
+        module_documentation: module.module_documentation,
         imports,
         declarations,
         comments,

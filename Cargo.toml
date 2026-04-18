@@ -1,6 +1,6 @@
 [package]
 name = "elm-ast"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 description = "A syn-quality Rust library for parsing and constructing Elm 0.19.1 ASTs"
 license = "MIT OR Apache-2.0"
@@ -15,7 +15,9 @@ exclude = ["test-fixtures/"]
 default = ["full"]
 full = ["parsing", "printing", "visit", "visit-mut", "fold"]
 parsing = []
-printing = []
+# `printing` depends on `parsing` because the doc-comment normalizer
+# re-parses Elm code inside `{-| ... -}` blocks to format it.
+printing = ["parsing"]
 visit = []
 fold = []
 visit-mut = []
@@ -52,6 +54,10 @@ required-features = ["parsing", "printing"]
 
 [[example]]
 name = "roundtrip_debug"
+required-features = ["parsing", "printing"]
+
+[[example]]
+name = "elm_pretty"
 required-features = ["parsing", "printing"]
 
 [[bench]]

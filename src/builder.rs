@@ -279,6 +279,7 @@ pub fn module(name: Vec<impl Into<String>>, declarations: Vec<Spanned<Declaratio
             name: spanned(name.into_iter().map(|s| s.into()).collect()),
             exposing: spanned(Exposing::All(Span::dummy())),
         }),
+        module_documentation: None,
         imports: Vec::new(),
         declarations,
         comments: Vec::new(),
