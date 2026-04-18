@@ -471,6 +471,14 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
             continue;
         }
 
+        // Triple-quoted strings are rarely re-printable safely (the parser
+        // loses attached line comments and interior formatting). Preserve
+        // the paragraph verbatim if it contains one.
+        if para.iter().any(|l| l.contains("\"\"\"")) {
+            formatted_paragraphs.push(para_text);
+            continue;
+        }
+
         // If the paragraph consists entirely of assertion-shaped lines, parse
         // each line as its own expression and render them as separate top-level
         // expressions. This must run BEFORE whole-paragraph expression parsing
