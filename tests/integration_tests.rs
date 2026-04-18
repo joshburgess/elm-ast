@@ -820,3 +820,109 @@ fn pretty_print_matches_elm_format() {
         failures.join("\n")
     );
 }
+
+/// Direct parity test: our `pretty_print` output on parsed source should be
+/// byte-identical to what `elm-format` produces from the same original source.
+///
+/// This is the stronger of the two elm-format parity tests. It checks that we
+/// match elm-format's layout decisions exactly, not merely that elm-format
+/// accepts our output as canonical (that weaker property is what
+/// `pretty_print_matches_elm_format` checks).
+#[test]
+#[ignore] // Run explicitly: cargo test pretty_print_equals_elm_format_on_source -- --ignored --nocapture
+fn pretty_print_equals_elm_format_on_source() {
+    let elm_format = match find_elm_format() {
+        Some(path) => path,
+        None => {
+            eprintln!(
+                "elm-format not found — skipping pretty_print_equals_elm_format_on_source test"
+            );
+            eprintln!("Install elm-format or set ELM_FORMAT=/path/to/elm-format to enable");
+            return;
+        }
+    };
+
+    let dirs = all_fixture_dirs();
+
+    let mut total = 0;
+    let mut passed = 0;
+    let mut failures = Vec::new();
+
+    for (pkg, dir) in &dirs {
+        let files = find_elm_files(dir);
+        for file in &files {
+            if try_parse_file(file).is_err() {
+                continue;
+            }
+            let source = fs::read_to_string(file).unwrap();
+            let ast = match parse(&source) {
+                Ok(ast) => ast,
+                Err(_) => continue,
+            };
+
+            let pretty = pretty_print(&ast);
+
+            // Feed ORIGINAL source (not our pretty output) to elm-format.
+            let formatted_from_source = match run_elm_format(&elm_format, &source) {
+                Ok(f) => f,
+                Err(msg) => {
+                    failures.push(format!(
+                        "[{pkg}] elm-format rejected original source for {}: {msg}",
+                        file.display()
+                    ));
+                    total += 1;
+                    continue;
+                }
+            };
+
+            total += 1;
+            if pretty == formatted_from_source {
+                passed += 1;
+            } else {
+                let pretty_lines: Vec<&str> = pretty.lines().collect();
+                let fmt_lines: Vec<&str> = formatted_from_source.lines().collect();
+                let mut diff_msg = String::new();
+                for (i, (p, f)) in pretty_lines.iter().zip(fmt_lines.iter()).enumerate() {
+                    if p != f {
+                        diff_msg = format!(
+                            "first diff at line {}:\n  pretty_print: {}\n  elm-format:   {}",
+                            i + 1,
+                            p,
+                            f
+                        );
+                        break;
+                    }
+                }
+                if diff_msg.is_empty() && pretty_lines.len() != fmt_lines.len() {
+                    diff_msg = format!(
+                        "line count differs: pretty_print={} vs elm-format={}",
+                        pretty_lines.len(),
+                        fmt_lines.len()
+                    );
+                }
+                failures.push(format!(
+                    "[{pkg}] pretty_print differs from elm-format(source) for {}:\n  {diff_msg}",
+                    file.display()
+                ));
+            }
+        }
+    }
+
+    eprintln!("\n=== pretty_print vs elm-format(source) results ===");
+    eprintln!("{passed}/{total} files match elm-format(source) exactly");
+    for f in &failures {
+        eprintln!("\n{f}");
+    }
+    if total > 0 {
+        let pass_rate = (passed as f64 / total as f64) * 100.0;
+        eprintln!("\nMatch rate: {pass_rate:.1}%");
+    }
+    assert_eq!(
+        passed,
+        total,
+        "{} of {} files differ from elm-format(source):\n{}",
+        total - passed,
+        total,
+        failures.join("\n")
+    );
+}
