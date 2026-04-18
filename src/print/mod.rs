@@ -856,6 +856,21 @@ impl Printer {
                 let (_ts, te) = Self::type_ann_content_lines(to);
                 (fs, te)
             }
+            TypeAnnotation::Typed { name, args, .. } => {
+                let s = name.span.start.line;
+                let e = args
+                    .last()
+                    .map(|a| Self::type_ann_content_lines(a).1)
+                    .unwrap_or(name.span.end.line);
+                (s, e)
+            }
+            TypeAnnotation::Tupled(elems) => {
+                let s = elems
+                    .first()
+                    .map(|e| Self::type_ann_content_lines(e).0)
+                    .unwrap_or(sp.span.start.line);
+                (s, sp.span.end.line)
+            }
             _ => (sp.span.start.line, sp.span.end.line),
         }
     }
@@ -1177,7 +1192,13 @@ impl Printer {
     /// new line after `:` — break the value onto its own indented line:
     /// ` :\n    <type>`.
     fn write_field_type_with_possible_break(&mut self, ta: &Spanned<TypeAnnotation>) {
-        if self.is_pretty() && Self::type_ann_spans_multi_lines(ta) {
+        // Use the WRAPPER span here (not content span) because the wrapper
+        // includes leading whitespace after `:`; if that whitespace includes
+        // a newline, the source put the value on its own line.
+        let wrapper_multi = ta.span.start.line != 0
+            && ta.span.end.line != 0
+            && ta.span.end.line > ta.span.start.line;
+        if self.is_pretty() && wrapper_multi {
             match &ta.value {
                 TypeAnnotation::Record(rfields) if !rfields.is_empty() => {
                     self.write(" :");
