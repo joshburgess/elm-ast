@@ -519,8 +519,18 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
             // look like `expr == value` get a blank line inserted between them
             // and have multi-space runs (outside strings) collapsed, matching
             // elm-format's behavior.
+            //
+            // When the doc comment is an "example" (any block shows expected
+            // output via `-->` or mixes decls with bare exprs), preserve every
+            // block exactly as written. The assertion transform would
+            // otherwise rewrite compact tuples and trim alignment spaces that
+            // elm-format leaves alone.
             let block = &lines[block_start..=block_end];
-            let transformed = transform_assertion_paragraphs(block);
+            let transformed = if doc_has_mixed_block {
+                block.join("\n")
+            } else {
+                transform_assertion_paragraphs(block)
+            };
             let transformed = insert_loose_paragraph_breaks(&transformed);
             let end_idx = result.len();
             result.push_str(&transformed);
