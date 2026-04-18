@@ -32,9 +32,7 @@ pub(in crate::print) fn block_has_comment_paragraph(block_lines: &[&str]) -> boo
         return false;
     }
     let last = paragraphs.last().unwrap();
-    let last_is_all_comment = last
-        .iter()
-        .all(|l| l.trim().starts_with("--"));
+    let last_is_all_comment = last.iter().all(|l| l.trim().starts_with("--"));
     if !last_is_all_comment {
         return false;
     }
@@ -88,8 +86,7 @@ pub(in crate::print) fn block_has_non_assertion_content(block_lines: &[&str]) ->
             // Standalone line-comment paragraph that comes after an
             // assertion: elm-format preserves the block unchanged.
             let prev_blank = i == 0 || block_lines[i - 1].trim().is_empty();
-            let next_blank = i + 1 >= block_lines.len()
-                || block_lines[i + 1].trim().is_empty();
+            let next_blank = i + 1 >= block_lines.len() || block_lines[i + 1].trim().is_empty();
             if seen_assertion && prev_blank && next_blank {
                 return true;
             }
@@ -132,10 +129,12 @@ pub(in crate::print) fn insert_loose_paragraph_breaks(joined: &str) -> String {
     }
 
     let is_all_imports = |para: &Vec<usize>| -> bool {
-        para.iter().all(|&i| lines[i].trim_start().starts_with("import "))
+        para.iter()
+            .all(|&i| lines[i].trim_start().starts_with("import "))
     };
     let is_all_comments = |para: &Vec<usize>| -> bool {
-        para.iter().all(|&i| lines[i].trim_start().starts_with("--"))
+        para.iter()
+            .all(|&i| lines[i].trim_start().starts_with("--"))
     };
 
     // Indices (into `lines`) where an extra blank should be inserted BEFORE.
@@ -166,7 +165,6 @@ pub(in crate::print) fn insert_loose_paragraph_breaks(joined: &str) -> String {
     }
     out
 }
-
 
 pub(in crate::print) fn paragraph_is_all_imports(para: &[String]) -> bool {
     let mut saw = false;

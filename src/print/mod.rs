@@ -166,16 +166,12 @@ impl Printer {
             Expr::Application(args) => args.iter().any(|a| self.is_multiline(&a.value)),
             Expr::List(elems) => elems.iter().any(|e| self.is_multiline(&e.value)),
             Expr::Tuple(elems) => elems.iter().any(|e| self.is_multiline(&e.value)),
-            Expr::Record(fields) => {
-                fields
-                    .iter()
-                    .any(|f| self.is_multiline(&f.value.value.value))
-            }
-            Expr::RecordUpdate { updates, .. } => {
-                updates
-                    .iter()
-                    .any(|f| self.is_multiline(&f.value.value.value))
-            }
+            Expr::Record(fields) => fields
+                .iter()
+                .any(|f| self.is_multiline(&f.value.value.value)),
+            Expr::RecordUpdate { updates, .. } => updates
+                .iter()
+                .any(|f| self.is_multiline(&f.value.value.value)),
             Expr::OperatorApplication { left, right, .. } => {
                 self.is_multiline(&left.value) || self.is_multiline(&right.value)
             }
@@ -333,9 +329,7 @@ impl Printer {
                     // elm-format normalizes `{-- foo...` (block content
                     // starting with "- ") by dropping the space after the
                     // leading dash, keeping `{--` as a single marker.
-                    let reindented = if self.is_pretty()
-                        && reindented.starts_with("- ")
-                    {
+                    let reindented = if self.is_pretty() && reindented.starts_with("- ") {
                         format!("-{}", &reindented[2..])
                     } else {
                         reindented
@@ -463,8 +457,7 @@ impl Printer {
 
             // Build ordered list of groups resolved to actual items.
             let mut resolved_groups: Vec<Vec<&ExposedItem>> = Vec::new();
-            let mut emitted: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
+            let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
 
             for group in &doc_groups {
                 let group_items: Vec<&ExposedItem> = group
@@ -563,11 +556,8 @@ impl Printer {
             self.write_char(')');
         } else {
             // Module header without @docs: elm-format sorts alphabetically.
-            let mut sorted_items: Vec<&ExposedItem> =
-                items.iter().map(|i| &i.value).collect();
-            sorted_items.sort_by(|a, b| {
-                exposed_item_sort_key(a).cmp(&exposed_item_sort_key(b))
-            });
+            let mut sorted_items: Vec<&ExposedItem> = items.iter().map(|i| &i.value).collect();
+            sorted_items.sort_by(|a, b| exposed_item_sort_key(a).cmp(&exposed_item_sort_key(b)));
 
             let single_line: String = {
                 let parts: Vec<String> = sorted_items
@@ -629,8 +619,7 @@ impl Printer {
         if let Some(alias) = &import.alias {
             // elm-format strips redundant aliases where the alias equals
             // the module name (e.g., `import Foo as Foo` → `import Foo`).
-            let is_redundant = self.is_pretty()
-                && alias.value == import.module_name.value;
+            let is_redundant = self.is_pretty() && alias.value == import.module_name.value;
             if !is_redundant {
                 self.write(" as ");
                 self.write_module_name(&alias.value);
@@ -673,9 +662,9 @@ impl Printer {
 
         // Merge exposing lists: if any import has `exposing (..)`, use that.
         // Otherwise, combine all explicit exposing items.
-        let has_expose_all = imports.iter().any(|imp| {
-            matches!(&imp.exposing, Some(e) if matches!(e.value, Exposing::All(_)))
-        });
+        let has_expose_all = imports
+            .iter()
+            .any(|imp| matches!(&imp.exposing, Some(e) if matches!(e.value, Exposing::All(_))));
         if has_expose_all {
             self.write(" exposing (..)");
         } else {
@@ -692,12 +681,8 @@ impl Printer {
             }
             if !all_items.is_empty() {
                 // Deduplicate and sort.
-                all_items.sort_by(|a, b| {
-                    exposed_item_sort_key(a).cmp(&exposed_item_sort_key(b))
-                });
-                all_items.dedup_by(|a, b| {
-                    exposed_item_sort_key(a) == exposed_item_sort_key(b)
-                });
+                all_items.sort_by(|a, b| exposed_item_sort_key(a).cmp(&exposed_item_sort_key(b)));
+                all_items.dedup_by(|a, b| exposed_item_sort_key(a) == exposed_item_sort_key(b));
                 self.write(" exposing (");
                 for (i, item) in all_items.iter().enumerate() {
                     if i > 0 {
@@ -718,11 +703,8 @@ impl Printer {
         match exposing {
             Exposing::All(_) => self.write("(..)"),
             Exposing::Explicit(items) => {
-                let mut sorted: Vec<&ExposedItem> =
-                    items.iter().map(|i| &i.value).collect();
-                sorted.sort_by(|a, b| {
-                    exposed_item_sort_key(a).cmp(&exposed_item_sort_key(b))
-                });
+                let mut sorted: Vec<&ExposedItem> = items.iter().map(|i| &i.value).collect();
+                sorted.sort_by(|a, b| exposed_item_sort_key(a).cmp(&exposed_item_sort_key(b)));
                 self.write_char('(');
                 for (i, item) in sorted.iter().enumerate() {
                     if i > 0 {
@@ -1222,9 +1204,7 @@ impl Printer {
                 // operators break to vertical. (`>>` / `<<` are handled below
                 // via the right-associative path, since they right-associate
                 // in Elm.)
-                if self.is_pretty()
-                    && matches!(operator.as_str(), "|>" | "|." | "|=")
-                {
+                if self.is_pretty() && matches!(operator.as_str(), "|>" | "|." | "|=") {
                     if let Some((head, rest)) = flatten_mixed_pipe_chain(expr) {
                         let any_ml = self.is_multiline(head)
                             || rest.iter().any(|(_, op)| self.is_multiline(op));
@@ -1255,9 +1235,7 @@ impl Printer {
                 // `::` and `++` share precedence 5 right-assoc, and elm-format
                 // unifies mixed chains (e.g. `a :: b :: xs ++ ys`) into a single
                 // vertical layout. Use the mixed flattener for those operators.
-                if self.is_pretty()
-                    && matches!(operator.as_str(), "::" | "++")
-                {
+                if self.is_pretty() && matches!(operator.as_str(), "::" | "++") {
                     if let Some((head, rest)) = flatten_mixed_cons_append_chain(expr) {
                         let any_ml = self.is_multiline(head)
                             || rest.iter().any(|(_, e)| self.is_multiline(e));
@@ -1276,9 +1254,7 @@ impl Printer {
                     }
                 }
 
-                if self.is_pretty()
-                    && matches!(operator.as_str(), ">>" | "<<")
-                {
+                if self.is_pretty() && matches!(operator.as_str(), ">>" | "<<") {
                     if let Some(chain) = flatten_right_assoc_chain(expr, operator) {
                         let any_ml = chain.iter().any(|op| self.is_multiline(op));
                         if any_ml {
@@ -1299,14 +1275,11 @@ impl Printer {
                 // Same rule for left-associative arithmetic chains (+, -).
                 // elm-format: if any operand in the chain is multiline,
                 // break at every operator.
-                if self.is_pretty()
-                    && matches!(operator.as_str(), "+" | "-")
-                {
+                if self.is_pretty() && matches!(operator.as_str(), "+" | "-") {
                     let op_owned = operator.clone();
-                    if let Some((head, rest)) = flatten_left_assoc_pred(
-                        expr,
-                        &|o: &str| o == op_owned,
-                    ) {
+                    if let Some((head, rest)) =
+                        flatten_left_assoc_pred(expr, &|o: &str| o == op_owned)
+                    {
                         let any_ml = self.is_multiline(head)
                             || rest.iter().any(|(_, op)| self.is_multiline(op));
                         if any_ml {
@@ -1401,16 +1374,12 @@ impl Printer {
                     if any_ml {
                         self.write_expr_app(&operands_and_operators[0].0.value);
                         self.indent();
-                        for (i, (_operand, op)) in
-                            operands_and_operators.iter().enumerate()
-                        {
+                        for (i, (_operand, op)) in operands_and_operators.iter().enumerate() {
                             self.newline_indent();
                             self.write(&op.value);
                             self.write_char(' ');
                             if i + 1 < operands_and_operators.len() {
-                                self.write_expr_app(
-                                    &operands_and_operators[i + 1].0.value,
-                                );
+                                self.write_expr_app(&operands_and_operators[i + 1].0.value);
                             } else {
                                 self.write_expr_app(&final_operand.value);
                             }
@@ -1612,8 +1581,9 @@ impl Printer {
                 if fields.is_empty() {
                     self.write("{}");
                 } else {
-                    let any_ml =
-                        fields.iter().any(|f| self.is_multiline(&f.value.value.value));
+                    let any_ml = fields
+                        .iter()
+                        .any(|f| self.is_multiline(&f.value.value.value));
                     if any_ml {
                         self.write("{ ");
                         self.write_record_setter(&fields[0].value);
@@ -2273,7 +2243,6 @@ fn is_right_assoc(op: &str) -> bool {
 /// 7. Empty docs: `""` → `" "`
 
 // Doc-comment / markdown helpers moved to src/print/doc_markdown.rs
-
 
 /// Get the name of an exposed item for matching against `@docs` directives.
 fn exposed_item_name(item: &ExposedItem) -> String {

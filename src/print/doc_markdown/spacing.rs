@@ -67,9 +67,13 @@ pub(in crate::print) fn space_tight_binary_ops(s: &str) -> String {
             continue;
         }
         // `//` integer division.
-        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '/'
-            && i > 0 && i + 2 < chars.len()
-            && is_ident(chars[i - 1]) && is_ident(chars[i + 2])
+        if c == '/'
+            && i + 1 < chars.len()
+            && chars[i + 1] == '/'
+            && i > 0
+            && i + 2 < chars.len()
+            && is_ident(chars[i - 1])
+            && is_ident(chars[i + 2])
         {
             out.push(' ');
             out.push_str("//");
@@ -79,8 +83,10 @@ pub(in crate::print) fn space_tight_binary_ops(s: &str) -> String {
         }
         // Single `/` or `^`.
         if matches!(c, '/' | '^')
-            && i > 0 && i + 1 < chars.len()
-            && is_ident(chars[i - 1]) && is_ident(chars[i + 1])
+            && i > 0
+            && i + 1 < chars.len()
+            && is_ident(chars[i - 1])
+            && is_ident(chars[i + 1])
         {
             // Guard against `//` which was handled above.
             if c == '/' && chars[i + 1] == '/' {
@@ -279,10 +285,8 @@ pub(in crate::print) fn space_tight_tuples_lists(s: &str) -> String {
                     } else {
                         frame.tight && frame.has_comma && frame.has_non_comma_content
                     };
-                    let should_tighten = c == ')'
-                        && !frame.tight
-                        && !frame.has_comma
-                        && frame.has_content;
+                    let should_tighten =
+                        c == ')' && !frame.tight && !frame.has_comma && frame.has_content;
                     if should_expand {
                         out.insert(frame.out_pos + 1, ' ');
                         out.push(' ');
@@ -342,7 +346,10 @@ pub(in crate::print) fn collapse_spaces_outside_strings(s: &str) -> String {
     // Track delimiter "style" — whether the opener was followed by a space.
     // `(x  )` collapses to `(x)`, but `[ 1, 2 ]` preserves the inner space.
     #[derive(Clone, Copy)]
-    enum Style { Tight, Spaced }
+    enum Style {
+        Tight,
+        Spaced,
+    }
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(s.len());
     let mut in_string = false;

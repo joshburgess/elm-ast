@@ -80,11 +80,13 @@ pub(in crate::print) fn looks_like_code_block_decl(line: &str) -> bool {
             b'}' => depth_curly -= 1,
             b'=' if depth_round == 0 && depth_square == 0 && depth_curly == 0 => {
                 let prev = if j > 0 { bytes[j - 1] as char } else { ' ' };
-                let next = if j + 1 < bytes.len() { bytes[j + 1] as char } else { ' ' };
+                let next = if j + 1 < bytes.len() {
+                    bytes[j + 1] as char
+                } else {
+                    ' '
+                };
                 // Exclude `==`, `/=`, `>=`, `<=`.
-                if prev != '=' && prev != '/' && prev != '>' && prev != '<'
-                    && next != '='
-                {
+                if prev != '=' && prev != '/' && prev != '>' && prev != '<' && next != '=' {
                     return true;
                 }
             }
@@ -127,16 +129,28 @@ pub(in crate::print) fn looks_like_value_decl_start(line: &str) -> bool {
     let mut esc = false;
     while i < bytes.len() {
         let b = bytes[i];
-        if esc { esc = false; i += 1; continue; }
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
         if in_str {
-            if b == b'\\' { esc = true; }
-            else if b == b'"' { in_str = false; }
-            i += 1; continue;
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
         }
         if in_char {
-            if b == b'\\' { esc = true; }
-            else if b == b'\'' { in_char = false; }
-            i += 1; continue;
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'\'' {
+                in_char = false;
+            }
+            i += 1;
+            continue;
         }
         match b {
             b'"' => in_str = true,
@@ -146,9 +160,19 @@ pub(in crate::print) fn looks_like_value_decl_start(line: &str) -> bool {
             b'=' if depth == 0 => {
                 // Ensure it's not `==`, `>=`, `<=`, `/=`, `=>`, `::=`.
                 let prev = if i > 0 { bytes[i - 1] } else { b' ' };
-                let next = if i + 1 < bytes.len() { bytes[i + 1] } else { b' ' };
-                if prev != b' ' { i += 1; continue; }
-                if next == b'=' { i += 1; continue; }
+                let next = if i + 1 < bytes.len() {
+                    bytes[i + 1]
+                } else {
+                    b' '
+                };
+                if prev != b' ' {
+                    i += 1;
+                    continue;
+                }
+                if next == b'=' {
+                    i += 1;
+                    continue;
+                }
                 return true;
             }
             _ => {}
@@ -175,8 +199,11 @@ pub(in crate::print) fn looks_like_type_annotation(line: &str) -> bool {
             }
         } else if c == b'"' {
             in_string = true;
-        } else if c == b':' && i + 1 < bytes.len() && bytes[i + 1] == b' '
-            && i > 0 && bytes[i - 1] == b' '
+        } else if c == b':'
+            && i + 1 < bytes.len()
+            && bytes[i + 1] == b' '
+            && i > 0
+            && bytes[i - 1] == b' '
         {
             return true;
         }
@@ -282,9 +309,8 @@ pub(in crate::print) fn looks_like_simple_expr_line(trimmed: &str) -> bool {
         .unwrap_or(trimmed.len());
     let first_word = &trimmed[..first_word_end];
     match first_word {
-        "type" | "port" | "module" | "import" | "let" | "in" | "if" | "then"
-        | "else" | "case" | "of" | "where" | "alias" | "exposing" | "as"
-        | "effect" | "infix" => return false,
+        "type" | "port" | "module" | "import" | "let" | "in" | "if" | "then" | "else" | "case"
+        | "of" | "where" | "alias" | "exposing" | "as" | "effect" | "infix" => return false,
         _ => {}
     }
     // Must have balanced parens/brackets, counting string/char literals.
@@ -397,14 +423,20 @@ pub(in crate::print) fn line_has_single_line_if_then_else(line: &str) -> bool {
             continue;
         }
         if in_str {
-            if b == b'\\' { esc = true; }
-            else if b == b'"' { in_str = false; }
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
             i += 1;
             continue;
         }
         if in_char {
-            if b == b'\\' { esc = true; }
-            else if b == b'\'' { in_char = false; }
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'\'' {
+                in_char = false;
+            }
             i += 1;
             continue;
         }
@@ -417,8 +449,16 @@ pub(in crate::print) fn line_has_single_line_if_then_else(line: &str) -> bool {
             i += 3;
             continue;
         }
-        if b == b'"' { in_str = true; i += 1; continue; }
-        if b == b'\'' { in_char = true; i += 1; continue; }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' {
+            in_char = true;
+            i += 1;
+            continue;
+        }
         // Match " then " and " else " as whole keywords.
         if i + 6 <= bytes.len() && &bytes[i..i + 6] == b" then " {
             saw_then = true;
@@ -490,15 +530,24 @@ pub(in crate::print) fn is_redundant_paren_expr(trimmed: &str) -> bool {
     let mut esc = false;
     let mut saw_outer_op = false;
     for (i, &b) in bytes.iter().enumerate() {
-        if esc { esc = false; continue; }
+        if esc {
+            esc = false;
+            continue;
+        }
         if in_str {
-            if b == b'\\' { esc = true; }
-            else if b == b'"' { in_str = false; }
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
             continue;
         }
         if in_char {
-            if b == b'\\' { esc = true; }
-            else if b == b'\'' { in_char = false; }
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'\'' {
+                in_char = false;
+            }
             continue;
         }
         match b {
@@ -518,7 +567,9 @@ pub(in crate::print) fn is_redundant_paren_expr(trimmed: &str) -> bool {
             }
             b'-' if depth == 1 && i > 1 => {
                 let prev = bytes[i - 1];
-                if prev == b' ' { saw_outer_op = true; }
+                if prev == b' ' {
+                    saw_outer_op = true;
+                }
             }
             _ => {}
         }
@@ -543,19 +594,33 @@ pub(in crate::print) fn line_has_unpadded_hex(line: &str) -> bool {
             continue;
         }
         if in_str {
-            if b == b'\\' { esc = true; }
-            else if b == b'"' { in_str = false; }
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
             i += 1;
             continue;
         }
         if in_char {
-            if b == b'\\' { esc = true; }
-            else if b == b'\'' { in_char = false; }
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'\'' {
+                in_char = false;
+            }
             i += 1;
             continue;
         }
-        if b == b'"' { in_str = true; i += 1; continue; }
-        if b == b'\'' { in_char = true; i += 1; continue; }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' {
+            in_char = true;
+            i += 1;
+            continue;
+        }
         // Look for `0x` not preceded by an identifier character.
         if b == b'0' && i + 1 < bytes.len() && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X') {
             let prev_ok = if i == 0 {
@@ -601,19 +666,33 @@ pub(in crate::print) fn has_compact_tuple(line: &str) -> bool {
             continue;
         }
         if in_str {
-            if b == b'\\' { esc = true; }
-            else if b == b'"' { in_str = false; }
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
             i += 1;
             continue;
         }
         if in_char {
-            if b == b'\\' { esc = true; }
-            else if b == b'\'' { in_char = false; }
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'\'' {
+                in_char = false;
+            }
             i += 1;
             continue;
         }
-        if b == b'"' { in_str = true; i += 1; continue; }
-        if b == b'\'' { in_char = true; i += 1; continue; }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' {
+            in_char = true;
+            i += 1;
+            continue;
+        }
         if b == b'(' && i + 1 < bytes.len() {
             let next = bytes[i + 1];
             // A space inside `( ` means already normalized; not compact.
@@ -636,14 +715,20 @@ pub(in crate::print) fn has_compact_tuple(line: &str) -> bool {
                     continue;
                 }
                 if inner_in_str {
-                    if c == b'\\' { inner_esc = true; }
-                    else if c == b'"' { inner_in_str = false; }
+                    if c == b'\\' {
+                        inner_esc = true;
+                    } else if c == b'"' {
+                        inner_in_str = false;
+                    }
                     j += 1;
                     continue;
                 }
                 if inner_in_char {
-                    if c == b'\\' { inner_esc = true; }
-                    else if c == b'\'' { inner_in_char = false; }
+                    if c == b'\\' {
+                        inner_esc = true;
+                    } else if c == b'\'' {
+                        inner_in_char = false;
+                    }
                     j += 1;
                     continue;
                 }
@@ -691,19 +776,33 @@ pub(in crate::print) fn line_has_sci_float_without_dot(line: &str) -> bool {
             continue;
         }
         if in_str {
-            if b == b'\\' { esc = true; }
-            else if b == b'"' { in_str = false; }
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
             i += 1;
             continue;
         }
         if in_char {
-            if b == b'\\' { esc = true; }
-            else if b == b'\'' { in_char = false; }
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'\'' {
+                in_char = false;
+            }
             i += 1;
             continue;
         }
-        if b == b'"' { in_str = true; i += 1; continue; }
-        if b == b'\'' { in_char = true; i += 1; continue; }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' {
+            in_char = true;
+            i += 1;
+            continue;
+        }
         // Look for a digit that starts a numeric literal.
         if b.is_ascii_digit() {
             let prev_ok = if i == 0 {
@@ -871,9 +970,8 @@ pub(in crate::print) fn is_single_line_value_decl(trimmed: &str) -> bool {
         .unwrap_or(trimmed.len());
     let first_word = &trimmed[..first_word_end];
     match first_word {
-        "type" | "port" | "module" | "import" | "let" | "in" | "if" | "then"
-        | "else" | "case" | "of" | "where" | "alias" | "exposing" | "as"
-        | "effect" | "infix" => return false,
+        "type" | "port" | "module" | "import" | "let" | "in" | "if" | "then" | "else" | "case"
+        | "of" | "where" | "alias" | "exposing" | "as" | "effect" | "infix" => return false,
         _ => {}
     }
     // Find ` = ` that isn't part of `== `, `/= `, etc.
@@ -884,8 +982,12 @@ pub(in crate::print) fn is_single_line_value_decl(trimmed: &str) -> bool {
             // Reject `== `, `/= `, `<= `, `>= ` (char before the `=` is an op-char).
             if i > 0 {
                 let prev = bytes[i - 1];
-                if prev == b'=' || prev == b'/' || prev == b'<' || prev == b'>'
-                    || prev == b'!' || prev == b':'
+                if prev == b'='
+                    || prev == b'/'
+                    || prev == b'<'
+                    || prev == b'>'
+                    || prev == b'!'
+                    || prev == b':'
                 {
                     i += 1;
                     continue;

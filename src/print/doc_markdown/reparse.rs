@@ -39,8 +39,8 @@ pub(in crate::print) fn try_parse_and_format_module(wrapped: &str) -> Option<Str
         attached.push(collapsed[i]);
         let trim = collapsed[i].trim_start();
         let ends_doc_comment = trim.trim_end() == "-}";
-        let next_is_import = i + 2 < collapsed.len()
-            && collapsed[i + 2].trim_start().starts_with("import ");
+        let next_is_import =
+            i + 2 < collapsed.len() && collapsed[i + 2].trim_start().starts_with("import ");
         if (trim.starts_with("--") || ends_doc_comment)
             && i + 2 < collapsed.len()
             && collapsed[i + 1].is_empty()

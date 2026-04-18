@@ -34,7 +34,8 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
                 if last_idx > 0 {
                     let last = &out[last_idx - 1];
                     let last_trimmed = last.trim();
-                    if !last_trimmed.is_empty() && !last_trimmed.starts_with("--")
+                    if !last_trimmed.is_empty()
+                        && !last_trimmed.starts_with("--")
                         && !last_trimmed.ends_with(" ...")
                     {
                         out[last_idx - 1] = format!("{} ...", last.trim_end());
@@ -230,9 +231,8 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
                     let joined = space_tight_tuples_lists(&joined);
                     let segments = split_at_chain_operators(&joined);
                     let indent_str = &block_lines[assertions[0]][..first_indent];
-                    let cont_indent: String = std::iter::repeat(' ')
-                        .take(first_indent + 4)
-                        .collect();
+                    let cont_indent: String =
+                        std::iter::repeat(' ').take(first_indent + 4).collect();
                     out.push_str(indent_str);
                     if let Some(first) = segments.first() {
                         out.push_str(first);
@@ -256,7 +256,6 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
     }
     out
 }
-
 
 /// Check whether a code block needs reformatting.
 ///
@@ -289,12 +288,19 @@ pub(in crate::print) fn code_block_needs_reformat(block_lines: &[&str]) -> bool 
         if trimmed.contains('[') && trimmed.contains(']') {
             // Look for `[` immediately followed by a literal or identifier
             // start — the distinguishing marker of a compact list/tuple.
-            if trimmed.contains("[\"") || trimmed.contains("[(") || trimmed.contains("['")
-                || trimmed.contains("[0") || trimmed.contains("[1")
-                || trimmed.contains("[2") || trimmed.contains("[3")
-                || trimmed.contains("[4") || trimmed.contains("[5")
-                || trimmed.contains("[6") || trimmed.contains("[7")
-                || trimmed.contains("[8") || trimmed.contains("[9")
+            if trimmed.contains("[\"")
+                || trimmed.contains("[(")
+                || trimmed.contains("['")
+                || trimmed.contains("[0")
+                || trimmed.contains("[1")
+                || trimmed.contains("[2")
+                || trimmed.contains("[3")
+                || trimmed.contains("[4")
+                || trimmed.contains("[5")
+                || trimmed.contains("[6")
+                || trimmed.contains("[7")
+                || trimmed.contains("[8")
+                || trimmed.contains("[9")
             {
                 has_compact_syntax = true;
             }
@@ -384,7 +390,8 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
     // If the block already begins with a `module` declaration, use it
     // directly as the wrapper (don't double-wrap).
     let trimmed_raw = raw_code.trim_start();
-    if trimmed_raw.starts_with("module ") || trimmed_raw.starts_with("port module ")
+    if trimmed_raw.starts_with("module ")
+        || trimmed_raw.starts_with("port module ")
         || trimmed_raw.starts_with("effect module ")
     {
         if let Some(result) = try_parse_and_format_full_module(&raw_code) {
@@ -453,7 +460,9 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
                                results: &mut Vec<String>,
                                pending: &mut Vec<String>|
              -> bool {
-                let Some(text) = accum else { return true; };
+                let Some(text) = accum else {
+                    return true;
+                };
                 let wrapped = format!(
                     "module DocTemp__ exposing (..)\n\n\ndocTemp__ =\n{}\n",
                     text
@@ -484,16 +493,22 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
                     pending_comments.push(trimmed.to_string());
                     continue;
                 }
-                let is_minus_cont = trimmed
-                    .strip_prefix('-')
-                    .is_some_and(|r| r.chars().next().is_some_and(|c| c.is_ascii_digit() || c == '('));
+                let is_minus_cont = trimmed.strip_prefix('-').is_some_and(|r| {
+                    r.chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_digit() || c == '(')
+                });
                 if is_minus_cont && current_accum.is_some() {
                     let cur = current_accum.as_mut().unwrap();
                     cur.push('\n');
                     cur.push_str("    ");
                     cur.push_str(trimmed);
                 } else {
-                    if !flush_accum(current_accum.take(), &mut per_line_results, &mut pending_comments) {
+                    if !flush_accum(
+                        current_accum.take(),
+                        &mut per_line_results,
+                        &mut pending_comments,
+                    ) {
                         all_ok = false;
                         break;
                     }
@@ -520,15 +535,19 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
         }
 
         // Try as expression by wrapping in a dummy function.
-        let indented: Vec<String> = para.iter().enumerate().map(|(i, line)| {
-            if line.is_empty() {
-                String::new()
-            } else if i == 0 {
-                format!("    {}", line)
-            } else {
-                format!("    {}", line)
-            }
-        }).collect();
+        let indented: Vec<String> = para
+            .iter()
+            .enumerate()
+            .map(|(i, line)| {
+                if line.is_empty() {
+                    String::new()
+                } else if i == 0 {
+                    format!("    {}", line)
+                } else {
+                    format!("    {}", line)
+                }
+            })
+            .collect();
         let wrapped_expr = format!(
             "module DocTemp__ exposing (..)\n\n\ndocTemp__ =\n{}\n",
             indented.join("\n")

@@ -48,8 +48,8 @@ pub(super) fn flatten_left_assoc_pred<'a>(
             right,
             ..
         } if pred(operator) => {
-            let (head, mut tail) = flatten_left_assoc_pred(&left.value, pred)
-                .unwrap_or((&left.value, Vec::new()));
+            let (head, mut tail) =
+                flatten_left_assoc_pred(&left.value, pred).unwrap_or((&left.value, Vec::new()));
             tail.push((operator.as_str(), &right.value));
             Some((head, tail))
         }

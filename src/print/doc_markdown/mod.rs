@@ -216,9 +216,7 @@ pub(super) fn normalize_emphasis(text: &str) -> String {
             // renderer emits these as `- `. A leading `*` followed by a
             // space at the start of line content is a bullet, not
             // emphasis. Only apply outside of indented code blocks.
-            if !in_indented_code_block
-                && ch == b'*' && i + 1 < len && bytes[i + 1] == b' '
-            {
+            if !in_indented_code_block && ch == b'*' && i + 1 < len && bytes[i + 1] == b' ' {
                 result.push('-');
                 i += 1;
                 continue;
@@ -491,7 +489,11 @@ pub(super) fn normalize_char_literals_in_code_line(line: &str) -> String {
                 continue;
             }
             // Look for '\u{HEX}' -> actual char (when printable)
-            if chars[i + 1] == '\\' && chars[i + 2] == 'u' && i + 3 < chars.len() && chars[i + 3] == '{' {
+            if chars[i + 1] == '\\'
+                && chars[i + 2] == 'u'
+                && i + 3 < chars.len()
+                && chars[i + 3] == '{'
+            {
                 let mut j = i + 4;
                 while j < chars.len() && chars[j] != '}' {
                     j += 1;
@@ -532,7 +534,11 @@ pub(super) fn normalize_char_literals_in_code_line(line: &str) -> String {
                             let hex: String = chars[j + 3..k].iter().collect();
                             if let Ok(code) = u32::from_str_radix(&hex, 16) {
                                 if let Some(ch) = char::from_u32(code) {
-                                    if !ch.is_control() && !should_unicode_escape(ch) && ch != '"' && ch != '\\' {
+                                    if !ch.is_control()
+                                        && !should_unicode_escape(ch)
+                                        && ch != '"'
+                                        && ch != '\\'
+                                    {
                                         buf.push(ch);
                                         j = k + 1;
                                         continue;
@@ -624,7 +630,6 @@ pub(super) fn collapse_blank_lines_in_doc(text: &str) -> String {
     }
     out.join("\n")
 }
-
 
 /// Re-serialize `@docs` lines in doc comment text.
 /// elm-format normalizes multi-line `@docs` with continuation lines
@@ -915,10 +920,8 @@ pub(super) fn ensure_blank_before_code_block_with_trailing_comment(text: &str) -
         // expression, not a standalone trailing block line.
         let last_line = lines[last_non_blank];
         let last_leading = last_line.len() - last_line.trim_start().len();
-        let ends_with_comment =
-            last_leading == 4 && last_line.trim_start().starts_with("--");
-        let starts_with_import =
-            lines[block_start].trim_start().starts_with("import ");
+        let ends_with_comment = last_leading == 4 && last_line.trim_start().starts_with("--");
+        let starts_with_import = lines[block_start].trim_start().starts_with("import ");
 
         // Check that every 4-space-indented non-blank, non-comment line in
         // the block looks like a declaration (not a free-standing expression
@@ -972,9 +975,8 @@ pub(super) fn ensure_blank_before_code_block_with_trailing_comment(text: &str) -
                 && !prev2.starts_with("```");
             if prev_blank && prev2_prose {
                 let n = out.len();
-                let already_double = n >= 2
-                    && out[n - 1].trim().is_empty()
-                    && out[n - 2].trim().is_empty();
+                let already_double =
+                    n >= 2 && out[n - 1].trim().is_empty() && out[n - 2].trim().is_empty();
                 if !already_double {
                     out.push(String::new());
                 }
@@ -1009,5 +1011,3 @@ pub(super) fn strip_trailing_whitespace_in_doc(text: &str) -> String {
     }
     result
 }
-
-

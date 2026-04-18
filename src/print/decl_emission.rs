@@ -13,8 +13,8 @@ use crate::comment::Comment;
 use crate::declaration::Declaration;
 use crate::file::ElmModule;
 
-use super::comment_slots::CommentSlots;
 use super::Printer;
+use super::comment_slots::CommentSlots;
 
 impl Printer {
     pub(super) fn write_declarations_with_comments(
@@ -117,8 +117,7 @@ impl Printer {
                         } else {
                             module.header.span.end.line
                         };
-                        let source_blanks =
-                            first_comment_line.saturating_sub(prev_end_line + 1);
+                        let source_blanks = first_comment_line.saturating_sub(prev_end_line + 1);
                         let min_blanks = if i == 0 && num_imports == 0 {
                             1u32
                         } else if i > 0 {
@@ -179,10 +178,7 @@ impl Printer {
         // line as the last declaration's end, emit it inline.
         let inline_trailing_orphan = self.is_pretty()
             && !module.declarations.is_empty()
-            && matches!(
-                &slots.slots[total_anchors][0].value,
-                Comment::Line(_)
-            )
+            && matches!(&slots.slots[total_anchors][0].value, Comment::Line(_))
             && {
                 let c0 = &slots.slots[total_anchors][0];
                 let last_decl = module.declarations.last().unwrap();
@@ -193,10 +189,7 @@ impl Printer {
             self.write_char(' ');
             self.write_comment(&slots.slots[total_anchors][0].value);
         }
-        let trailing: Vec<_> = slots.slots[total_anchors]
-            .iter()
-            .skip(skip_first)
-            .collect();
+        let trailing: Vec<_> = slots.slots[total_anchors].iter().skip(skip_first).collect();
         if trailing.is_empty() {
             return;
         }

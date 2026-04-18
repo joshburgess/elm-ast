@@ -72,7 +72,7 @@ pub(in crate::print) fn normalize_markdown_lists(text: &str) -> String {
             // Extract the number and period part
             let prefix_len = trimmed.len() - rest.len();
             let number_part = &trimmed[..prefix_len]; // e.g. "1. "
-            let number_dot = number_part.trim_end();   // e.g. "1."
+            let number_dot = number_part.trim_end(); // e.g. "1."
             result.push_str(number_dot);
             result.push_str("  ");
             result.push_str(rest);
@@ -129,7 +129,11 @@ pub(in crate::print) fn escape_bullet_leading_underscore(line: &str, marker_len:
             let already_escaped = prev_raw == Some(b'\\');
             if !already_escaped {
                 let prev = if i == 0 { None } else { Some(bytes[i - 1]) };
-                let next = if i + 1 < bytes.len() { Some(bytes[i + 1]) } else { None };
+                let next = if i + 1 < bytes.len() {
+                    Some(bytes[i + 1])
+                } else {
+                    None
+                };
                 // Flanking check: either side is a word char (letter/digit),
                 // and the other side is not a word char (boundary-ish).
                 let left_is_letter = prev.map(|c| c.is_ascii_alphanumeric()).unwrap_or(false);
@@ -145,8 +149,7 @@ pub(in crate::print) fn escape_bullet_leading_underscore(line: &str, marker_len:
                         next.map(|c| c.is_ascii_whitespace()).unwrap_or(true);
                     let prev_is_space_or_none =
                         prev.map(|c| c.is_ascii_whitespace()).unwrap_or(true);
-                    let next_is_nonspace =
-                        next.map(|c| !c.is_ascii_whitespace()).unwrap_or(false);
+                    let next_is_nonspace = next.map(|c| !c.is_ascii_whitespace()).unwrap_or(false);
                     if (prev_is_nonspace && next_is_space_or_none)
                         || (prev_is_space_or_none && next_is_nonspace)
                     {
@@ -269,7 +272,11 @@ pub(in crate::print) fn fence_is_in_list_context(lines: &[&str], fence_idx: usiz
 /// Determine whether a list item line should be preceded by a blank line.
 /// elm-format's Cheapskate markdown renderer separates a list from a preceding
 /// paragraph with a blank line, even when the source had none.
-pub(in crate::print) fn starts_list_after_prose(lines: &[&str], i: usize, list_indent: Option<usize>) -> bool {
+pub(in crate::print) fn starts_list_after_prose(
+    lines: &[&str],
+    i: usize,
+    list_indent: Option<usize>,
+) -> bool {
     // Already inside a list context (previous item or continuation) — no blank.
     if list_indent.is_some() {
         return false;
@@ -343,9 +350,7 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
         // Check if this line starts a code block:
         // - must have 4+ leading spaces
         // - must be preceded by a blank line (or be the first line)
-        let starts_code = line.starts_with("    ")
-            && (i == 0
-                || lines[i - 1].trim().is_empty());
+        let starts_code = line.starts_with("    ") && (i == 0 || lines[i - 1].trim().is_empty());
 
         if !starts_code {
             result.push_str(line);
