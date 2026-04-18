@@ -623,10 +623,10 @@ impl Printer {
                 format!("({})", parts.join(", "))
             };
 
-            let line_start = self.buf.rfind('\n').map_or(0, |p| p + 1);
-            let current_col = self.buf.len() - line_start;
             let source_was_multiline = Self::spans_multi_lines(items);
-            if !source_was_multiline && current_col + single_line.len() <= 120 {
+            if !source_was_multiline {
+                // elm-format preserves single-line source layout regardless
+                // of line length for module exposing.
                 self.write(&single_line);
             } else {
                 // Multiline: each item on its own indented line.
