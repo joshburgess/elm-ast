@@ -1898,16 +1898,20 @@ impl Printer {
                         self.indent = col / w;
                         self.indent_extra = (col % w) as u32;
 
+                        let start_len = self.buf.len();
                         self.write_expr(&inner.value);
+                        let wrote_newline = self.buf[start_len..].contains('\n');
 
                         // Restore indent state and write `)` at `(` column.
                         self.indent = saved_indent;
                         self.indent_extra = saved_extra;
                         self.indent_extra_stack = saved_stack;
-                        self.newline();
-                        // `(` was at col - 1, write spaces to align `)` there.
-                        for _ in 0..(col - 1) {
-                            self.buf.push(' ');
+                        if wrote_newline {
+                            self.newline();
+                            // `(` was at col - 1, write spaces to align `)` there.
+                            for _ in 0..(col - 1) {
+                                self.buf.push(' ');
+                            }
                         }
                         self.write_char(')');
                     } else {
@@ -2086,14 +2090,18 @@ impl Printer {
                     self.indent = col / w;
                     self.indent_extra = (col % w) as u32;
 
+                    let start_len = self.buf.len();
                     self.write_expr_inner(expr);
+                    let wrote_newline = self.buf[start_len..].contains('\n');
 
                     self.indent = saved_indent;
                     self.indent_extra = saved_extra;
                     self.indent_extra_stack = saved_stack;
-                    self.newline();
-                    for _ in 0..(col - 1) {
-                        self.buf.push(' ');
+                    if wrote_newline {
+                        self.newline();
+                        for _ in 0..(col - 1) {
+                            self.buf.push(' ');
+                        }
                     }
                     self.write_char(')');
                 } else {
