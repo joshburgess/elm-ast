@@ -2228,8 +2228,27 @@ impl Printer {
                 // split across different lines (the author chose vertical
                 // layout even though each arg is individually simple).
                 let pretty = self.is_pretty();
-                let any_arg_ml =
-                    args.len() > 1 && args.iter().skip(1).any(|a| self.is_multiline(&a.value));
+                // A trailing multi-line string argument is not enough to
+                // force vertical layout: elm-format keeps `f a "\"\"\"..."\"\"\""`
+                // on one line with the closing `"""` on its own line.
+                let last_is_multiline_string = args
+                    .last()
+                    .map(|a| matches!(
+                        unwrap_parens_non_block(&a.value),
+                        Expr::Literal(Literal::MultilineString(s)) if s.contains('\n')
+                    ))
+                    .unwrap_or(false);
+                let skip_last_for_ml = last_is_multiline_string && pretty;
+                let any_arg_ml = if skip_last_for_ml {
+                    args.len() > 2
+                        && args
+                            .iter()
+                            .skip(1)
+                            .take(args.len().saturating_sub(2))
+                            .any(|a| self.is_multiline(&a.value))
+                } else {
+                    args.len() > 1 && args.iter().skip(1).any(|a| self.is_multiline(&a.value))
+                };
                 let source_vertical = pretty
                     && args.windows(2).any(|w| {
                         let end = w[0].span.end.line;
