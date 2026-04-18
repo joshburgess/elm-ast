@@ -1538,6 +1538,7 @@ impl Printer {
                     self.is_multiline(right_expr)
                 };
                 self.write_leading_comments(&left.comments);
+                let left_multiline = self.is_pretty() && self.is_multiline(&left.value);
                 self.write_expr_operand(&left.value, operator, true);
                 if use_vertical && operator == "<|" {
                     // Left-pipe: operator stays on same line as left operand,
@@ -1545,12 +1546,21 @@ impl Printer {
                     // NOT flatten into an outer chain's indent column;
                     // cascading `<|` always adds one indent per level.
                     //
+                    // When the LHS is itself multi-line, elm-format breaks
+                    // `<|` to its own line at the ambient indent column
+                    // rather than trailing the LHS's last line.
+                    //
                     // When the RHS is itself a binop chain (`::`/`++`/`&&`/
                     // arithmetic/compose), elm-format forces that chain
                     // vertical too, aligned at the new indent column. This
                     // matches the behavior where the `<|` break cascades
                     // into any chain on the right.
-                    self.write(" <|");
+                    if left_multiline {
+                        self.newline_indent();
+                        self.write("<|");
+                    } else {
+                        self.write(" <|");
+                    }
                     let saved_chain =
                         std::mem::replace(&mut self.in_vertical_chain, false);
                     self.indent();
