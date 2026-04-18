@@ -1417,10 +1417,13 @@ impl Printer {
                     }
                 }
 
-                // Same rule for left-associative arithmetic chains (+, -).
-                // elm-format: if any operand in the chain is multiline,
-                // break at every operator.
-                if self.is_pretty() && matches!(operator.as_str(), "+" | "-") {
+                // Same rule for left-associative arithmetic, logical, and
+                // comparison chains. elm-format: if any operand in the
+                // chain is multi-line, break at every operator and align
+                // all operators at the same column.
+                if self.is_pretty()
+                    && matches!(operator.as_str(), "+" | "-" | "*" | "/" | "//")
+                {
                     let op_owned = operator.clone();
                     if let Some((head, rest)) =
                         flatten_left_assoc_pred(expr, &|o: &str| o == op_owned)
@@ -1440,6 +1443,30 @@ impl Printer {
                             self.dedent();
                             return;
                         }
+                    }
+                }
+
+                // `&&` and `||` are right-associative in Elm. elm-format
+                // lays out logical chains vertically with all operators
+                // aligned at the same column, mirroring the pipeline /
+                // arithmetic rules.
+                if self.is_pretty()
+                    && matches!(operator.as_str(), "&&" | "||")
+                    && let Some(chain) = flatten_right_assoc_chain(expr, operator)
+                {
+                    let any_ml = chain.iter().any(|op| self.is_multiline(op))
+                        || Self::spans_cross_lines(left.span, right.span);
+                    if any_ml && chain.len() >= 2 {
+                        self.write_expr_operand(chain[0], operator, true);
+                        self.indent();
+                        for operand in &chain[1..] {
+                            self.newline_indent();
+                            self.write(operator);
+                            self.write_char(' ');
+                            self.write_expr_operand(operand, operator, false);
+                        }
+                        self.dedent();
+                        return;
                     }
                 }
 
@@ -1983,6 +2010,30 @@ impl Printer {
         }
     }
 
+    /// Write `<keyword> <cond> then`, breaking to a multi-line layout when
+    /// the condition itself spans multiple lines. elm-format's convention
+    /// when the cond is multi-line:
+    ///     if
+    ///         <cond>
+    ///     then
+    fn write_if_condition(&mut self, keyword: &str, cond: &Spanned<Expr>) {
+        let multiline_cond = self.is_pretty() && self.is_multiline(&cond.value);
+        if multiline_cond {
+            self.write(keyword);
+            self.indent();
+            self.newline_indent();
+            self.write_expr(&cond.value);
+            self.dedent();
+            self.newline_indent();
+            self.write("then");
+        } else {
+            self.write(keyword);
+            self.write_char(' ');
+            self.write_expr(&cond.value);
+            self.write(" then");
+        }
+    }
+
     fn write_if_expr(&mut self, branches: &[(Spanned<Expr>, Spanned<Expr>)], else_branch: &Expr) {
         // Single-line when all branches are simple non-block expressions.
         // elm-format always uses multiline, so skip single-line in pretty mode.
@@ -2015,13 +2066,8 @@ impl Printer {
             self.indent_extra = (if_col % w) as u32;
 
             for (i, (cond, body)) in branches.iter().enumerate() {
-                if i == 0 {
-                    self.write("if ");
-                } else {
-                    self.write("else if ");
-                }
-                self.write_expr(&cond.value);
-                self.write(" then");
+                let keyword = if i == 0 { "if" } else { "else if" };
+                self.write_if_condition(keyword, cond);
                 self.indent();
                 self.newline_indent();
                 self.write_expr(&body.value);
@@ -2036,9 +2082,7 @@ impl Printer {
             } = else_branch
             {
                 for (cond, body) in nested_branches {
-                    self.write("else if ");
-                    self.write_expr(&cond.value);
-                    self.write(" then");
+                    self.write_if_condition("else if", cond);
                     self.indent();
                     self.newline_indent();
                     self.write_expr(&body.value);
