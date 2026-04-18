@@ -359,37 +359,30 @@ pub(super) fn normalize_emphasis(text: &str) -> String {
                 continue;
             }
 
-            // Inline code span: look for a matching closer on the same line
-            // (for single backtick) or within the same paragraph (for multi-backtick).
+            // Inline code span: look for a matching closer within the same
+            // paragraph. CommonMark permits code spans to cross newlines
+            // (line endings are normalized to spaces); only blank lines
+            // terminate the paragraph.
             let after_open = bt_start + bt_count;
             let mut found_close = false;
             let mut close_start = after_open;
-            // Determine search boundary.
             let mut search_end = after_open;
-            if bt_count == 1 {
-                // Don't cross newlines for single-backtick spans.
-                while search_end < len && bytes[search_end] != b'\n' {
-                    search_end += 1;
-                }
-            } else {
-                // Multi-backtick spans stop at blank lines.
-                while search_end < len {
-                    if bytes[search_end] == b'\n' {
-                        let nls = search_end + 1;
-                        if nls >= len {
-                            search_end = len;
-                            break;
-                        }
-                        let mut ws = nls;
-                        while ws < len && bytes[ws] == b' ' {
-                            ws += 1;
-                        }
-                        if ws >= len || bytes[ws] == b'\n' {
-                            break;
-                        }
+            while search_end < len {
+                if bytes[search_end] == b'\n' {
+                    let nls = search_end + 1;
+                    if nls >= len {
+                        search_end = len;
+                        break;
                     }
-                    search_end += 1;
+                    let mut ws = nls;
+                    while ws < len && bytes[ws] == b' ' {
+                        ws += 1;
+                    }
+                    if ws >= len || bytes[ws] == b'\n' {
+                        break;
+                    }
                 }
+                search_end += 1;
             }
 
             while close_start < search_end {
