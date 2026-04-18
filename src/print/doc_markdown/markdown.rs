@@ -114,6 +114,13 @@ pub(in crate::print) fn escape_bullet_leading_underscore(line: &str, marker_len:
     }
     let (prefix, content) = line.split_at(marker_len);
     let bytes = content.as_bytes();
+    // Pre-scan: if flanking underscores in the bullet content pair up as a
+    // balanced italic span (even count, at least one pair), cheapskate treats
+    // them as italic and emits them literally. Only unmatched flanking
+    // underscores need to be escaped.
+    if has_balanced_flanking_underscores(bytes) {
+        return line.to_string();
+    }
     let mut out = String::with_capacity(line.len() + 2);
     out.push_str(prefix);
     let mut in_link_text = false;
@@ -173,6 +180,67 @@ pub(in crate::print) fn escape_bullet_leading_underscore(line: &str, marker_len:
         i += 1;
     }
     out
+}
+
+/// Returns true when the bullet content has an even, nonzero number of
+/// word-boundary flanking underscores — i.e. they pair up as markdown italic
+/// spans. In that case cheapskate renders them verbatim and no escape is
+/// needed. A single unmatched flanking underscore (e.g. `_blank foo`) must
+/// still be escaped.
+fn has_balanced_flanking_underscores(bytes: &[u8]) -> bool {
+    let mut count = 0usize;
+    let mut in_link_text = false;
+    let mut prev_raw: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b >= 0x80 {
+            let seq_len = utf8_seq_len(b);
+            prev_raw = Some(b);
+            i += seq_len;
+            continue;
+        }
+        match b {
+            b'[' if !in_link_text => in_link_text = true,
+            b']' if in_link_text => in_link_text = false,
+            _ => {}
+        }
+        if b == b'_' && !in_link_text {
+            let already_escaped = prev_raw == Some(b'\\');
+            if !already_escaped {
+                let prev = if i == 0 { None } else { Some(bytes[i - 1]) };
+                let next = if i + 1 < bytes.len() {
+                    Some(bytes[i + 1])
+                } else {
+                    None
+                };
+                let left_is_letter = prev.map(|c| c.is_ascii_alphanumeric()).unwrap_or(false);
+                let right_is_letter = next.map(|c| c.is_ascii_alphanumeric()).unwrap_or(false);
+                let flanking = if left_is_letter != right_is_letter {
+                    true
+                } else if !left_is_letter && !right_is_letter {
+                    let prev_is_nonspace =
+                        prev.map(|c| !c.is_ascii_whitespace()).unwrap_or(false);
+                    let next_is_space_or_none =
+                        next.map(|c| c.is_ascii_whitespace()).unwrap_or(true);
+                    let prev_is_space_or_none =
+                        prev.map(|c| c.is_ascii_whitespace()).unwrap_or(true);
+                    let next_is_nonspace =
+                        next.map(|c| !c.is_ascii_whitespace()).unwrap_or(false);
+                    (prev_is_nonspace && next_is_space_or_none)
+                        || (prev_is_space_or_none && next_is_nonspace)
+                } else {
+                    false
+                };
+                if flanking {
+                    count += 1;
+                }
+            }
+        }
+        prev_raw = Some(b);
+        i += 1;
+    }
+    count >= 2 && count % 2 == 0
 }
 
 fn utf8_seq_len(first_byte: u8) -> usize {
