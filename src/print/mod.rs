@@ -1379,8 +1379,20 @@ impl Printer {
                             .map(|(op, _)| *op)
                             .unwrap_or(operator.as_str());
                         let outer_chain = self.in_vertical_chain;
+                        // Capture the column where the head begins so
+                        // continuations align at head_col + indent_width,
+                        // even when writing inside a list/tuple element
+                        // where the ambient indent counter lags the cursor.
+                        let head_col = self.current_column();
                         self.write_expr_operand(real_head, first_op, true);
+                        let saved_indent = self.indent;
+                        let saved_extra = self.indent_extra;
+                        let saved_stack = self.indent_extra_stack.clone();
                         if !outer_chain {
+                            let w = self.config.indent_width;
+                            self.indent = head_col / w;
+                            self.indent_extra = (head_col % w) as u32;
+                            self.indent_extra_stack.clear();
                             self.indent();
                         }
                         self.in_vertical_chain = true;
@@ -1392,7 +1404,9 @@ impl Printer {
                         }
                         self.in_vertical_chain = outer_chain;
                         if !outer_chain {
-                            self.dedent();
+                            self.indent = saved_indent;
+                            self.indent_extra = saved_extra;
+                            self.indent_extra_stack = saved_stack;
                         }
                         return;
                     }
