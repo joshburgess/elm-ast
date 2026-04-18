@@ -1056,6 +1056,19 @@ impl Printer {
         match &arm.value {
             TypeAnnotation::Record(fields) if fields.len() >= 2 => source_multi,
             TypeAnnotation::GenericRecord { fields, .. } if !fields.is_empty() => source_multi,
+            TypeAnnotation::Typed { args, .. } if !args.is_empty() && source_multi => {
+                // A Typed constructor applied to a multi-line record arg
+                // expands `-> Ctor { ... }` across multiple lines.
+                args.iter().any(|a| match &a.value {
+                    TypeAnnotation::Record(fs) if fs.len() >= 2 => {
+                        Self::type_ann_spans_multi_lines(a)
+                    }
+                    TypeAnnotation::GenericRecord { fields: fs, .. } if !fs.is_empty() => {
+                        Self::type_ann_spans_multi_lines(a)
+                    }
+                    _ => false,
+                })
+            }
             _ => false,
         }
     }
@@ -1070,6 +1083,9 @@ impl Printer {
             }
             TypeAnnotation::GenericRecord { base, fields } if !fields.is_empty() && source_multi => {
                 self.write_record_type_fields_multiline(fields, Some(&base.value));
+            }
+            TypeAnnotation::Typed { args, .. } if !args.is_empty() && source_multi => {
+                self.write_type_multiline(arm);
             }
             _ => self.write_type_non_arrow(&arm.value),
         }
