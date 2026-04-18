@@ -680,6 +680,18 @@ pub(in crate::print) fn code_block_has_structural_reformat_signal(
 /// expression. elm-format always breaks `if-then-else` across multiple lines, so
 /// such blocks need reformat.
 pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<String> {
+    // If every non-blank line's leading exceeds 4, this is an indented-code
+    // block with deeper-than-base indent (e.g. ASCII art, box drawings,
+    // poetry). elm-format preserves these verbatim rather than treating them
+    // as parse-able Elm code.
+    let min_leading = block_lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min();
+    if matches!(min_leading, Some(n) if n > 4) {
+        return None;
+    }
     // Strip the 4-space prefix from each line to get raw Elm code.
     let mut raw_lines: Vec<String> = Vec::new();
     for &line in block_lines {
