@@ -307,6 +307,15 @@ pub(in crate::print) fn looks_like_simple_expr_line(trimmed: &str) -> bool {
     if trimmed.contains("=>") || trimmed.contains("|>>") {
         return false;
     }
+    // Reject lines that contain sentence-ending punctuation: a period
+    // followed by a space where the char before the period is a lowercase
+    // alphabetic (not a digit → decimal, not uppercase → module qualifier).
+    // This catches prose in doc-comment code blocks like
+    // "remapping of data for each pixel. It allows operations..." without
+    // also catching record access (`foo.bar baz`) or module paths (`Foo.bar`).
+    if contains_sentence_period(trimmed) {
+        return false;
+    }
     // Must begin with identifier (lower/upper) or opening delimiter.
     let first = match trimmed.chars().next() {
         Some(c) => c,
@@ -399,6 +408,57 @@ pub(in crate::print) fn looks_like_simple_expr_line(trimmed: &str) -> bool {
         return false;
     }
     true
+}
+
+/// True if the line contains a period followed by a space where the char
+/// before the period is a lowercase letter. This pattern is a strong signal
+/// of English sentence punctuation inside what could otherwise look like
+/// Elm expressions (e.g. `"pixel. It allows ..."`). Elm decimals have a
+/// digit before `.`, record access has no space after, and module
+/// qualifiers start with uppercase, so this heuristic rejects prose
+/// without catching valid Elm syntax.
+fn contains_sentence_period(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    for i in 0..bytes.len() {
+        let c = bytes[i] as char;
+        if esc {
+            esc = false;
+            continue;
+        }
+        if in_str {
+            if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        if in_char {
+            if c == '\\' {
+                esc = true;
+            } else if c == '\'' {
+                in_char = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '\'' => in_char = true,
+            '.' => {
+                if i + 1 < bytes.len() && bytes[i + 1] == b' ' && i > 0 {
+                    let prev = bytes[i - 1] as char;
+                    if prev.is_ascii_lowercase() {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Add spaces around tight binary operators (`1/2` → `1 / 2`, `2^3` → `2 ^ 3`)
