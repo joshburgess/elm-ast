@@ -492,14 +492,16 @@ fn application_loop(
                 args.push(arg);
             }
             Step::NeedExpr(cont) => {
-                // Put any inter-arg comments back so they can be claimed by
-                // the eventual inner node (or remain for later attachment).
-                if !inter_arg_comments.is_empty() {
-                    p.restore_pending_comments(inter_arg_comments);
-                }
+                // Thread the claimed inter-arg comments through the
+                // continuation. Restoring to the pending buffer fails the
+                // round-trip: when application_loop resumes with the Done
+                // arg, the next iteration's prev_end_line is the new arg's
+                // end (not the original prev arg's), so the reclaim check
+                // rejects the comment and it drops.
+                let leading = inter_arg_comments;
                 return Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
                     let step = cont(p, sub_expr)?;
-                    app_after_arg(p, step, start, first_line, args, ctx_col)
+                    app_after_arg_with_leading(p, step, start, first_line, args, ctx_col, leading)
                 })));
             }
         }
@@ -513,20 +515,29 @@ fn application_loop(
 }
 
 /// Wrapper: when an application argument comes from a compound form.
-fn app_after_arg(
+/// Prepends any claimed inter-arg leading comments to the completed argument
+/// before it joins the args list. The `leading` vector is empty in the common
+/// case where no inter-arg comments were claimed.
+fn app_after_arg_with_leading(
     p: &mut Parser,
     step: Step,
     start: Position,
     first_line: u32,
     args: Vec<Spanned<Expr>>,
     ctx_col: Option<u32>,
+    leading: Vec<Spanned<Comment>>,
 ) -> ParseResult<Step> {
     match step {
         Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
             let step = cont(p, sub_expr)?;
-            app_after_arg(p, step, start, first_line, args, ctx_col)
+            app_after_arg_with_leading(p, step, start, first_line, args, ctx_col, leading)
         }))),
-        Step::Done(arg) => {
+        Step::Done(mut arg) => {
+            if !leading.is_empty() {
+                let mut combined = leading;
+                combined.extend(std::mem::take(&mut arg.comments));
+                arg.comments = combined;
+            }
             let mut args = args;
             args.push(arg);
             application_loop(p, start, first_line, args, ctx_col)
