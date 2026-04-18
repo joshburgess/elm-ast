@@ -902,6 +902,39 @@ impl Printer {
             TypeAnnotation::GenericRecord { base, fields } if !fields.is_empty() => {
                 self.write_record_type_fields_multiline(fields, Some(&base.value));
             }
+            TypeAnnotation::Typed { module_name, name, args } if !args.is_empty() => {
+                if !module_name.is_empty() {
+                    self.write(&module_name.join("."));
+                    self.write_char('.');
+                }
+                self.write(&name.value);
+                for arg in args {
+                    if Self::type_ann_spans_multi_lines(arg) {
+                        match &arg.value {
+                            TypeAnnotation::Record(rfields) if !rfields.is_empty() => {
+                                self.indent();
+                                self.newline_indent();
+                                self.write_record_type_fields_multiline(rfields, None);
+                                self.dedent();
+                                continue;
+                            }
+                            TypeAnnotation::GenericRecord { base, fields: rfields } => {
+                                self.indent();
+                                self.newline_indent();
+                                self.write_record_type_fields_multiline(
+                                    rfields,
+                                    Some(&base.value),
+                                );
+                                self.dedent();
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                    self.write_char(' ');
+                    self.write_type_atomic(&arg.value);
+                }
+            }
             _ => self.write_type(&ty.value),
         }
     }
