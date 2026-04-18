@@ -696,6 +696,35 @@ impl Printer {
             }
         }
         if let Some(exposing) = &import.exposing {
+            let source_multi = self.is_pretty()
+                && exposing.span.end.line > exposing.span.start.line
+                && exposing.span.start.line != 0;
+            if source_multi {
+                if let Exposing::Explicit(items) = &exposing.value {
+                    self.indent();
+                    self.newline_indent();
+                    self.write("exposing");
+                    self.indent();
+                    self.newline_indent();
+                    let mut sorted: Vec<&ExposedItem> =
+                        items.iter().map(|i| &i.value).collect();
+                    sorted.sort_by_key(|a| exposed_item_sort_key(a));
+                    self.write_char('(');
+                    self.write_char(' ');
+                    for (i, item) in sorted.iter().enumerate() {
+                        if i > 0 {
+                            self.newline_indent();
+                            self.write(", ");
+                        }
+                        self.write_exposed_item(item);
+                    }
+                    self.newline_indent();
+                    self.write_char(')');
+                    self.dedent();
+                    self.dedent();
+                    return;
+                }
+            }
             self.write(" exposing ");
             if self.is_pretty() {
                 self.write_import_exposing_sorted(&exposing.value);
