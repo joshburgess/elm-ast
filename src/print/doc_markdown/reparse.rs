@@ -56,6 +56,10 @@ pub(in crate::print) fn try_parse_and_format_module(wrapped: &str) -> Option<Str
         {
             // Insert an extra blank line so that `-- comment\n\nimport` becomes
             // `-- comment\n\n\nimport` (two blank lines) in the doc code block.
+            // elm-format's output is not idempotent for this pattern: source
+            // with `-- comment\n<blank>\nimport` renders to 1 blank once, then
+            // 2 blanks on a second run. Match the converged (2-blank) form so
+            // `pp == elm-format(pp)` holds.
             attached.push("");
             i += 1;
         } else {
