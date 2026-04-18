@@ -1199,9 +1199,43 @@ impl Printer {
             TypeAnnotation::FunctionType { from, to } => {
                 self.write_type_non_arrow(&from.value);
                 self.write(" -> ");
-                self.write_type(&to.value);
+                // elm-format preserves redundant parens around function types
+                // on the RHS of an arrow (e.g. `a -> (b -> c)`). The parser
+                // flags this by extending the inner value's span to cover
+                // the parens, so `to.span.start` precedes the inner `from`'s
+                // span start.
+                let preserve_parens = self.is_pretty()
+                    && matches!(to.value, TypeAnnotation::FunctionType { .. })
+                    && Self::type_ann_has_outer_parens(to);
+                if preserve_parens {
+                    self.write_char('(');
+                    self.write_type(&to.value);
+                    self.write_char(')');
+                } else {
+                    self.write_type(&to.value);
+                }
             }
             _ => self.write_type_non_arrow(ty),
+        }
+    }
+
+    /// Detect whether a FunctionType Spanned was originally wrapped in parens
+    /// in the source. The parser records this by setting the Spanned's span
+    /// to cover the parens, so the outer span starts before the inner `from`'s
+    /// span starts.
+    fn type_ann_has_outer_parens(ta: &Spanned<TypeAnnotation>) -> bool {
+        if let TypeAnnotation::FunctionType { from, .. } = &ta.value {
+            let outer = ta.span.start;
+            let inner = from.span.start;
+            if outer.line == 0 || inner.line == 0 {
+                return false;
+            }
+            if outer.line < inner.line {
+                return true;
+            }
+            outer.line == inner.line && outer.column < inner.column
+        } else {
+            false
         }
     }
 

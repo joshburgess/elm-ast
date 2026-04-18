@@ -125,8 +125,18 @@ fn parse_type_atomic(p: &mut Parser) -> ParseResult<Spanned<TypeAnnotation>> {
                 // Just parenthesized: `(Type)`
                 Token::RightParen => {
                     p.advance();
-                    // Unwrap the parentheses — they don't have semantic meaning in types.
-                    Ok(first)
+                    // Parens have no semantic meaning in types, so we unwrap them.
+                    // But when the inner type is a function type, elm-format
+                    // preserves redundant parens (e.g. `a -> (b -> c)`). We
+                    // signal that the parens were present by extending the
+                    // inner value's span to cover the parens. The pretty
+                    // printer detects this by comparing the outer span to the
+                    // inner `from`'s span.
+                    if matches!(first.value, TypeAnnotation::FunctionType { .. }) {
+                        Ok(p.spanned_from(start, first.value))
+                    } else {
+                        Ok(first)
+                    }
                 }
                 _ => Err(p.error("expected `,` or `)` in type")),
             }
