@@ -37,6 +37,10 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
                     if !last_trimmed.is_empty()
                         && !last_trimmed.starts_with("--")
                         && !last_trimmed.ends_with(" ...")
+                        // A case arm (`Pat ->`) that's followed by `...` is
+                        // using `...` as a body placeholder, not as a chain
+                        // continuation. Preserve the line break.
+                        && !last_trimmed.ends_with("->")
                     {
                         out[last_idx - 1] = format!("{} ...", last.trim_end());
                         // Drop any blank lines between assertion and `...`, and
