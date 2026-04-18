@@ -2164,13 +2164,15 @@ impl Printer {
             let w = self.config.indent_width;
             self.indent = case_col / w;
             self.indent_extra = (case_col % w) as u32;
-            // When the scrutinee is a control-flow compound expression that
-            // forces multi-line output (if/let/case), elm-format uses the
-            // "hanging" form: bare "case", indented subject, and bare "of".
+            // When the scrutinee forces multi-line output, elm-format uses
+            // the "hanging" form: bare "case", indented subject, and bare
+            // "of". This covers control-flow compounds (if/let/case) and
+            // any other expression whose rendered form spans multiple
+            // lines (e.g. a multi-arg application with nested args).
             let hanging = matches!(
                 subject,
                 Expr::IfElse { .. } | Expr::LetIn { .. } | Expr::CaseOf { .. }
-            );
+            ) || self.is_multiline(subject);
             if hanging {
                 self.write("case");
                 self.indent();
