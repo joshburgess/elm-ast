@@ -41,6 +41,12 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
                         // using `...` as a body placeholder, not as a chain
                         // continuation. Preserve the line break.
                         && !last_trimmed.ends_with("->")
+                        // Only merge `...` into a preceding line that looks
+                        // like an Elm assertion or simple expression.
+                        // Without this, non-Elm content (e.g. CSS keyframes
+                        // `}` closing braces) inside a doc code block gets
+                        // silently joined with the placeholder.
+                        && super::predicates::looks_like_assertion(last_trimmed)
                     {
                         out[last_idx - 1] = format!("{} ...", last.trim_end());
                         // Drop any blank lines between assertion and `...`, and
