@@ -427,6 +427,29 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
     // try each paragraph individually. Some may be expressions, some
     // declarations.
     let paragraphs = split_into_paragraphs(&raw_lines);
+
+    // If the block has an `import` paragraph and the module-parse path
+    // above already failed, elm-format leaves the whole block verbatim
+    // (it won't reformat expression paragraphs that co-exist with
+    // imports inside a single code block). Mirror that here.
+    if paragraphs.iter().any(|p| paragraph_is_all_imports(p)) {
+        let mut out_lines: Vec<String> = Vec::new();
+        let mut prev_blank = false;
+        for l in raw_lines.iter() {
+            if l.trim().is_empty() {
+                if prev_blank {
+                    continue;
+                }
+                prev_blank = true;
+                out_lines.push(String::new());
+            } else {
+                prev_blank = false;
+                out_lines.push(format!("    {}", l));
+            }
+        }
+        return Some(out_lines.join("\n"));
+    }
+
     let mut formatted_paragraphs: Vec<String> = Vec::new();
 
     for para in &paragraphs {
