@@ -264,7 +264,66 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
 /// - lines with non-4-aligned indentation (2-space indent), OR
 /// - compact list/tuple syntax that elm-format would space out
 ///   (e.g., `[1,2]` -> `[ 1, 2 ]`, `(0,"a")` -> `( 0, "a" )`)
+/// Detect "mixed" code blocks: blocks containing BOTH a decl-like line
+/// (type, type alias, value decl, or type annotation) AND a bare expression
+/// at base indent. elm-format treats such blocks as verbatim examples and
+/// leaves them untouched instead of re-running the module-body formatter.
+fn block_mixes_decls_and_bare_exprs(block_lines: &[&str]) -> bool {
+    let mut has_decl = false;
+    let mut has_bare = false;
+    // Track whether we are currently inside a triple-quoted string so lines
+    // within it (which may look like bare expressions or decls syntactically)
+    // don't trigger the predicate.
+    let mut in_triple = false;
+    for &line in block_lines {
+        if line.contains("\"\"\"") {
+            let count = line.matches("\"\"\"").count();
+            if count % 2 == 1 {
+                in_triple = !in_triple;
+            }
+            // Skip classifying this line either way.
+            continue;
+        }
+        if in_triple {
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        if leading != 4 {
+            continue;
+        }
+        if trimmed.starts_with("--") {
+            continue;
+        }
+        if trimmed.starts_with("module ")
+            || trimmed.starts_with("import ")
+            || trimmed.starts_with("port module ")
+            || trimmed.starts_with("effect module ")
+        {
+            continue;
+        }
+        if looks_like_code_block_decl(trimmed) {
+            has_decl = true;
+        } else if looks_like_assertion(trimmed) {
+            has_bare = true;
+        }
+        if has_decl && has_bare {
+            return true;
+        }
+    }
+    false
+}
+
 pub(in crate::print) fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
+    // When a block mixes declarations with bare expressions, elm-format
+    // preserves the block verbatim. Mirror that to keep compact tuples and
+    // single-line value decls inside examples.
+    if block_mixes_decls_and_bare_exprs(block_lines) {
+        return false;
+    }
     let mut count_non_4_aligned = 0usize;
     let mut has_compact_syntax = false;
     let mut has_single_line_decl = false;
