@@ -836,11 +836,28 @@ impl Printer {
         }
     }
 
-    /// True when the type annotation's span crosses source lines.
+    /// True when the type annotation's content crosses source lines.
+    /// Uses the inner content span rather than the Spanned wrapper span,
+    /// because the wrapper may include leading whitespace/newline after `=`
+    /// or `:` (giving a misleading multi-line appearance for a single-line
+    /// annotation like `    msg -> model -> ( model, Cmd msg )`).
     fn type_ann_spans_multi_lines(sp: &Spanned<TypeAnnotation>) -> bool {
-        sp.span.start.line != 0
-            && sp.span.end.line != 0
-            && sp.span.end.line > sp.span.start.line
+        let (s, e) = Self::type_ann_content_lines(sp);
+        s != 0 && e != 0 && e > s
+    }
+
+    /// Return `(start_line, end_line)` for the content of a type annotation,
+    /// peeking through the wrapper span into inner sub-spans where wrappers
+    /// may include leading whitespace.
+    fn type_ann_content_lines(sp: &Spanned<TypeAnnotation>) -> (u32, u32) {
+        match &sp.value {
+            TypeAnnotation::FunctionType { from, to } => {
+                let (fs, _fe) = Self::type_ann_content_lines(from);
+                let (_ts, te) = Self::type_ann_content_lines(to);
+                (fs, te)
+            }
+            _ => (sp.span.start.line, sp.span.end.line),
+        }
     }
 
     /// Write a type annotation broken across lines: function arrows on their
@@ -864,7 +881,7 @@ impl Printer {
                     }
                 }
             }
-            TypeAnnotation::Record(fields) if fields.len() >= 2 => {
+            TypeAnnotation::Record(fields) if !fields.is_empty() => {
                 self.write_record_type_fields_multiline(fields, None);
             }
             TypeAnnotation::GenericRecord { base, fields } if !fields.is_empty() => {
@@ -955,7 +972,11 @@ impl Printer {
         self.indent();
         self.newline_indent();
         if self.is_pretty() {
-            self.write_type_pretty_toplevel(&alias.type_annotation.value);
+            if Self::type_ann_spans_multi_lines(&alias.type_annotation) {
+                self.write_type_multiline(&alias.type_annotation);
+            } else {
+                self.write_type_pretty_toplevel(&alias.type_annotation.value);
+            }
         } else {
             self.write_type(&alias.type_annotation.value);
         }
