@@ -124,6 +124,7 @@ pub(in crate::print) fn escape_bullet_leading_underscore(line: &str, marker_len:
     let mut out = String::with_capacity(line.len() + 2);
     out.push_str(prefix);
     let mut in_link_text = false;
+    let mut in_backticks = false;
     let mut prev_raw: Option<u8> = None;
     let mut i = 0;
     while i < bytes.len() {
@@ -137,11 +138,12 @@ pub(in crate::print) fn escape_bullet_leading_underscore(line: &str, marker_len:
             continue;
         }
         match b {
-            b'[' if !in_link_text => in_link_text = true,
+            b'[' if !in_link_text && !in_backticks => in_link_text = true,
             b']' if in_link_text => in_link_text = false,
+            b'`' => in_backticks = !in_backticks,
             _ => {}
         }
-        if b == b'_' && !in_link_text {
+        if b == b'_' && !in_link_text && !in_backticks {
             // Skip if already escaped (prev char is an unescaped backslash).
             let already_escaped = prev_raw == Some(b'\\');
             if !already_escaped {
@@ -190,6 +192,7 @@ pub(in crate::print) fn escape_bullet_leading_underscore(line: &str, marker_len:
 fn has_balanced_flanking_underscores(bytes: &[u8]) -> bool {
     let mut count = 0usize;
     let mut in_link_text = false;
+    let mut in_backticks = false;
     let mut prev_raw: Option<u8> = None;
     let mut i = 0;
     while i < bytes.len() {
@@ -201,11 +204,12 @@ fn has_balanced_flanking_underscores(bytes: &[u8]) -> bool {
             continue;
         }
         match b {
-            b'[' if !in_link_text => in_link_text = true,
+            b'[' if !in_link_text && !in_backticks => in_link_text = true,
             b']' if in_link_text => in_link_text = false,
+            b'`' => in_backticks = !in_backticks,
             _ => {}
         }
-        if b == b'_' && !in_link_text {
+        if b == b'_' && !in_link_text && !in_backticks {
             let already_escaped = prev_raw == Some(b'\\');
             if !already_escaped {
                 let prev = if i == 0 { None } else { Some(bytes[i - 1]) };
