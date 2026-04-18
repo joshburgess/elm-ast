@@ -1265,16 +1265,15 @@ impl Printer {
     /// Detect whether a FunctionType Spanned was originally wrapped in parens
     /// in the source. The parser records this by setting the Spanned's span
     /// to cover the parens, so the outer span starts before the inner `from`'s
-    /// span starts.
+    /// span starts on the same line. A start on an earlier line could simply
+    /// be from whitespace/newlines preceding the RHS of an arrow; require
+    /// same-line to avoid that false positive.
     fn type_ann_has_outer_parens(ta: &Spanned<TypeAnnotation>) -> bool {
         if let TypeAnnotation::FunctionType { from, .. } = &ta.value {
             let outer = ta.span.start;
             let inner = from.span.start;
             if outer.line == 0 || inner.line == 0 {
                 return false;
-            }
-            if outer.line < inner.line {
-                return true;
             }
             outer.line == inner.line && outer.column < inner.column
         } else {
