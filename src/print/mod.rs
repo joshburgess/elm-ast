@@ -181,6 +181,11 @@ impl Printer {
             }
             Expr::Parenthesized(inner) => self.is_multiline(&inner.value),
             Expr::Negation(inner) => self.is_multiline(&inner.value),
+            // A `"""..."""` literal whose content spans multiple lines prints
+            // with its closing `"""` at column 1. In a binary-op chain this
+            // breaks Elm's layout (parser loses indentation context), so we
+            // report it as multi-line and let the chain layout handle it.
+            Expr::Literal(Literal::MultilineString(s)) if s.contains('\n') => true,
             _ => false,
         }
     }
