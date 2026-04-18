@@ -270,6 +270,11 @@ pub(in crate::print) fn looks_like_assertion(trimmed: &str) -> bool {
     if trimmed.starts_with("--") {
         return false;
     }
+    // Reject lines with unterminated string/char literals. elm-format can't
+    // parse these so it leaves the surrounding block verbatim; we do the same.
+    if has_unterminated_string_or_char(trimmed) {
+        return false;
+    }
     if let Some(eq) = trimmed.find(" == ") {
         let (left, right) = (&trimmed[..eq], &trimmed[eq + 4..]);
         if left.is_empty() || right.is_empty() {
@@ -421,6 +426,109 @@ pub(in crate::print) fn looks_like_simple_expr_line(trimmed: &str) -> bool {
         return false;
     }
     true
+}
+
+/// True if the line contains an unterminated `"` string or `'` char
+/// literal. Triple-quoted `"""` must also be closed on the same line.
+fn has_unterminated_string_or_char(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'"' {
+            // Triple-quoted string?
+            if i + 2 < bytes.len() && bytes[i + 1] == b'"' && bytes[i + 2] == b'"' {
+                // Scan for closing """.
+                let mut j = i + 3;
+                let mut esc = false;
+                let mut found = false;
+                while j < bytes.len() {
+                    if esc {
+                        esc = false;
+                        j += 1;
+                        continue;
+                    }
+                    if bytes[j] == b'\\' {
+                        esc = true;
+                        j += 1;
+                        continue;
+                    }
+                    if j + 2 < bytes.len()
+                        && bytes[j] == b'"'
+                        && bytes[j + 1] == b'"'
+                        && bytes[j + 2] == b'"'
+                    {
+                        found = true;
+                        j += 3;
+                        break;
+                    }
+                    j += 1;
+                }
+                if !found {
+                    return true;
+                }
+                i = j;
+                continue;
+            }
+            // Regular single-quoted string. Scan for unescaped closing ".
+            let mut j = i + 1;
+            let mut esc = false;
+            let mut found = false;
+            while j < bytes.len() {
+                if esc {
+                    esc = false;
+                    j += 1;
+                    continue;
+                }
+                if bytes[j] == b'\\' {
+                    esc = true;
+                    j += 1;
+                    continue;
+                }
+                if bytes[j] == b'"' {
+                    found = true;
+                    j += 1;
+                    break;
+                }
+                j += 1;
+            }
+            if !found {
+                return true;
+            }
+            i = j;
+            continue;
+        }
+        if c == b'\'' {
+            let mut j = i + 1;
+            let mut esc = false;
+            let mut found = false;
+            while j < bytes.len() {
+                if esc {
+                    esc = false;
+                    j += 1;
+                    continue;
+                }
+                if bytes[j] == b'\\' {
+                    esc = true;
+                    j += 1;
+                    continue;
+                }
+                if bytes[j] == b'\'' {
+                    found = true;
+                    j += 1;
+                    break;
+                }
+                j += 1;
+            }
+            if !found {
+                return true;
+            }
+            i = j;
+            continue;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// True if the line contains a bare ` -> ` arrow outside of string and
