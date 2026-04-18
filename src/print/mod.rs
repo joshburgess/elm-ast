@@ -188,9 +188,18 @@ impl Printer {
                 true
             }
             Expr::CaseOf { .. } | Expr::LetIn { .. } => true,
-            Expr::Lambda { body, .. } => {
+            Expr::Lambda { args, body } => {
                 self.is_multiline(&body.value)
                     || (self.is_pretty() && Self::span_crosses_lines(body.span))
+                    || (self.is_pretty()
+                        && match args.last() {
+                            Some(last) => {
+                                last.span.end.line != 0
+                                    && body.span.start.line != 0
+                                    && body.span.start.line > last.span.end.line
+                            }
+                            None => false,
+                        })
             }
             Expr::Application(args) => {
                 args.iter().any(|a| self.is_multiline(&a.value))
@@ -1645,7 +1654,7 @@ impl Printer {
                 self.write_let_expr(declarations, &body.value);
             }
             Expr::Lambda { args, body } => {
-                self.write_lambda(args, &body.value);
+                self.write_lambda(args, body);
             }
             Expr::BinOps {
                 operands_and_operators,
@@ -2511,7 +2520,7 @@ impl Printer {
         }
     }
 
-    fn write_lambda(&mut self, args: &[Spanned<Pattern>], body: &Expr) {
+    fn write_lambda(&mut self, args: &[Spanned<Pattern>], body: &Spanned<Expr>) {
         self.write("\\");
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {
@@ -2519,15 +2528,24 @@ impl Printer {
             }
             self.write_pattern_atomic(&arg.value);
         }
-        if self.is_multiline(body) {
+        let body_broken_in_source = self.is_pretty()
+            && match args.last() {
+                Some(last) => {
+                    last.span.end.line != 0
+                        && body.span.start.line != 0
+                        && body.span.start.line > last.span.end.line
+                }
+                None => false,
+            };
+        if self.is_multiline(&body.value) || body_broken_in_source {
             self.write(" ->");
             self.indent();
             self.newline_indent();
-            self.write_expr(body);
+            self.write_expr(&body.value);
             self.dedent();
         } else {
             self.write(" -> ");
-            self.write_expr(body);
+            self.write_expr(&body.value);
         }
     }
 
