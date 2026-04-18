@@ -1633,7 +1633,7 @@ impl Printer {
                 branches,
                 else_branch,
             } => {
-                self.write_if_expr(branches, &else_branch.value);
+                self.write_if_expr(branches, else_branch);
             }
             Expr::CaseOf {
                 expr: subject,
@@ -2236,7 +2236,11 @@ impl Printer {
         }
     }
 
-    fn write_if_expr(&mut self, branches: &[(Spanned<Expr>, Spanned<Expr>)], else_branch: &Expr) {
+    fn write_if_expr(
+        &mut self,
+        branches: &[(Spanned<Expr>, Spanned<Expr>)],
+        else_branch: &Spanned<Expr>,
+    ) {
         // Single-line when all branches are simple non-block expressions.
         // elm-format always uses multiline, so skip single-line in pretty mode.
         let all_simple = !self.is_pretty()
@@ -2244,7 +2248,9 @@ impl Printer {
             && branches
                 .iter()
                 .all(|(c, b)| !self.is_multiline(&c.value) && !self.is_multiline(&b.value))
-            && !self.is_multiline(else_branch);
+            && !self.is_multiline(&else_branch.value)
+            && branches.iter().all(|(_, b)| b.comments.is_empty())
+            && else_branch.comments.is_empty();
 
         if all_simple {
             let (cond, body) = &branches[0];
@@ -2253,7 +2259,7 @@ impl Printer {
             self.write(" then ");
             self.write_expr(&body.value);
             self.write(" else ");
-            self.write_expr(else_branch);
+            self.write_expr(&else_branch.value);
         } else if self.is_pretty() {
             // In pretty mode, use column-based indentation so that
             // branches are always indented relative to the `if` keyword,
@@ -2272,6 +2278,7 @@ impl Printer {
                 self.write_if_condition(keyword, cond);
                 self.indent();
                 self.newline_indent();
+                self.write_leading_comments(&body.comments);
                 self.write_expr(&body.value);
                 self.dedent();
                 self.newline();
@@ -2281,23 +2288,25 @@ impl Printer {
             if let Expr::IfElse {
                 branches: nested_branches,
                 else_branch: nested_else,
-            } = else_branch
+            } = &else_branch.value
             {
                 for (cond, body) in nested_branches {
                     self.write_if_condition("else if", cond);
                     self.indent();
                     self.newline_indent();
+                    self.write_leading_comments(&body.comments);
                     self.write_expr(&body.value);
                     self.dedent();
                     self.newline();
                     self.newline_indent();
                 }
-                self.write_if_else_tail(&nested_else.value);
+                self.write_if_else_tail(nested_else);
             } else {
                 self.write("else");
                 self.indent();
                 self.newline_indent();
-                self.write_expr(else_branch);
+                self.write_leading_comments(&else_branch.comments);
+                self.write_expr(&else_branch.value);
                 self.dedent();
             }
 
@@ -2316,6 +2325,7 @@ impl Printer {
                 self.write(" then");
                 self.indent();
                 self.newline_indent();
+                self.write_leading_comments(&body.comments);
                 self.write_expr(&body.value);
                 self.dedent();
                 self.newline();
@@ -2324,17 +2334,18 @@ impl Printer {
             self.write("else");
             self.indent();
             self.newline_indent();
-            self.write_expr(else_branch);
+            self.write_leading_comments(&else_branch.comments);
+            self.write_expr(&else_branch.value);
             self.dedent();
         }
     }
 
     /// Helper for flattening nested if-else in ElmFormat mode.
-    fn write_if_else_tail(&mut self, else_branch: &Expr) {
+    fn write_if_else_tail(&mut self, else_branch: &Spanned<Expr>) {
         if let Expr::IfElse {
             branches: nested_branches,
             else_branch: nested_else,
-        } = else_branch
+        } = &else_branch.value
         {
             for (cond, body) in nested_branches {
                 self.write("else if ");
@@ -2342,17 +2353,19 @@ impl Printer {
                 self.write(" then");
                 self.indent();
                 self.newline_indent();
+                self.write_leading_comments(&body.comments);
                 self.write_expr(&body.value);
                 self.dedent();
                 self.newline();
                 self.newline_indent();
             }
-            self.write_if_else_tail(&nested_else.value);
+            self.write_if_else_tail(nested_else);
         } else {
             self.write("else");
             self.indent();
             self.newline_indent();
-            self.write_expr(else_branch);
+            self.write_leading_comments(&else_branch.comments);
+            self.write_expr(&else_branch.value);
             self.dedent();
         }
     }

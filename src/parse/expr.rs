@@ -1,6 +1,7 @@
 use crate::expr::{
     CaseBranch, Expr, Function, FunctionImplementation, LetDeclaration, RecordSetter, Signature,
 };
+use crate::comment::Comment;
 use crate::node::Spanned;
 use crate::operator::InfixDirection;
 use crate::span::{Position, Span};
@@ -587,9 +588,13 @@ fn if_after_condition(
     condition: Spanned<Expr>,
 ) -> ParseResult<Step> {
     p.expect(&Token::Then)?;
-    // Need then-branch
+    // Snapshot before skipping whitespace so any comments consumed between
+    // `then` and the branch body ride along as leading comments on the
+    // then-branch expression.
+    let then_snapshot = p.pending_comments_snapshot();
+    p.skip_whitespace();
     Ok(Step::NeedExpr(Box::new(move |p, then_branch| {
-        if_after_then(p, start, chain, condition, then_branch)
+        if_after_then(p, start, chain, condition, then_branch, then_snapshot)
     })))
 }
 
@@ -598,14 +603,17 @@ fn if_after_then(
     start: Position,
     mut chain: Vec<IfBranch>,
     condition: Spanned<Expr>,
-    then_branch: Spanned<Expr>,
+    mut then_branch: Spanned<Expr>,
+    then_snapshot: usize,
 ) -> ParseResult<Step> {
+    attach_pre_body_comments(p, &mut then_branch, then_snapshot);
     chain.push(IfBranch {
         start,
         condition,
         then_branch,
     });
     p.expect(&Token::Else)?;
+    let else_snapshot = p.pending_comments_snapshot();
     p.skip_whitespace();
 
     if matches!(p.peek(), Token::If) {
@@ -618,8 +626,9 @@ fn if_after_then(
     } else {
         // Final else branch
         Ok(Step::NeedExpr(Box::new(move |p, else_branch| {
-            // Fold from right to left to build nested IfElse structure.
             let mut result = else_branch;
+            attach_pre_body_comments(p, &mut result, else_snapshot);
+            // Fold from right to left to build nested IfElse structure.
             for branch in chain.into_iter().rev() {
                 result = p.spanned_from(
                     branch.start,
@@ -631,6 +640,34 @@ fn if_after_then(
             }
             Ok(Step::Done(result))
         })))
+    }
+}
+
+/// Take comments collected since `snapshot` that appear before `body.span.start`
+/// and prepend them as leading comments on `body`. Comments after the body
+/// stay in the pending buffer for the next enclosing context to claim.
+fn attach_pre_body_comments(p: &mut Parser, body: &mut Spanned<Expr>, snapshot: usize) {
+    let body_start = body.span.start.offset;
+    let pending = p.take_pending_comments_since(snapshot);
+    if pending.is_empty() {
+        return;
+    }
+    let mut pre: Vec<Spanned<Comment>> = Vec::new();
+    let mut post: Vec<Spanned<Comment>> = Vec::new();
+    for c in pending {
+        if c.span.end.offset <= body_start {
+            pre.push(c);
+        } else {
+            post.push(c);
+        }
+    }
+    if !post.is_empty() {
+        p.restore_pending_comments(post);
+    }
+    if !pre.is_empty() {
+        let mut combined = pre;
+        combined.extend(std::mem::take(&mut body.comments));
+        body.comments = combined;
     }
 }
 

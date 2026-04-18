@@ -100,6 +100,13 @@ impl Parser {
         self.collected_comments.split_off(snapshot)
     }
 
+    /// Put comments back into the pending buffer so a later stage can claim
+    /// them. Callers use this to return comments that turned out not to
+    /// belong to the node they were attached to.
+    pub fn restore_pending_comments(&mut self, comments: Vec<Spanned<Comment>>) {
+        self.collected_comments.extend(comments);
+    }
+
     /// Returns true if currently inside parens/brackets/braces.
     /// When true, indentation-sensitive layout rules are suspended.
     pub fn in_paren_context(&self) -> bool {
