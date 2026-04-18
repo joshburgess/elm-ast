@@ -2291,6 +2291,16 @@ impl Printer {
     }
 
     fn write_app_arg_spanned(&mut self, spanned: &Spanned<Expr>) {
+        // Emit inline block comments (captured by the parser as leading
+        // comments on application args) before the arg itself. These are
+        // things like `f 0x30 {- 0 -} x`. Line/multi-line block comments
+        // aren't attached here so we only need to handle single-line blocks.
+        for c in &spanned.comments {
+            if let Comment::Block(_) = c.value {
+                self.write_comment(&c.value);
+                self.write_char(' ');
+            }
+        }
         self.expr_span_stack.push(spanned.span);
         self.write_app_arg(&spanned.value);
         self.expr_span_stack.pop();

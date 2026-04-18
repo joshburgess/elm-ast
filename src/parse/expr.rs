@@ -356,6 +356,7 @@ fn application_loop(
     ctx_col: Option<u32>,
 ) -> ParseResult<Step> {
     loop {
+        let pre_ws_snapshot = p.pending_comments_snapshot();
         p.skip_whitespace();
         // Whitespace must precede `-` for it to be treated as unary negation
         // consumed as an arg (`f -x`). Otherwise `n-1` is binary subtraction.
@@ -364,6 +365,26 @@ fn application_loop(
         let is_unary_neg_arg = has_ws_before_minus && is_unary_minus_arg(p);
         if !can_start_atomic_expr(p.peek()) && !is_unary_neg_arg {
             break;
+        }
+        // Take only INLINE BLOCK comments collected between the previous arg
+        // and this one (e.g. `f 0x30 {- 0 -} x`). Other comments remain in
+        // the pending buffer so module-level or enclosing-node collection
+        // sees them intact.
+        let mut inter_arg_comments: Vec<Spanned<Comment>> = Vec::new();
+        if let Some(prev) = args.last() {
+            let prev_end_line = prev.span.end.line;
+            let mut i = pre_ws_snapshot;
+            while i < p.collected_comments.len() {
+                let c = &p.collected_comments[i];
+                let is_inline_block = matches!(c.value, Comment::Block(_))
+                    && c.span.start.line == prev_end_line
+                    && c.span.end.line == prev_end_line;
+                if is_inline_block {
+                    inter_arg_comments.push(p.collected_comments.remove(i));
+                } else {
+                    i += 1;
+                }
+            }
         }
         let arg_col = p.current_column();
         let arg_line = p.current_pos().line;
@@ -398,8 +419,19 @@ fn application_loop(
             parse_atomic_expr_cps(p)?
         };
         match step {
-            Step::Done(arg) => args.push(arg),
+            Step::Done(mut arg) => {
+                if !inter_arg_comments.is_empty() {
+                    inter_arg_comments.extend(arg.comments);
+                    arg.comments = inter_arg_comments;
+                }
+                args.push(arg);
+            }
             Step::NeedExpr(cont) => {
+                // Put any inter-arg comments back so they can be claimed by
+                // the eventual inner node (or remain for later attachment).
+                if !inter_arg_comments.is_empty() {
+                    p.restore_pending_comments(inter_arg_comments);
+                }
                 return Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
                     let step = cont(p, sub_expr)?;
                     app_after_arg(p, step, start, first_line, args, ctx_col)
