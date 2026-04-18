@@ -1020,6 +1020,7 @@ fn parse_paren_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
             return Err(p.error("expected `)` after operator in prefix expression"));
         }
         Token::Minus => {
+            let minus_start = p.current_pos();
             p.advance();
             p.skip_whitespace();
             if matches!(p.peek(), Token::RightParen) {
@@ -1028,12 +1029,11 @@ fn parse_paren_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
                     p.spanned_from(start, Expr::PrefixOperator("-".into())),
                 ));
             }
-            // Negation inside parens: `(-expr)` or `(-expr, ...)`
-            return Ok(Step::NeedExpr(Box::new(move |p, operand| {
-                let neg = Expr::Negation(Box::new(operand));
-                let neg_spanned = p.spanned_from(start, neg);
-                paren_after_first(p, start, neg_spanned)
-            })));
+            // Negation inside parens binds to the application level only,
+            // so `(-2 * x)` parses as `BinOp(Negation(2), *, x)`, not
+            // `Negation(BinOp(2, *, x))`.
+            let app_step = parse_application_cps(p)?;
+            return paren_neg_after_app(p, start, minus_start, app_step);
         }
         _ => {}
     }
@@ -1042,6 +1042,40 @@ fn parse_paren_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
     Ok(Step::NeedExpr(Box::new(move |p, first| {
         paren_after_first(p, start, first)
     })))
+}
+
+fn paren_neg_after_app(
+    p: &mut Parser,
+    paren_start: Position,
+    minus_start: Position,
+    step: Step,
+) -> ParseResult<Step> {
+    match step {
+        Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
+            let step = cont(p, sub_expr)?;
+            paren_neg_after_app(p, paren_start, minus_start, step)
+        }))),
+        Step::Done(operand) => {
+            let neg_span = Span::new(minus_start, operand.span.end);
+            let neg_spanned = Spanned::new(neg_span, Expr::Negation(Box::new(operand)));
+            let bin_step = binary_loop(p, Vec::new(), neg_spanned)?;
+            paren_after_binary(p, paren_start, bin_step)
+        }
+    }
+}
+
+fn paren_after_binary(
+    p: &mut Parser,
+    paren_start: Position,
+    step: Step,
+) -> ParseResult<Step> {
+    match step {
+        Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
+            let step = cont(p, sub_expr)?;
+            paren_after_binary(p, paren_start, step)
+        }))),
+        Step::Done(first) => paren_after_first(p, paren_start, first),
+    }
 }
 
 fn paren_after_first(p: &mut Parser, start: Position, first: Spanned<Expr>) -> ParseResult<Step> {
