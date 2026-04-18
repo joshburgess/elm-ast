@@ -141,6 +141,29 @@ pub(super) fn normalize_doc_comment(text: &str) -> String {
     result
 }
 
+/// If the line at `start` (which must be the first non-space byte of a line)
+/// looks like a markdown horizontal rule — 3+ `*` characters optionally
+/// separated by whitespace — return the byte position of the end of the line
+/// (the `\n` or `len`). Otherwise return None.
+fn horizontal_rule_line_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut p = start;
+    let mut star_count = 0;
+    while p < bytes.len() && bytes[p] != b'\n' {
+        match bytes[p] {
+            b'*' => star_count += 1,
+            b' ' | b'\t' => {}
+            _ => return None,
+        }
+        p += 1;
+    }
+    if star_count >= 3 { Some(p) } else { None }
+}
+
+/// True if `result` ends with a blank line (i.e. `\n\n`) or is empty.
+fn ends_with_blank_line(result: &str) -> bool {
+    result.is_empty() || result.ends_with("\n\n")
+}
+
 /// Normalize emphasis markers in doc comment text: `*text*` → `_text_`.
 /// Also escapes lone `*` as `\*` (matching elm-format's Cheapskate round-trip).
 /// Does NOT convert `**bold**`. Does NOT modify `*` inside code spans or
@@ -216,7 +239,35 @@ pub(super) fn normalize_emphasis(text: &str) -> String {
             // renderer emits these as `- `. A leading `*` followed by a
             // space at the start of line content is a bullet, not
             // emphasis. Only apply outside of indented code blocks.
+            //
+            // Exception: a line consisting entirely of 3+ `*` characters
+            // optionally separated by whitespace (e.g. `* * *`, `***`) is a
+            // markdown horizontal rule, which Cheapskate renders as `---`
+            // surrounded by blank lines.
             if !in_indented_code_block && ch == b'*' && i + 1 < len && bytes[i + 1] == b' ' {
+                if let Some(line_end) = horizontal_rule_line_end(bytes, i) {
+                    // Ensure a blank line precedes `---`. If the preceding
+                    // output doesn't already end with `\n\n`, inject one.
+                    if !ends_with_blank_line(&result) {
+                        result.push('\n');
+                    }
+                    result.push_str("---");
+                    // Ensure a blank line follows `---`. If the next source
+                    // line isn't blank, inject one extra newline on top of the
+                    // source `\n` that the main loop will emit.
+                    let mut after = line_end;
+                    if after < len && bytes[after] == b'\n' {
+                        after += 1;
+                    }
+                    let next_blank = after >= len || bytes[after] == b'\n';
+                    if !next_blank {
+                        result.push('\n');
+                    }
+                    i = line_end;
+                    prev_line_blank = true;
+                    current_line_has_content = false;
+                    continue;
+                }
                 result.push('-');
                 i += 1;
                 continue;
