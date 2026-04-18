@@ -34,7 +34,8 @@ use crate::comment::Comment;
 use crate::declaration::{CustomType, Declaration, InfixDef, TypeAlias, ValueConstructor};
 use crate::exposing::{ExposedItem, Exposing};
 use crate::expr::{
-    CaseBranch, Expr, Function, FunctionImplementation, LetDeclaration, RecordSetter, Signature,
+    CaseBranch, Expr, Function, FunctionImplementation, IfBranch, LetDeclaration, RecordSetter,
+    Signature,
 };
 use crate::file::ElmModule;
 use crate::import::Import;
@@ -183,9 +184,9 @@ impl Printer {
                 }
                 // In Compact mode, single-line when simple.
                 if branches.len() == 1 {
-                    let (c, b) = &branches[0];
-                    if !self.is_multiline(&c.value)
-                        && !self.is_multiline(&b.value)
+                    let branch = &branches[0];
+                    if !self.is_multiline(&branch.condition.value)
+                        && !self.is_multiline(&branch.then_branch.value)
                         && !self.is_multiline(&else_branch.value)
                     {
                         return false;
@@ -2840,28 +2841,26 @@ impl Printer {
         }
     }
 
-    fn write_if_expr(
-        &mut self,
-        branches: &[(Spanned<Expr>, Spanned<Expr>)],
-        else_branch: &Spanned<Expr>,
-    ) {
+    fn write_if_expr(&mut self, branches: &[IfBranch], else_branch: &Spanned<Expr>) {
         // Single-line when all branches are simple non-block expressions.
         // elm-format always uses multiline, so skip single-line in pretty mode.
         let all_simple = !self.is_pretty()
             && branches.len() == 1
-            && branches
-                .iter()
-                .all(|(c, b)| !self.is_multiline(&c.value) && !self.is_multiline(&b.value))
+            && branches.iter().all(|b| {
+                !self.is_multiline(&b.condition.value) && !self.is_multiline(&b.then_branch.value)
+            })
             && !self.is_multiline(&else_branch.value)
-            && branches.iter().all(|(_, b)| b.comments.is_empty())
+            && branches.iter().all(|b| {
+                b.then_branch.comments.is_empty() && b.trailing_comments.is_empty()
+            })
             && else_branch.comments.is_empty();
 
         if all_simple {
-            let (cond, body) = &branches[0];
+            let branch = &branches[0];
             self.write("if ");
-            self.write_spanned_expr(&cond);
+            self.write_spanned_expr(&branch.condition);
             self.write(" then ");
-            self.write_spanned_expr(&body);
+            self.write_spanned_expr(&branch.then_branch);
             self.write(" else ");
             self.write_spanned_expr(&else_branch);
         } else if self.is_pretty() {
@@ -2877,13 +2876,17 @@ impl Printer {
             self.indent = if_col / w;
             self.indent_extra = (if_col % w) as u32;
 
-            for (i, (cond, body)) in branches.iter().enumerate() {
+            for (i, branch) in branches.iter().enumerate() {
                 let keyword = if i == 0 { "if" } else { "else if" };
-                self.write_if_condition(keyword, cond);
+                self.write_if_condition(keyword, &branch.condition);
                 self.indent();
                 self.newline_indent();
-                self.write_leading_comments(&body.comments);
-                self.write_spanned_expr(&body);
+                self.write_leading_comments(&branch.then_branch.comments);
+                self.write_spanned_expr(&branch.then_branch);
+                for c in &branch.trailing_comments {
+                    self.newline_indent();
+                    self.write_comment(&c.value);
+                }
                 self.dedent();
                 self.newline();
                 self.newline_indent();
@@ -2894,12 +2897,16 @@ impl Printer {
                 else_branch: nested_else,
             } = &else_branch.value
             {
-                for (cond, body) in nested_branches {
-                    self.write_if_condition("else if", cond);
+                for branch in nested_branches {
+                    self.write_if_condition("else if", &branch.condition);
                     self.indent();
                     self.newline_indent();
-                    self.write_leading_comments(&body.comments);
-                    self.write_spanned_expr(&body);
+                    self.write_leading_comments(&branch.then_branch.comments);
+                    self.write_spanned_expr(&branch.then_branch);
+                    for c in &branch.trailing_comments {
+                        self.newline_indent();
+                        self.write_comment(&c.value);
+                    }
                     self.dedent();
                     self.newline();
                     self.newline_indent();
@@ -2919,18 +2926,22 @@ impl Printer {
             self.indent_extra = saved_extra;
             self.indent_extra_stack = saved_stack;
         } else {
-            for (i, (cond, body)) in branches.iter().enumerate() {
+            for (i, branch) in branches.iter().enumerate() {
                 if i == 0 {
                     self.write("if ");
                 } else {
                     self.write("else if ");
                 }
-                self.write_spanned_expr(&cond);
+                self.write_spanned_expr(&branch.condition);
                 self.write(" then");
                 self.indent();
                 self.newline_indent();
-                self.write_leading_comments(&body.comments);
-                self.write_spanned_expr(&body);
+                self.write_leading_comments(&branch.then_branch.comments);
+                self.write_spanned_expr(&branch.then_branch);
+                for c in &branch.trailing_comments {
+                    self.newline_indent();
+                    self.write_comment(&c.value);
+                }
                 self.dedent();
                 self.newline();
                 self.newline_indent();
@@ -2951,14 +2962,18 @@ impl Printer {
             else_branch: nested_else,
         } = &else_branch.value
         {
-            for (cond, body) in nested_branches {
+            for branch in nested_branches {
                 self.write("else if ");
-                self.write_spanned_expr(&cond);
+                self.write_spanned_expr(&branch.condition);
                 self.write(" then");
                 self.indent();
                 self.newline_indent();
-                self.write_leading_comments(&body.comments);
-                self.write_spanned_expr(&body);
+                self.write_leading_comments(&branch.then_branch.comments);
+                self.write_spanned_expr(&branch.then_branch);
+                for c in &branch.trailing_comments {
+                    self.newline_indent();
+                    self.write_comment(&c.value);
+                }
                 self.dedent();
                 self.newline();
                 self.newline_indent();

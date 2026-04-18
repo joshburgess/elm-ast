@@ -393,8 +393,9 @@ fn expr_eq(a: &Expr, b: &Expr) -> bool {
             },
         ) => {
             ba.len() == bb.len()
-                && ba.iter().zip(bb.iter()).all(|((ca, ta), (cb, tb))| {
-                    expr_eq(&ca.value, &cb.value) && expr_eq(&ta.value, &tb.value)
+                && ba.iter().zip(bb.iter()).all(|(a, b)| {
+                    expr_eq(&a.condition.value, &b.condition.value)
+                        && expr_eq(&a.then_branch.value, &b.then_branch.value)
                 })
                 && expr_eq(&ea.value, &eb.value)
         }

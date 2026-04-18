@@ -1,5 +1,6 @@
 use crate::expr::{
-    CaseBranch, Expr, Function, FunctionImplementation, LetDeclaration, RecordSetter, Signature,
+    CaseBranch, Expr, Function, FunctionImplementation, IfBranch, LetDeclaration, RecordSetter,
+    Signature,
 };
 use crate::comment::Comment;
 use crate::node::Spanned;
@@ -33,10 +34,11 @@ struct PendingOp {
     right_bp: u8,
 }
 
-struct IfBranch {
+struct IfChainEntry {
     start: Position,
     condition: Spanned<Expr>,
     then_branch: Spanned<Expr>,
+    trailing_comments: Vec<Spanned<Comment>>,
 }
 
 enum RecordContext {
@@ -696,7 +698,7 @@ fn parse_if_expr_cps(p: &mut Parser) -> ParseResult<Step> {
 fn if_after_condition(
     p: &mut Parser,
     start: Position,
-    chain: Vec<IfBranch>,
+    chain: Vec<IfChainEntry>,
     condition: Spanned<Expr>,
 ) -> ParseResult<Step> {
     p.expect(&Token::Then)?;
@@ -713,18 +715,24 @@ fn if_after_condition(
 fn if_after_then(
     p: &mut Parser,
     start: Position,
-    mut chain: Vec<IfBranch>,
+    mut chain: Vec<IfChainEntry>,
     condition: Spanned<Expr>,
     mut then_branch: Spanned<Expr>,
     then_snapshot: usize,
 ) -> ParseResult<Step> {
     attach_pre_body_comments(p, &mut then_branch, then_snapshot);
-    chain.push(IfBranch {
+    // Pending comments left by attach_pre_body_comments are post-body (i.e.
+    // between `then_branch` end and the upcoming `else` keyword). Calling
+    // `expect(Else)` below also skips whitespace which may collect a few
+    // more. Snapshot now captures the post-body set as trailing_comments.
+    p.expect(&Token::Else)?;
+    let trailing_comments = p.take_pending_comments_since(then_snapshot);
+    chain.push(IfChainEntry {
         start,
         condition,
         then_branch,
+        trailing_comments,
     });
-    p.expect(&Token::Else)?;
     let else_snapshot = p.pending_comments_snapshot();
     p.skip_whitespace();
 
@@ -741,11 +749,15 @@ fn if_after_then(
             let mut result = else_branch;
             attach_pre_body_comments(p, &mut result, else_snapshot);
             // Fold from right to left to build nested IfElse structure.
-            for branch in chain.into_iter().rev() {
+            for entry in chain.into_iter().rev() {
                 result = p.spanned_from(
-                    branch.start,
+                    entry.start,
                     Expr::IfElse {
-                        branches: vec![(branch.condition, branch.then_branch)],
+                        branches: vec![IfBranch {
+                            condition: entry.condition,
+                            then_branch: entry.then_branch,
+                            trailing_comments: entry.trailing_comments,
+                        }],
                         else_branch: Box::new(result),
                     },
                 );

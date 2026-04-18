@@ -298,7 +298,11 @@ pub fn fold_expr<F: Fold + ?Sized>(f: &mut F, expr: Spanned<Expr>) -> Spanned<Ex
         } => Expr::IfElse {
             branches: branches
                 .into_iter()
-                .map(|(c, b)| (f.fold_expr(c), f.fold_expr(b)))
+                .map(|b| crate::expr::IfBranch {
+                    condition: f.fold_expr(b.condition),
+                    then_branch: f.fold_expr(b.then_branch),
+                    trailing_comments: b.trailing_comments,
+                })
                 .collect(),
             else_branch: Box::new(f.fold_expr(*else_branch)),
         },

@@ -256,9 +256,9 @@ pub fn walk_expr<V: Visit + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
             branches,
             else_branch,
         } => {
-            for (cond, body) in branches {
-                v.visit_expr(cond);
-                v.visit_expr(body);
+            for branch in branches {
+                v.visit_expr(&branch.condition);
+                v.visit_expr(&branch.then_branch);
             }
             v.visit_expr(else_branch);
         }

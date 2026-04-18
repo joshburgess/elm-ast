@@ -241,9 +241,9 @@ pub fn walk_expr_mut<V: VisitMut + ?Sized>(v: &mut V, expr: &mut Spanned<Expr>) 
             branches,
             else_branch,
         } => {
-            for (cond, body) in branches {
-                v.visit_expr_mut(cond);
-                v.visit_expr_mut(body);
+            for branch in branches {
+                v.visit_expr_mut(&mut branch.condition);
+                v.visit_expr_mut(&mut branch.then_branch);
             }
             v.visit_expr_mut(else_branch);
         }

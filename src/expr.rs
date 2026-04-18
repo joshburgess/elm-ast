@@ -62,9 +62,9 @@ pub enum Expr {
     /// If-then-else expression: `if a then b else c`
     ///
     /// Chained if-else: `if a then b else if c then d else e`
-    /// is represented as `IfElse { branches: [(a, b), (c, d)], else_branch: e }`
+    /// is represented as `IfElse { branches: [IfBranch(a, b), IfBranch(c, d)], else_branch: e }`
     IfElse {
-        branches: Vec<(Spanned<Expr>, Spanned<Expr>)>,
+        branches: Vec<IfBranch>,
         else_branch: Box<Spanned<Expr>>,
     },
 
@@ -143,6 +143,23 @@ pub enum Expr {
 
 // Manual Eq impl because Expr contains Literal which contains f64.
 impl Eq for Expr {}
+
+/// A single branch of an if-else chain: `if <condition> then <then_branch>`.
+///
+/// `trailing_comments` captures any comments that appear after `then_branch`
+/// and before the following `else` keyword. elm-format emits them as
+/// trailing comments on the branch body.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IfBranch {
+    pub condition: Spanned<Expr>,
+    pub then_branch: Spanned<Expr>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub trailing_comments: Vec<Spanned<Comment>>,
+}
 
 /// A field setter in a record expression or record update.
 ///

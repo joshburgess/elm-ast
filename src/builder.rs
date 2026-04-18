@@ -5,7 +5,7 @@
 
 use crate::declaration::{CustomType, Declaration, TypeAlias, ValueConstructor};
 use crate::exposing::Exposing;
-use crate::expr::{Expr, Function, FunctionImplementation, RecordSetter, Signature};
+use crate::expr::{Expr, Function, FunctionImplementation, IfBranch, RecordSetter, Signature};
 use crate::file::ElmModule;
 use crate::import::Import;
 use crate::literal::Literal;
@@ -108,7 +108,11 @@ pub fn if_else(
     else_branch: Spanned<Expr>,
 ) -> Spanned<Expr> {
     spanned(Expr::IfElse {
-        branches: vec![(condition, then_branch)],
+        branches: vec![IfBranch {
+            condition,
+            then_branch,
+            trailing_comments: Vec::new(),
+        }],
         else_branch: Box::new(else_branch),
     })
 }
