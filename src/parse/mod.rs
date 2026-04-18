@@ -138,6 +138,17 @@ impl Parser {
         matches!(self.peek(), Token::Eof)
     }
 
+    /// Peek at the raw token immediately after the current position,
+    /// without skipping whitespace. Returns `Token::Eof` if past the end.
+    pub fn peek_raw_next(&self) -> &Spanned<Token> {
+        let i = self.pos + 1;
+        if i < self.tokens.len() {
+            &self.tokens[i]
+        } else {
+            &self.tokens[self.tokens.len() - 1]
+        }
+    }
+
     // ── Advancing ────────────────────────────────────────────────────
 
     /// Advance past the current token and return it.

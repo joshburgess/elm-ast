@@ -1699,8 +1699,10 @@ impl Printer {
                     for (i, arg) in args.iter().enumerate() {
                         if i > 0 {
                             self.write_char(' ');
+                            self.write_app_arg(&arg.value);
+                        } else {
+                            self.write_expr_atomic(&arg.value);
                         }
-                        self.write_expr_atomic(&arg.value);
                     }
                 }
             }
@@ -1709,6 +1711,18 @@ impl Printer {
                 self.write_expr_atomic(&inner.value);
             }
             _ => self.write_expr_atomic(expr),
+        }
+    }
+
+    /// Write an application argument in non-first position. Negation is
+    /// emitted as `-inner` (no parens) to match elm-format's `f -x` style,
+    /// which relies on the space-before / no-space-after rule to parse as
+    /// unary negation rather than binary subtraction.
+    fn write_app_arg(&mut self, expr: &Expr) {
+        if matches!(expr, Expr::Negation(_)) {
+            self.write_expr_app(expr);
+        } else {
+            self.write_expr_atomic(expr);
         }
     }
 
@@ -1753,10 +1767,10 @@ impl Printer {
             } else {
                 self.newline_indent();
             }
-            self.write_expr_atomic(&first.value);
+            self.write_app_arg(&first.value);
             for arg in &args[2..] {
                 self.newline_indent();
-                self.write_expr_atomic(&arg.value);
+                self.write_app_arg(&arg.value);
             }
         }
         self.dedent();

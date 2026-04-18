@@ -356,7 +356,8 @@ fn application_loop(
 ) -> ParseResult<Step> {
     loop {
         p.skip_whitespace();
-        if !can_start_atomic_expr(p.peek()) {
+        let is_unary_neg_arg = is_unary_minus_arg(p);
+        if !can_start_atomic_expr(p.peek()) && !is_unary_neg_arg {
             break;
         }
         let arg_col = p.current_column();
@@ -369,7 +370,28 @@ fn application_loop(
         if arg_line != first_line && arg_col <= ref_col {
             break;
         }
-        let step = parse_atomic_expr_cps(p)?;
+        let step = if is_unary_neg_arg {
+            // Consume `-`, then parse atomic arg, wrap in Negation.
+            let minus_start = p.current_pos();
+            let minus_span = p.peek_span();
+            p.advance();
+            let inner_step = parse_atomic_expr_cps(p)?;
+            match inner_step {
+                Step::Done(operand) => {
+                    let expr = Expr::Negation(Box::new(operand));
+                    Step::Done(Spanned::new(
+                        minus_span.merge(p.span_from(minus_start)),
+                        expr,
+                    ))
+                }
+                Step::NeedExpr(cont) => Step::NeedExpr(Box::new(move |p, sub_expr| {
+                    let inner = cont(p, sub_expr)?;
+                    unary_wrap_negation(p, inner, minus_start, minus_span)
+                })),
+            }
+        } else {
+            parse_atomic_expr_cps(p)?
+        };
         match step {
             Step::Done(arg) => args.push(arg),
             Step::NeedExpr(cont) => {
@@ -1203,4 +1225,19 @@ fn can_start_atomic_expr(tok: &Token) -> bool {
             | Token::Let
             | Token::Backslash
     )
+}
+
+/// In application argument position, a `-` with no whitespace between it
+/// and the following atomic token is unary negation consumed as an argument:
+/// `f -x` parses as `f (-x)`, while `f - x` remains binary subtraction.
+fn is_unary_minus_arg(p: &Parser) -> bool {
+    if !matches!(p.peek(), Token::Minus) {
+        return false;
+    }
+    let minus = p.current();
+    let next = p.peek_raw_next();
+    if !can_start_atomic_expr(&next.value) {
+        return false;
+    }
+    minus.span.end.offset == next.span.start.offset
 }
