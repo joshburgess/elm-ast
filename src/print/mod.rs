@@ -1143,9 +1143,11 @@ impl Printer {
         self.write("}");
     }
 
-    /// Write ` : <type>` for a record field's type annotation. If the value
-    /// is a record type whose source spans multiple lines, break it onto its
-    /// own indented line: ` :\n    { ... }`.
+    /// Write ` : <type>` for a record field's type annotation. When the
+    /// source spans multiple lines — either because the value itself is a
+    /// multi-line record, or simply because the source put the value on a
+    /// new line after `:` — break the value onto its own indented line:
+    /// ` :\n    <type>`.
     fn write_field_type_with_possible_break(&mut self, ta: &Spanned<TypeAnnotation>) {
         if self.is_pretty() && Self::type_ann_spans_multi_lines(ta) {
             match &ta.value {
@@ -1165,7 +1167,14 @@ impl Printer {
                     self.dedent();
                     return;
                 }
-                _ => {}
+                _ => {
+                    self.write(" :");
+                    self.indent();
+                    self.newline_indent();
+                    self.write_type(&ta.value);
+                    self.dedent();
+                    return;
+                }
             }
         }
         self.write(" : ");
