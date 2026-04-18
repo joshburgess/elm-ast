@@ -741,8 +741,14 @@ fn case_next_branch(
     // normal column checking (prevents over-consuming the next branch pattern).
     p.app_context_col = None;
 
+    // Snapshot so comments consumed between `->` and the branch body ride
+    // along as leading comments on the branch body expression rather than
+    // leaking to the next branch's pattern.
+    let body_snapshot = p.pending_comments_snapshot();
+
     // Need branch body
-    Ok(Step::NeedExpr(Box::new(move |p, body| {
+    Ok(Step::NeedExpr(Box::new(move |p, mut body| {
+        attach_pre_body_comments(p, &mut body, body_snapshot);
         let mut branches = branches;
         branches.push(CaseBranch { pattern: pat, body });
         case_next_branch(p, start, subject, branches, branch_col, comments_snapshot)
