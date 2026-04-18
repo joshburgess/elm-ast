@@ -833,10 +833,30 @@ pub(super) fn collapse_prose_internal_spaces(text: &str) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut result = String::with_capacity(text.len());
     let mut in_code_block = false;
+    let mut in_fenced_block = false;
 
     for (i, &line) in lines.iter().enumerate() {
         if i > 0 {
             result.push('\n');
+        }
+
+        // Track fenced code block state (```-delimited). Inside a preserved
+        // fence (e.g. ```ascii), contents must keep original spacing.
+        let trimmed_all = line.trim();
+        if trimmed_all.starts_with("```") {
+            if in_fenced_block {
+                in_fenced_block = false;
+                result.push_str(line);
+                continue;
+            } else {
+                in_fenced_block = true;
+                result.push_str(line);
+                continue;
+            }
+        }
+        if in_fenced_block {
+            result.push_str(line);
+            continue;
         }
 
         // Track code block state (4+ space indent after blank line).
