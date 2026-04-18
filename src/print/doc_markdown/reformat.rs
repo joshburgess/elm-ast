@@ -133,6 +133,7 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
         let first_indent = block_lines[run_start].len() - block_lines[run_start].trim_start().len();
         let mut all_valid = true;
         let mut assertion_count = 0usize;
+        let mut has_eq_or_comment_shape = false;
         #[allow(clippy::needless_range_loop)]
         for k in run_start..=run_end {
             let l = block_lines[k];
@@ -149,6 +150,9 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
                 // comment line — ok in between assertions
             } else if looks_like_assertion(trimmed) {
                 assertion_count += 1;
+                if trimmed.contains(" == ") || trimmed.contains(" -- ") {
+                    has_eq_or_comment_shape = true;
+                }
             } else {
                 all_valid = false;
                 break;
@@ -158,7 +162,11 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
             let trimmed = block_lines[run_end].trim();
             !trimmed.starts_with("--") && looks_like_assertion(trimmed)
         };
-        let is_assertion_run = all_valid && assertion_count >= 1 && last_is_assertion;
+        // elm-format only splits runs that contain at least one `==` or
+        // `-- comment` shaped assertion. Runs of pure standalone
+        // expressions are preserved verbatim.
+        let is_assertion_run =
+            all_valid && assertion_count >= 1 && last_is_assertion && has_eq_or_comment_shape;
 
         // If the run's last non-blank line ends with ` ...`, the chain would
         // be incomplete. elm-format preserves such blocks without chain
