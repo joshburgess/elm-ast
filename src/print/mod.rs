@@ -95,6 +95,13 @@ pub struct Printer {
     indent_extra: u32,
     /// Stack of saved indent_extra values, pushed by indent(), popped by dedent().
     indent_extra_stack: Vec<u32>,
+    /// When true, the enclosing vertical operator chain has already bumped
+    /// indent for its operators. Nested binop layouts should align at this
+    /// same column rather than bumping another level, matching elm-format's
+    /// rule that every operator in a multi-line chain sits at one column
+    /// regardless of precedence or parse-tree grouping. Cleared whenever an
+    /// operand crosses a paren, application, or block boundary.
+    in_vertical_chain: bool,
     /// Groups of exposed names parsed from `@docs` directives in the module doc.
     /// Each inner Vec is one `@docs` line. Used by `write_exposing_pretty` to
     /// match elm-format's grouping of exposing items.
@@ -109,6 +116,7 @@ impl Printer {
             indent: 0,
             indent_extra: 0,
             indent_extra_stack: Vec::new(),
+            in_vertical_chain: false,
             doc_groups: Vec::new(),
         }
     }
@@ -1351,16 +1359,22 @@ impl Printer {
                         || rest.iter().any(|(_, op)| self.is_multiline(op))
                         || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
-                        // Break ALL operators to vertical.
+                        let outer_chain = self.in_vertical_chain;
                         self.write_expr_operand(head, operator, true);
-                        self.indent();
+                        if !outer_chain {
+                            self.indent();
+                        }
+                        self.in_vertical_chain = true;
                         for (op, operand) in &rest {
                             self.newline_indent();
                             self.write(op);
                             self.write_char(' ');
                             self.write_expr_operand(operand, op, false);
                         }
-                        self.dedent();
+                        self.in_vertical_chain = outer_chain;
+                        if !outer_chain {
+                            self.dedent();
+                        }
                         return;
                     }
                     // All operands are single-line; fall through to
@@ -1384,15 +1398,22 @@ impl Printer {
                         || rest.iter().any(|(_, e)| self.is_multiline(e))
                         || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
+                        let outer_chain = self.in_vertical_chain;
                         self.write_expr_operand(head, operator, true);
-                        self.indent();
+                        if !outer_chain {
+                            self.indent();
+                        }
+                        self.in_vertical_chain = true;
                         for (op, operand) in &rest {
                             self.newline_indent();
                             self.write(op);
                             self.write_char(' ');
                             self.write_expr_operand(operand, op, false);
                         }
-                        self.dedent();
+                        self.in_vertical_chain = outer_chain;
+                        if !outer_chain {
+                            self.dedent();
+                        }
                         return;
                     }
                 }
@@ -1404,45 +1425,56 @@ impl Printer {
                     let any_ml = chain.iter().any(|op| self.is_multiline(op))
                         || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
+                        let outer_chain = self.in_vertical_chain;
                         self.write_expr_operand(chain[0], operator, true);
-                        self.indent();
+                        if !outer_chain {
+                            self.indent();
+                        }
+                        self.in_vertical_chain = true;
                         for operand in &chain[1..] {
                             self.newline_indent();
                             self.write(operator);
                             self.write_char(' ');
                             self.write_expr_operand(operand, operator, false);
                         }
-                        self.dedent();
+                        self.in_vertical_chain = outer_chain;
+                        if !outer_chain {
+                            self.dedent();
+                        }
                         return;
                     }
                 }
 
-                // Same rule for left-associative arithmetic, logical, and
-                // comparison chains. elm-format: if any operand in the
-                // chain is multi-line, break at every operator and align
-                // all operators at the same column.
+                // Arithmetic operators `+` `-` `*` `/` `//` sit at two
+                // precedences (6 and 7). Mixed chains (`a - k * p`) parse
+                // with the higher-precedence op nested inside, but
+                // elm-format lays the whole thing out as a single vertical
+                // sequence with every operator at the same indent column.
                 if self.is_pretty()
                     && matches!(operator.as_str(), "+" | "-" | "*" | "/" | "//")
+                    && let Some((head, rest)) = flatten_mixed_arithmetic_chain(expr)
                 {
-                    let op_owned = operator.clone();
-                    if let Some((head, rest)) =
-                        flatten_left_assoc_pred(expr, &|o: &str| o == op_owned)
-                    {
-                        let any_ml = self.is_multiline(head)
-                            || rest.iter().any(|(_, op)| self.is_multiline(op))
-                            || Self::spans_cross_lines(left.span, right.span);
-                        if any_ml {
-                            self.write_expr_operand(head, operator, true);
+                    let any_ml = self.is_multiline(head)
+                        || rest.iter().any(|(_, op)| self.is_multiline(op))
+                        || Self::spans_cross_lines(left.span, right.span);
+                    if any_ml {
+                        let outer_chain = self.in_vertical_chain;
+                        self.write_expr_operand(head, operator, true);
+                        if !outer_chain {
                             self.indent();
-                            for (op, operand) in &rest {
-                                self.newline_indent();
-                                self.write(op);
-                                self.write_char(' ');
-                                self.write_expr_operand(operand, op, false);
-                            }
-                            self.dedent();
-                            return;
                         }
+                        self.in_vertical_chain = true;
+                        for (op, operand) in &rest {
+                            self.newline_indent();
+                            self.write(op);
+                            self.write_char(' ');
+                            self.write_expr_operand(operand, op, false);
+                        }
+                        self.in_vertical_chain = outer_chain;
+                        if !outer_chain {
+                            self.dedent();
+                        }
+                        return;
                     }
                 }
 
@@ -1458,15 +1490,22 @@ impl Printer {
                         || rest.iter().any(|(_, e)| self.is_multiline(e))
                         || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
+                        let outer_chain = self.in_vertical_chain;
                         self.write_expr_operand(head, operator, true);
-                        self.indent();
+                        if !outer_chain {
+                            self.indent();
+                        }
+                        self.in_vertical_chain = true;
                         for (op, operand) in &rest {
                             self.newline_indent();
                             self.write(op);
                             self.write_char(' ');
                             self.write_expr_operand(operand, op, false);
                         }
-                        self.dedent();
+                        self.in_vertical_chain = outer_chain;
+                        if !outer_chain {
+                            self.dedent();
+                        }
                         return;
                     }
                 }
@@ -1483,27 +1522,34 @@ impl Printer {
                 self.write_expr_operand(&left.value, operator, true);
                 if use_vertical && operator == "<|" {
                     // Left-pipe: operator stays on same line as left operand,
-                    // right operand goes on a new indented line.
-                    // This matches elm-format's behavior for `<|`.
+                    // right operand goes on a new indented line. `<|` does
+                    // NOT flatten into an outer chain's indent column;
+                    // cascading `<|` always adds one indent per level.
                     self.write(" <|");
+                    let saved_chain =
+                        std::mem::replace(&mut self.in_vertical_chain, false);
                     self.indent();
                     self.newline_indent();
                     self.write_leading_comments(&right.comments);
-                    // Use write_expr_inner so block expressions (Lambda,
-                    // IfElse, etc.) aren't re-wrapped in parens.
                     self.write_expr_inner(right_expr);
                     self.dedent();
+                    self.in_vertical_chain = saved_chain;
                 } else if use_vertical {
-                    // Vertical layout: operator and right operand on a new
-                    // indented line so that the right side starts at a
-                    // predictable column (satisfying the parser's indent rules).
-                    self.indent();
+                    // Non-chain vertical binop (`==`, `<`, etc.). If the
+                    // enclosing chain already bumped indent, align at that
+                    // same column; otherwise bump one level.
+                    let outer_chain = self.in_vertical_chain;
+                    if !outer_chain {
+                        self.indent();
+                    }
                     self.newline_indent();
                     self.write(operator);
                     self.write_char(' ');
                     self.write_leading_comments(&right.comments);
                     self.write_expr_operand(right_expr, operator, false);
-                    self.dedent();
+                    if !outer_chain {
+                        self.dedent();
+                    }
                 } else {
                     self.write_char(' ');
                     self.write(operator);
@@ -1600,9 +1646,11 @@ impl Printer {
                         && ((is_left && is_right_assoc(parent_op))
                             || (!is_left && !is_right_assoc(parent_op))));
                 if needs_parens {
+                    let saved = std::mem::replace(&mut self.in_vertical_chain, false);
                     self.write_char('(');
                     self.write_expr_inner(expr);
                     self.write_char(')');
+                    self.in_vertical_chain = saved;
                 } else {
                     self.write_expr_inner(expr);
                 }
@@ -1613,6 +1661,16 @@ impl Printer {
 
     /// Write a function application or negation.
     fn write_expr_app(&mut self, expr: &Expr) {
+        // Crossing into an application/negation/atomic body means we're no
+        // longer a direct operand of the outer chain. Reset the flag so
+        // nested binop chains inside args establish their own indent.
+        let saved = std::mem::replace(&mut self.in_vertical_chain, false);
+        let result = self.write_expr_app_inner(expr);
+        self.in_vertical_chain = saved;
+        result
+    }
+
+    fn write_expr_app_inner(&mut self, expr: &Expr) {
         match expr {
             Expr::Application(args) => {
                 // Two reasons to go vertical: (1) any individual argument is
@@ -1703,6 +1761,15 @@ impl Printer {
     /// Write an expression in atomic (highest-precedence) position.
     /// Complex and block expressions get parenthesized.
     fn write_expr_atomic(&mut self, expr: &Expr) {
+        // Atomic position is always a boundary: we are either a naturally
+        // atomic value or about to introduce our own parens/block indent,
+        // so any outer chain's indent inheritance stops here.
+        let saved = std::mem::replace(&mut self.in_vertical_chain, false);
+        self.write_expr_atomic_inner(expr);
+        self.in_vertical_chain = saved;
+    }
+
+    fn write_expr_atomic_inner(&mut self, expr: &Expr) {
         match expr {
             Expr::Unit => self.write("()"),
             Expr::Literal(lit) => self.write_literal(lit),

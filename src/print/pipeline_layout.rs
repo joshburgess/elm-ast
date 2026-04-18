@@ -115,28 +115,26 @@ pub(super) fn flatten_mixed_cons_append_chain<'a>(
     }
 }
 
-/// Flatten a chain of mixed `&&` / `||` operators, descending through both
-/// sides because their different precedences mean grouping can favor either
-/// direction. elm-format lays out such mixed chains as a single vertical
-/// sequence with each operator aligned at the same indent column.
-pub(super) fn flatten_mixed_logical_chain<'a>(
+/// Flatten a chain where operators from a given set may mix at different
+/// precedences, descending through both sides. elm-format lays out such
+/// mixed chains as a single vertical sequence with each operator aligned at
+/// the same indent column, regardless of the parse-tree grouping.
+fn flatten_mixed_bidir_chain<'a>(
     expr: &'a Expr,
+    pred: &impl Fn(&str) -> bool,
 ) -> Option<(&'a Expr, Vec<(&'a str, &'a Expr)>)> {
-    fn is_and_or(op: &str) -> bool {
-        matches!(op, "&&" | "||")
-    }
     match expr {
         Expr::OperatorApplication {
             operator,
             left,
             right,
             ..
-        } if is_and_or(operator) => {
-            let (lhead, mut rest) = match flatten_mixed_logical_chain(&left.value) {
+        } if pred(operator) => {
+            let (lhead, mut rest) = match flatten_mixed_bidir_chain(&left.value, pred) {
                 Some((h, r)) => (h, r),
                 None => (&left.value, Vec::new()),
             };
-            match flatten_mixed_logical_chain(&right.value) {
+            match flatten_mixed_bidir_chain(&right.value, pred) {
                 Some((rhead, rrest)) => {
                     rest.push((operator.as_str(), rhead));
                     for (op, e) in rrest {
@@ -151,4 +149,24 @@ pub(super) fn flatten_mixed_logical_chain<'a>(
         }
         _ => None,
     }
+}
+
+/// Flatten a chain of mixed `&&` / `||` operators. `&&` and `||` sit at
+/// different precedences (3 and 2), so grouping can favor either direction,
+/// but elm-format visually aligns all logical operators at the same column.
+pub(super) fn flatten_mixed_logical_chain<'a>(
+    expr: &'a Expr,
+) -> Option<(&'a Expr, Vec<(&'a str, &'a Expr)>)> {
+    flatten_mixed_bidir_chain(expr, &|op| matches!(op, "&&" | "||"))
+}
+
+/// Flatten a chain of mixed arithmetic operators (`+`, `-`, `*`, `/`, `//`).
+/// These sit at precedences 6 and 7 and are left-associative, so grouping
+/// can nest either way depending on how the source was written. elm-format
+/// collapses all such mixed chains into a single vertical layout with every
+/// operator at the same indent column.
+pub(super) fn flatten_mixed_arithmetic_chain<'a>(
+    expr: &'a Expr,
+) -> Option<(&'a Expr, Vec<(&'a str, &'a Expr)>)> {
+    flatten_mixed_bidir_chain(expr, &|op| matches!(op, "+" | "-" | "*" | "/" | "//"))
 }
