@@ -11,19 +11,23 @@ fn main() {
             D::CustomTypeDeclaration(c) => c.documentation.as_ref().map(|s| s.value.clone()),
             _ => None,
         };
-        if let Some(t) = doc {
-            if t.contains("First, two things") {
-                println!("decl {}: doc contains it", i);
-                println!("--- full doc text (len={}) ---\n{}\n--- end ---", t.len(), t);
-            }
+        if let Some(t) = doc
+            && t.contains("First, two things")
+        {
+            println!("decl {}: doc contains it", i);
+            println!(
+                "--- full doc text (len={}) ---\n{}\n--- end ---",
+                t.len(),
+                t
+            );
         }
     }
     println!("---module-level comments: {}---", ast.comments.len());
     for c in &ast.comments {
-        if let Comment::Doc(t) = &c.value {
-            if t.contains("First, two things") {
-                println!("Top-level doc (!) with match, len={}", t.len());
-            }
+        if let Comment::Doc(t) = &c.value
+            && t.contains("First, two things")
+        {
+            println!("Top-level doc (!) with match, len={}", t.len());
         }
     }
 }

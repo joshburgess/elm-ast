@@ -500,16 +500,16 @@ pub(super) fn normalize_char_literals_in_code_line(line: &str) -> String {
                 }
                 if j < chars.len() && j + 1 < chars.len() && chars[j + 1] == '\'' {
                     let hex: String = chars[i + 4..j].iter().collect();
-                    if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                        if let Some(ch) = char::from_u32(code) {
-                            if !ch.is_control() && !should_unicode_escape(ch) {
-                                out.push('\'');
-                                out.push(ch);
-                                out.push('\'');
-                                i = j + 2;
-                                continue;
-                            }
-                        }
+                    if let Ok(code) = u32::from_str_radix(&hex, 16)
+                        && let Some(ch) = char::from_u32(code)
+                        && !ch.is_control()
+                        && !should_unicode_escape(ch)
+                    {
+                        out.push('\'');
+                        out.push(ch);
+                        out.push('\'');
+                        i = j + 2;
+                        continue;
                     }
                 }
             }
@@ -532,18 +532,16 @@ pub(super) fn normalize_char_literals_in_code_line(line: &str) -> String {
                         }
                         if k < chars.len() {
                             let hex: String = chars[j + 3..k].iter().collect();
-                            if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                                if let Some(ch) = char::from_u32(code) {
-                                    if !ch.is_control()
-                                        && !should_unicode_escape(ch)
-                                        && ch != '"'
-                                        && ch != '\\'
-                                    {
-                                        buf.push(ch);
-                                        j = k + 1;
-                                        continue;
-                                    }
-                                }
+                            if let Ok(code) = u32::from_str_radix(&hex, 16)
+                                && let Some(ch) = char::from_u32(code)
+                                && !ch.is_control()
+                                && !should_unicode_escape(ch)
+                                && ch != '"'
+                                && ch != '\\'
+                            {
+                                buf.push(ch);
+                                j = k + 1;
+                                continue;
                             }
                         }
                         // Fall through — keep as-is.
@@ -931,6 +929,7 @@ pub(super) fn ensure_blank_before_code_block_with_trailing_comment(text: &str) -
         let mut all_decls = true;
         let mut saw_any_decl = false;
         if ends_with_comment && !starts_with_import {
+            #[allow(clippy::needless_range_loop)]
             for idx in block_start..=last_non_blank {
                 let line = lines[idx];
                 if line.trim().is_empty() {

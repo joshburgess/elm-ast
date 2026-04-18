@@ -56,18 +56,13 @@ use crate::type_annotation::{RecordField, TypeAnnotation};
 ///   always vertical, records and lists with 2+ entries always multiline.
 ///   Designed for **code generation** where the AST is built from scratch and
 ///   readability matters more than exact round-tripping.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PrintStyle {
     /// Round-trip-safe minimal line breaking.
+    #[default]
     Compact,
     /// elm-format-style pretty printing.
     ElmFormat,
-}
-
-impl Default for PrintStyle {
-    fn default() -> Self {
-        Self::Compact
-    }
 }
 
 /// Configuration for the Elm printer.
@@ -236,10 +231,10 @@ impl Printer {
 
     pub fn write_module(&mut self, module: &ElmModule) {
         // Parse @docs groups from module documentation for exposing list layout.
-        if self.is_pretty() {
-            if let Some(doc) = &module.module_documentation {
-                self.doc_groups = parse_docs_groups(&doc.value);
-            }
+        if self.is_pretty()
+            && let Some(doc) = &module.module_documentation
+        {
+            self.doc_groups = parse_docs_groups(&doc.value);
         }
 
         // Assign comments to slots (one per anchor + one trailing) and hoist
@@ -444,6 +439,7 @@ impl Printer {
     /// to match elm-format's layout:
     /// - 1 `@docs` group → single-line (regardless of length)
     /// - 2+ `@docs` groups → multiline with one group per line
+    ///
     /// Without `@docs`, items are listed one per line when the list is long.
     fn write_exposing_pretty(&mut self, items: &[Spanned<ExposedItem>], is_module_header: bool) {
         let doc_groups = self.doc_groups.clone();
@@ -475,10 +471,10 @@ impl Printer {
                         // (e.g. </>, <?>, |=, |.) silently fail to match their
                         // @docs entry and end up as leftovers. Replicate that
                         // behavior so our output matches elm-format exactly.
-                        if let ExposedItem::Infix(op) = item {
-                            if op.len() >= 3 {
-                                return None;
-                            }
+                        if let ExposedItem::Infix(op) = item
+                            && op.len() >= 3
+                        {
+                            return None;
                         }
                         Some(item)
                     })
@@ -498,7 +494,7 @@ impl Printer {
                 .filter(|i| !emitted.contains(&exposed_item_name(&i.value)))
                 .map(|i| &i.value)
                 .collect();
-            leftovers.sort_by(|a, b| exposed_item_sort_key(a).cmp(&exposed_item_sort_key(b)));
+            leftovers.sort_by_key(|a| exposed_item_sort_key(a));
             if !leftovers.is_empty() {
                 resolved_groups.push(leftovers);
             }
@@ -557,7 +553,7 @@ impl Printer {
         } else {
             // Module header without @docs: elm-format sorts alphabetically.
             let mut sorted_items: Vec<&ExposedItem> = items.iter().map(|i| &i.value).collect();
-            sorted_items.sort_by(|a, b| exposed_item_sort_key(a).cmp(&exposed_item_sort_key(b)));
+            sorted_items.sort_by_key(|a| exposed_item_sort_key(a));
 
             let single_line: String = {
                 let parts: Vec<String> = sorted_items
@@ -671,17 +667,17 @@ impl Printer {
             // Collect all exposed items from all imports.
             let mut all_items: Vec<&ExposedItem> = Vec::new();
             for imp in imports {
-                if let Some(exposing) = &imp.exposing {
-                    if let Exposing::Explicit(items) = &exposing.value {
-                        for item in items {
-                            all_items.push(&item.value);
-                        }
+                if let Some(exposing) = &imp.exposing
+                    && let Exposing::Explicit(items) = &exposing.value
+                {
+                    for item in items {
+                        all_items.push(&item.value);
                     }
                 }
             }
             if !all_items.is_empty() {
                 // Deduplicate and sort.
-                all_items.sort_by(|a, b| exposed_item_sort_key(a).cmp(&exposed_item_sort_key(b)));
+                all_items.sort_by_key(|a| exposed_item_sort_key(a));
                 all_items.dedup_by(|a, b| exposed_item_sort_key(a) == exposed_item_sort_key(b));
                 self.write(" exposing (");
                 for (i, item) in all_items.iter().enumerate() {
@@ -704,7 +700,7 @@ impl Printer {
             Exposing::All(_) => self.write("(..)"),
             Exposing::Explicit(items) => {
                 let mut sorted: Vec<&ExposedItem> = items.iter().map(|i| &i.value).collect();
-                sorted.sort_by(|a, b| exposed_item_sort_key(a).cmp(&exposed_item_sort_key(b)));
+                sorted.sort_by_key(|a| exposed_item_sort_key(a));
                 self.write_char('(');
                 for (i, item) in sorted.iter().enumerate() {
                     if i > 0 {
@@ -1204,26 +1200,27 @@ impl Printer {
                 // operators break to vertical. (`>>` / `<<` are handled below
                 // via the right-associative path, since they right-associate
                 // in Elm.)
-                if self.is_pretty() && matches!(operator.as_str(), "|>" | "|." | "|=") {
-                    if let Some((head, rest)) = flatten_mixed_pipe_chain(expr) {
-                        let any_ml = self.is_multiline(head)
-                            || rest.iter().any(|(_, op)| self.is_multiline(op));
-                        if any_ml {
-                            // Break ALL operators to vertical.
-                            self.write_expr_operand(head, operator, true);
-                            self.indent();
-                            for (op, operand) in &rest {
-                                self.newline_indent();
-                                self.write(op);
-                                self.write_char(' ');
-                                self.write_expr_operand(operand, op, false);
-                            }
-                            self.dedent();
-                            return;
+                if self.is_pretty()
+                    && matches!(operator.as_str(), "|>" | "|." | "|=")
+                    && let Some((head, rest)) = flatten_mixed_pipe_chain(expr)
+                {
+                    let any_ml =
+                        self.is_multiline(head) || rest.iter().any(|(_, op)| self.is_multiline(op));
+                    if any_ml {
+                        // Break ALL operators to vertical.
+                        self.write_expr_operand(head, operator, true);
+                        self.indent();
+                        for (op, operand) in &rest {
+                            self.newline_indent();
+                            self.write(op);
+                            self.write_char(' ');
+                            self.write_expr_operand(operand, op, false);
                         }
-                        // All operands are single-line; fall through to
-                        // normal inline path (which handles recursion).
+                        self.dedent();
+                        return;
                     }
+                    // All operands are single-line; fall through to
+                    // normal inline path (which handles recursion).
                 }
 
                 // Same rule for right-associative ::, ++, >>, << chains.
@@ -1235,40 +1232,42 @@ impl Printer {
                 // `::` and `++` share precedence 5 right-assoc, and elm-format
                 // unifies mixed chains (e.g. `a :: b :: xs ++ ys`) into a single
                 // vertical layout. Use the mixed flattener for those operators.
-                if self.is_pretty() && matches!(operator.as_str(), "::" | "++") {
-                    if let Some((head, rest)) = flatten_mixed_cons_append_chain(expr) {
-                        let any_ml = self.is_multiline(head)
-                            || rest.iter().any(|(_, e)| self.is_multiline(e));
-                        if any_ml {
-                            self.write_expr_operand(head, operator, true);
-                            self.indent();
-                            for (op, operand) in &rest {
-                                self.newline_indent();
-                                self.write(op);
-                                self.write_char(' ');
-                                self.write_expr_operand(operand, op, false);
-                            }
-                            self.dedent();
-                            return;
+                if self.is_pretty()
+                    && matches!(operator.as_str(), "::" | "++")
+                    && let Some((head, rest)) = flatten_mixed_cons_append_chain(expr)
+                {
+                    let any_ml =
+                        self.is_multiline(head) || rest.iter().any(|(_, e)| self.is_multiline(e));
+                    if any_ml {
+                        self.write_expr_operand(head, operator, true);
+                        self.indent();
+                        for (op, operand) in &rest {
+                            self.newline_indent();
+                            self.write(op);
+                            self.write_char(' ');
+                            self.write_expr_operand(operand, op, false);
                         }
+                        self.dedent();
+                        return;
                     }
                 }
 
-                if self.is_pretty() && matches!(operator.as_str(), ">>" | "<<") {
-                    if let Some(chain) = flatten_right_assoc_chain(expr, operator) {
-                        let any_ml = chain.iter().any(|op| self.is_multiline(op));
-                        if any_ml {
-                            self.write_expr_operand(chain[0], operator, true);
-                            self.indent();
-                            for operand in &chain[1..] {
-                                self.newline_indent();
-                                self.write(operator);
-                                self.write_char(' ');
-                                self.write_expr_operand(operand, operator, false);
-                            }
-                            self.dedent();
-                            return;
+                if self.is_pretty()
+                    && matches!(operator.as_str(), ">>" | "<<")
+                    && let Some(chain) = flatten_right_assoc_chain(expr, operator)
+                {
+                    let any_ml = chain.iter().any(|op| self.is_multiline(op));
+                    if any_ml {
+                        self.write_expr_operand(chain[0], operator, true);
+                        self.indent();
+                        for operand in &chain[1..] {
+                            self.newline_indent();
+                            self.write(operator);
+                            self.write_char(' ');
+                            self.write_expr_operand(operand, operator, false);
                         }
+                        self.dedent();
+                        return;
                     }
                 }
 
@@ -2116,7 +2115,7 @@ impl Printer {
                 if self.is_pretty() {
                     // Match elm-format's hex width normalization:
                     // pad to 2, 4, 8, or 16 digits based on magnitude.
-                    let abs = n.unsigned_abs() as u64;
+                    let abs = n.unsigned_abs();
                     let prefix = if *n < 0 { "-0x" } else { "0x" };
                     if abs <= 0xFF {
                         self.write(&format!("{prefix}{abs:02X}"));
@@ -2136,7 +2135,7 @@ impl Printer {
                 let s = f.to_string();
                 if s.contains('.') {
                     self.write(&s);
-                } else if let Some(e_pos) = s.find(|c: char| c == 'e' || c == 'E') {
+                } else if let Some(e_pos) = s.find(['e', 'E']) {
                     // Scientific form without a dot (e.g. `1e-42`): elm-format
                     // inserts `.0` before the exponent to make it `1.0e-42`.
                     self.write(&s[..e_pos]);
@@ -2227,20 +2226,6 @@ fn op_precedence(op: &str) -> u8 {
 fn is_right_assoc(op: &str) -> bool {
     matches!(op, "<|" | "||" | "&&" | "::" | "++" | "^" | ">>")
 }
-
-/// Normalize doc comment content to match elm-format's conventions.
-///
-/// elm-format round-trips doc comments through a Markdown parser (Cheapskate)
-/// and re-serializes them. We approximate the most impactful normalizations
-/// without a full Markdown parser:
-///
-/// 1. `*text*` → `_text_` (emphasis normalization, but not `**bold**`)
-/// 2. `[text][]` → `[text]` (empty link references)
-/// 3. Ensure blank line after `# Heading` before `@docs`
-/// 4. Ensure double blank line before `# Heading` (after content)
-/// 5. Ensure trailing `\n\n` before `-}` for multi-paragraph docs
-/// 6. Single-line docs: `{-| text -}` → `{-| text\n-}` (strip trailing space)
-/// 7. Empty docs: `""` → `" "`
 
 // Doc-comment / markdown helpers moved to src/print/doc_markdown.rs
 

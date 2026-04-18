@@ -12,9 +12,7 @@ use crate::expr::Expr;
 /// Flatten a mixed pipe chain (`|>`, `|.`, `|=`) into a list of
 /// `(operator, operand)` pairs plus the first operand. Returns `None` if
 /// `expr` is not a pipe-chain.
-pub(super) fn flatten_mixed_pipe_chain<'a>(
-    expr: &'a Expr,
-) -> Option<(&'a Expr, Vec<(&'a str, &'a Expr)>)> {
+pub(super) fn flatten_mixed_pipe_chain(expr: &Expr) -> Option<(&Expr, Vec<(&str, &Expr)>)> {
     fn is_pipe(op: &str) -> bool {
         matches!(op, "|>" | "|." | "|=")
     }

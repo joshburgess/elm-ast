@@ -195,8 +195,8 @@ pub(in crate::print) fn try_parse_and_format_expr(wrapped: &str) -> Option<Strin
     for line in body.split('\n') {
         if line.is_empty() {
             result_lines.push(String::new());
-        } else if line.starts_with("    ") {
-            result_lines.push(line[4..].to_string());
+        } else if let Some(stripped) = line.strip_prefix("    ") {
+            result_lines.push(stripped.to_string());
         } else {
             // Unexpected indentation — bail out.
             return None;

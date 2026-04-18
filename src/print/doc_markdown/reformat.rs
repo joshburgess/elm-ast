@@ -123,6 +123,7 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
         let first_indent = block_lines[run_start].len() - block_lines[run_start].trim_start().len();
         let mut all_valid = true;
         let mut assertion_count = 0usize;
+        #[allow(clippy::needless_range_loop)]
         for k in run_start..=run_end {
             let l = block_lines[k];
             if l.trim().is_empty() {
@@ -180,6 +181,7 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
             let mut chains: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
             let mut cur_comments: Vec<usize> = Vec::new();
             let mut cur_assertions: Vec<usize> = Vec::new();
+            #[allow(clippy::needless_range_loop)]
             for k in run_start..=run_end {
                 let trimmed = block_lines[k].trim();
                 if trimmed.is_empty() {
@@ -231,8 +233,7 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
                     let joined = space_tight_tuples_lists(&joined);
                     let segments = split_at_chain_operators(&joined);
                     let indent_str = &block_lines[assertions[0]][..first_indent];
-                    let cont_indent: String =
-                        std::iter::repeat(' ').take(first_indent + 4).collect();
+                    let cont_indent: String = std::iter::repeat_n(' ', first_indent + 4).collect();
                     out.push_str(indent_str);
                     if let Some(first) = segments.first() {
                         out.push_str(first);
@@ -378,8 +379,8 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
     for &line in block_lines {
         if line.trim().is_empty() {
             raw_lines.push(String::new());
-        } else if line.starts_with("    ") {
-            raw_lines.push(line[4..].to_string());
+        } else if let Some(stripped) = line.strip_prefix("    ") {
+            raw_lines.push(stripped.to_string());
         } else {
             return None;
         }
@@ -390,31 +391,30 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
     // If the block already begins with a `module` declaration, use it
     // directly as the wrapper (don't double-wrap).
     let trimmed_raw = raw_code.trim_start();
-    if trimmed_raw.starts_with("module ")
+    if (trimmed_raw.starts_with("module ")
         || trimmed_raw.starts_with("port module ")
-        || trimmed_raw.starts_with("effect module ")
+        || trimmed_raw.starts_with("effect module "))
+        && let Some(result) = try_parse_and_format_full_module(&raw_code)
     {
-        if let Some(result) = try_parse_and_format_full_module(&raw_code) {
-            // Re-indent every non-blank line with the 4-space doc-code prefix.
-            // Inside a markdown code block, elm-format's Cheapskate renderer
-            // collapses runs of blank lines to a single blank line, so skip
-            // consecutive blank lines as we reindent.
-            let mut out_lines: Vec<String> = Vec::new();
-            let mut prev_blank = false;
-            for l in result.split('\n') {
-                if l.is_empty() {
-                    if prev_blank {
-                        continue;
-                    }
-                    prev_blank = true;
-                    out_lines.push(String::new());
-                } else {
-                    prev_blank = false;
-                    out_lines.push(format!("    {}", l));
+        // Re-indent every non-blank line with the 4-space doc-code prefix.
+        // Inside a markdown code block, elm-format's Cheapskate renderer
+        // collapses runs of blank lines to a single blank line, so skip
+        // consecutive blank lines as we reindent.
+        let mut out_lines: Vec<String> = Vec::new();
+        let mut prev_blank = false;
+        for l in result.split('\n') {
+            if l.is_empty() {
+                if prev_blank {
+                    continue;
                 }
+                prev_blank = true;
+                out_lines.push(String::new());
+            } else {
+                prev_blank = false;
+                out_lines.push(format!("    {}", l));
             }
-            return Some(out_lines.join("\n"));
         }
+        return Some(out_lines.join("\n"));
     }
 
     // First try: parse as a full module with declarations.
@@ -498,8 +498,7 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
                         .next()
                         .is_some_and(|c| c.is_ascii_digit() || c == '(')
                 });
-                if is_minus_cont && current_accum.is_some() {
-                    let cur = current_accum.as_mut().unwrap();
+                if let Some(cur) = current_accum.as_mut().filter(|_| is_minus_cont) {
                     cur.push('\n');
                     cur.push_str("    ");
                     cur.push_str(trimmed);
@@ -515,10 +514,8 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
                     current_accum = Some(format!("    {}", trimmed));
                 }
             }
-            if all_ok {
-                if !flush_accum(current_accum, &mut per_line_results, &mut pending_comments) {
-                    all_ok = false;
-                }
+            if all_ok && !flush_accum(current_accum, &mut per_line_results, &mut pending_comments) {
+                all_ok = false;
             }
             if !pending_comments.is_empty() {
                 per_line_results.push(pending_comments.join("\n"));
@@ -537,12 +534,9 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
         // Try as expression by wrapping in a dummy function.
         let indented: Vec<String> = para
             .iter()
-            .enumerate()
-            .map(|(i, line)| {
+            .map(|line| {
                 if line.is_empty() {
                     String::new()
-                } else if i == 0 {
-                    format!("    {}", line)
                 } else {
                     format!("    {}", line)
                 }

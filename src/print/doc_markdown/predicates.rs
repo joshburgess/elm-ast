@@ -365,10 +365,10 @@ pub(in crate::print) fn looks_like_simple_expr_line(trimmed: &str) -> bool {
     }
     // Must not end with an operator character (continuation to next line).
     let last_non_ws = trimmed.trim_end();
-    if let Some(lc) = last_non_ws.chars().last() {
-        if "+-*/|&<>=,:".contains(lc) {
-            return false;
-        }
+    if let Some(lc) = last_non_ws.chars().last()
+        && "+-*/|&<>=,:".contains(lc)
+    {
+        return false;
     }
     true
 }
@@ -947,7 +947,7 @@ pub(in crate::print) fn import_has_unsorted_exposing(line: &str) -> bool {
         return false;
     }
     let mut sorted = items.clone();
-    sorted.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    sorted.sort_by_key(|a| a.to_lowercase());
     items != sorted
 }
 

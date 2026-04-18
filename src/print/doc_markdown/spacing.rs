@@ -312,28 +312,27 @@ pub(in crate::print) fn space_tight_tuples_lists(s: &str) -> String {
             }
             out.push(c);
             let next = input.get(i + 1).copied();
-            if let Some(n) = next {
-                if n.is_ascii_alphanumeric()
+            if let Some(n) = next
+                && (n.is_ascii_alphanumeric()
                     || n == '_'
                     || n == '('
                     || n == '['
                     || n == '{'
                     || n == '\''
                     || n == '"'
-                    || n == '-'
-                {
-                    out.push(' ');
-                }
+                    || n == '-')
+            {
+                out.push(' ');
             }
             i += 1;
             continue;
         }
 
-        if !c.is_whitespace() {
-            if let Some(top) = frames.last_mut() {
-                top.has_content = true;
-                top.has_non_comma_content = true;
-            }
+        if !c.is_whitespace()
+            && let Some(top) = frames.last_mut()
+        {
+            top.has_content = true;
+            top.has_non_comma_content = true;
         }
         out.push(c);
         i += 1;

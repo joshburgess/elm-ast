@@ -209,6 +209,7 @@ pub(in crate::print) fn normalize_fenced_code_blocks(text: &str) -> String {
                 } else {
                     // Convert: skip opening fence, indent content lines by 4
                     // spaces, skip closing fence.
+                    #[allow(clippy::needless_range_loop)]
                     for j in (i + 1)..end {
                         if !result.is_empty() || j > i + 1 {
                             result.push('\n');
