@@ -1654,7 +1654,27 @@ impl Printer {
         // When the source has no argument on the function's line (the
         // author broke immediately after the function name), we respect
         // that by breaking every argument too.
+        //
+        // Subsequent arguments align `function_column + indent_width`.
+        // When the function is at the ambient indent column this is the
+        // same as ambient_indent + 1 level. When the function sits past
+        // the ambient indent (e.g. inside `[ fn arg1 arg2 ...`), aligning
+        // to the function's column matches elm-format.
+        let fn_col = if self.is_pretty() {
+            Some(self.current_column())
+        } else {
+            None
+        };
         self.write_expr_atomic(&args[0].value);
+        let saved_indent = self.indent;
+        let saved_extra = self.indent_extra;
+        let saved_stack = self.indent_extra_stack.clone();
+        if let Some(col) = fn_col {
+            let w = self.config.indent_width;
+            self.indent = col / w;
+            self.indent_extra = (col % w) as u32;
+            self.indent_extra_stack.clear();
+        }
         self.indent();
         if args.len() >= 2 {
             let first = &args[1];
@@ -1674,6 +1694,9 @@ impl Printer {
             }
         }
         self.dedent();
+        self.indent = saved_indent;
+        self.indent_extra = saved_extra;
+        self.indent_extra_stack = saved_stack;
     }
 
     /// Write an expression in atomic (highest-precedence) position.
