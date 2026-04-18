@@ -884,6 +884,20 @@ impl Printer {
                 self.write_type_arm_multiline(from);
                 let mut cur: &Spanned<TypeAnnotation> = to;
                 loop {
+                    // If the current RHS is a function type that had outer
+                    // parens in source (e.g. `-> (a -> b)` on its own line),
+                    // elm-format keeps the whole paren group on one arm line
+                    // instead of descending into its arrows.
+                    if self.is_pretty()
+                        && matches!(cur.value, TypeAnnotation::FunctionType { .. })
+                        && Self::type_ann_has_outer_parens(cur)
+                    {
+                        self.newline_indent();
+                        self.write("-> (");
+                        self.write_type(&cur.value);
+                        self.write_char(')');
+                        break;
+                    }
                     match &cur.value {
                         TypeAnnotation::FunctionType { from, to } => {
                             self.write_function_arm_arrow(from);
