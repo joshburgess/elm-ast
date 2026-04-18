@@ -190,14 +190,15 @@ fn binary_loop(
                 left = expr;
             }
             Step::NeedExpr(cont) => {
-                // Put comments back so they remain claimable by downstream
-                // stages or module-level collection.
-                if !step_leading.is_empty() {
-                    p.restore_pending_comments(step_leading);
-                }
+                // Thread the claimed pipe-leading comments through the
+                // continuation. Restoring to the pending buffer would fail:
+                // when binary_loop resumes with the completed operand, the
+                // comment's line is no longer strictly after `left`'s end,
+                // so the reclaim check rejects it and the comment drops.
+                let leading = step_leading;
                 return Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
                     let step = cont(p, sub_expr)?;
-                    binary_after_operand(p, step, pending)
+                    binary_after_operand_with_leading(p, step, pending, leading)
                 })));
             }
         }
@@ -229,6 +230,32 @@ fn binary_after_operand(p: &mut Parser, step: Step, pending: Vec<PendingOp>) -> 
             binary_after_operand(p, step, pending)
         }))),
         Step::Done(left) => binary_loop(p, pending, left),
+    }
+}
+
+/// Like `binary_after_operand`, but also prepends a set of leading comments
+/// to the completed right operand before resuming the loop. Used when a pipe
+/// operator claimed step-preceding line comments but the operand went through
+/// CPS (so the Done-path attachment in `binary_loop` was skipped).
+fn binary_after_operand_with_leading(
+    p: &mut Parser,
+    step: Step,
+    pending: Vec<PendingOp>,
+    leading: Vec<Spanned<Comment>>,
+) -> ParseResult<Step> {
+    match step {
+        Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
+            let step = cont(p, sub_expr)?;
+            binary_after_operand_with_leading(p, step, pending, leading)
+        }))),
+        Step::Done(mut left) => {
+            if !leading.is_empty() {
+                let mut combined = leading;
+                combined.extend(std::mem::take(&mut left.comments));
+                left.comments = combined;
+            }
+            binary_loop(p, pending, left)
+        }
     }
 }
 
