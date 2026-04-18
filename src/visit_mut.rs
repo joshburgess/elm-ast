@@ -137,7 +137,7 @@ pub fn walk_import_mut<V: VisitMut + ?Sized>(v: &mut V, import: &mut Spanned<Imp
 }
 
 pub fn walk_exposing_mut<V: VisitMut + ?Sized>(v: &mut V, exposing: &mut Spanned<Exposing>) {
-    if let Exposing::Explicit(items) = &mut exposing.value {
+    if let Exposing::Explicit { items, .. } = &mut exposing.value {
         for item in items {
             v.visit_exposed_item_mut(item);
         }

@@ -47,7 +47,7 @@ fn normal_module_exposing_explicit() {
     let m = parse_ok("module Main exposing (main, view, Msg(..))");
     match v(&m.header) {
         ModuleHeader::Normal { exposing, .. } => match v(exposing) {
-            Exposing::Explicit(items) => {
+            Exposing::Explicit { items, .. } => {
                 assert_eq!(items.len(), 3);
                 assert!(matches!(v(&items[0]), ExposedItem::Function(n) if n == "main"));
                 assert!(matches!(v(&items[1]), ExposedItem::Function(n) if n == "view"));
@@ -124,7 +124,7 @@ fn import_with_exposing() {
     let m = parse_ok("module Main exposing (..)\n\nimport Html exposing (div, text)");
     let imp = v(&m.imports[0]);
     match v(imp.exposing.as_ref().unwrap()) {
-        Exposing::Explicit(items) => {
+        Exposing::Explicit { items, .. } => {
             assert_eq!(items.len(), 2);
         }
         _ => panic!("expected Explicit"),

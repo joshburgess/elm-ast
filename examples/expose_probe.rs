@@ -7,7 +7,7 @@ fn main() {
     let ModuleHeader::Normal { exposing, .. } = &ast.header.value else {
         return;
     };
-    let Exposing::Explicit(items) = &exposing.value else {
+    let Exposing::Explicit { items, .. } = &exposing.value else {
         return;
     };
     println!("{} items parsed", items.len());

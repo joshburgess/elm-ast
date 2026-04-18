@@ -490,9 +490,12 @@ impl Printer {
     fn write_exposing(&mut self, exposing: &Exposing, is_module_header: bool) {
         match exposing {
             Exposing::All(_) => self.write("(..)"),
-            Exposing::Explicit(items) => {
+            Exposing::Explicit {
+                items,
+                trailing_comments,
+            } => {
                 if self.is_pretty() {
-                    self.write_exposing_pretty(items, is_module_header);
+                    self.write_exposing_pretty(items, trailing_comments, is_module_header);
                 } else {
                     self.write_char('(');
                     for (i, item) in items.iter().enumerate() {
@@ -515,7 +518,12 @@ impl Printer {
     /// - 2+ `@docs` groups → multiline with one group per line
     ///
     /// Without `@docs`, items are listed one per line when the list is long.
-    fn write_exposing_pretty(&mut self, items: &[Spanned<ExposedItem>], is_module_header: bool) {
+    fn write_exposing_pretty(
+        &mut self,
+        items: &[Spanned<ExposedItem>],
+        trailing_comments: &[Spanned<Comment>],
+        is_module_header: bool,
+    ) {
         let doc_groups = self.doc_groups.clone();
 
         if is_module_header && !doc_groups.is_empty() {
@@ -573,7 +581,8 @@ impl Printer {
                 resolved_groups.push(leftovers);
             }
 
-            if resolved_groups.len() <= 1 {
+            let force_multiline = !trailing_comments.is_empty();
+            if resolved_groups.len() <= 1 && !force_multiline {
                 // Single group (or all items in one group) → single-line.
                 let all_items: Vec<&ExposedItem> = resolved_groups
                     .into_iter()
@@ -609,6 +618,10 @@ impl Printer {
                         self.write_exposed_item(item);
                     }
                 }
+                for c in trailing_comments {
+                    self.newline_indent();
+                    self.write_comment(&c.value);
+                }
                 self.newline_indent();
                 self.write_char(')');
                 self.dedent();
@@ -638,7 +651,7 @@ impl Printer {
             };
 
             let source_was_multiline = Self::spans_multi_lines(items);
-            if !source_was_multiline {
+            if !source_was_multiline && trailing_comments.is_empty() {
                 // elm-format preserves single-line source layout regardless
                 // of line length for module exposing.
                 self.write(&single_line);
@@ -656,6 +669,10 @@ impl Printer {
                         self.write(", ");
                     }
                     self.write_exposed_item(item);
+                }
+                for c in trailing_comments {
+                    self.newline_indent();
+                    self.write_comment(&c.value);
                 }
                 self.newline_indent();
                 self.write_char(')');
@@ -701,7 +718,7 @@ impl Printer {
                 && exposing.span.end.line > exposing.span.start.line
                 && exposing.span.start.line != 0;
             if source_multi {
-                if let Exposing::Explicit(items) = &exposing.value {
+                if let Exposing::Explicit { items, .. } = &exposing.value {
                     self.indent();
                     self.newline_indent();
                     self.write("exposing");
@@ -772,7 +789,7 @@ impl Printer {
             let mut all_items: Vec<&ExposedItem> = Vec::new();
             for imp in imports {
                 if let Some(exposing) = &imp.exposing
-                    && let Exposing::Explicit(items) = &exposing.value
+                    && let Exposing::Explicit { items, .. } = &exposing.value
                 {
                     for item in items {
                         all_items.push(&item.value);
@@ -802,7 +819,7 @@ impl Printer {
     fn write_import_exposing_sorted(&mut self, exposing: &Exposing) {
         match exposing {
             Exposing::All(_) => self.write("(..)"),
-            Exposing::Explicit(items) => {
+            Exposing::Explicit { items, .. } => {
                 let mut sorted: Vec<&ExposedItem> = items.iter().map(|i| &i.value).collect();
                 sorted.sort_by_key(|a| exposed_item_sort_key(a));
                 self.write_char('(');
