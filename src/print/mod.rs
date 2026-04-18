@@ -1372,6 +1372,14 @@ impl Printer {
                     self.dedent();
                     return;
                 }
+                TypeAnnotation::Typed { .. } => {
+                    self.write(" :");
+                    self.indent();
+                    self.newline_indent();
+                    self.write_type_multiline(ta);
+                    self.dedent();
+                    return;
+                }
                 _ => {
                     self.write(" :");
                     self.indent();
