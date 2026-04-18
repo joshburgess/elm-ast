@@ -268,7 +268,7 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
 /// (type, type alias, value decl, or type annotation) AND a bare expression
 /// at base indent. elm-format treats such blocks as verbatim examples and
 /// leaves them untouched instead of re-running the module-body formatter.
-fn block_mixes_decls_and_bare_exprs(block_lines: &[&str]) -> bool {
+pub(in crate::print) fn block_mixes_decls_and_bare_exprs(block_lines: &[&str]) -> bool {
     let mut has_decl = false;
     let mut has_bare = false;
     // Track whether we are currently inside a triple-quoted string so lines

@@ -442,6 +442,12 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut result = String::with_capacity(text.len());
 
+    // Pre-pass: elm-format preserves ALL code blocks in a doc comment
+    // verbatim when any one of them mixes declarations with bare expressions.
+    // A later "example usage" block full of bare exprs + `-->` assertions is
+    // enough to disqualify sibling decl-only blocks from reformatting.
+    let doc_has_mixed_block = doc_comment_has_mixed_block(&lines);
+
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
@@ -483,7 +489,8 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
         // indentation (e.g. 2-space indent). Code blocks already using 4-space
         // indentation are left unchanged to avoid regressions from imperfect
         // pretty printing.
-        let needs_reformat = code_block_needs_reformat(&lines[block_start..=block_end]);
+        let needs_reformat = !doc_has_mixed_block
+            && code_block_needs_reformat(&lines[block_start..=block_end]);
 
         let reformatted = if needs_reformat {
             try_reformat_code_block(&lines[block_start..=block_end])
@@ -537,4 +544,61 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
     }
 
     result
+}
+
+/// Pre-scan all 4-space-indented code blocks in a doc comment body and return
+/// true if any block indicates the whole comment is an "example" that
+/// elm-format preserves verbatim. Currently two signals qualify:
+///
+/// 1. A single block mixes declarations with bare expressions (e.g. a `foo :`
+///    annotation plus a `foo 42` usage line).
+/// 2. Any block contains one or more `-->` result-comment lines used to show
+///    expected output of the preceding expression.
+fn doc_comment_has_mixed_block(lines: &[&str]) -> bool {
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let starts_code = line.starts_with("    ") && (i == 0 || lines[i - 1].trim().is_empty());
+        if !starts_code {
+            i += 1;
+            continue;
+        }
+        let block_start = i;
+        let mut block_end = i;
+        while block_end + 1 < lines.len() {
+            let next = lines[block_end + 1];
+            if next.trim().is_empty() {
+                if block_end + 2 < lines.len() && lines[block_end + 2].starts_with("    ") {
+                    block_end += 1;
+                    continue;
+                }
+                break;
+            } else if next.starts_with("    ") {
+                block_end += 1;
+            } else {
+                break;
+            }
+        }
+        let block = &lines[block_start..=block_end];
+        if super::reformat::block_mixes_decls_and_bare_exprs(block)
+            || block_has_result_arrow_comment(block)
+        {
+            return true;
+        }
+        i = block_end + 1;
+    }
+    false
+}
+
+/// Returns true if any line in the block is a `-->` result-comment at base
+/// (4-space) indent. elm-format treats these blocks as example output and
+/// preserves them and their sibling blocks verbatim.
+fn block_has_result_arrow_comment(block_lines: &[&str]) -> bool {
+    for &line in block_lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with("-->") {
+            return true;
+        }
+    }
+    false
 }
