@@ -137,6 +137,11 @@ impl Printer {
         a.start.line != 0 && b.end.line != 0 && b.end.line > a.start.line
     }
 
+    /// True when a single span covers multiple source lines (non-dummy).
+    fn span_crosses_lines(s: Span) -> bool {
+        s.start.line != 0 && s.end.line > s.start.line
+    }
+
     /// True when a sequence of spanned nodes spans multiple source lines.
     fn spans_multi_lines<T>(items: &[Spanned<T>]) -> bool {
         match (items.first(), items.last()) {
@@ -175,18 +180,38 @@ impl Printer {
                 true
             }
             Expr::CaseOf { .. } | Expr::LetIn { .. } => true,
-            Expr::Lambda { body, .. } => self.is_multiline(&body.value),
-            Expr::Application(args) => args.iter().any(|a| self.is_multiline(&a.value)),
-            Expr::List(elems) => elems.iter().any(|e| self.is_multiline(&e.value)),
-            Expr::Tuple(elems) => elems.iter().any(|e| self.is_multiline(&e.value)),
-            Expr::Record(fields) => fields
-                .iter()
-                .any(|f| self.is_multiline(&f.value.value.value)),
-            Expr::RecordUpdate { updates, .. } => updates
-                .iter()
-                .any(|f| self.is_multiline(&f.value.value.value)),
+            Expr::Lambda { body, .. } => {
+                self.is_multiline(&body.value)
+                    || (self.is_pretty() && Self::span_crosses_lines(body.span))
+            }
+            Expr::Application(args) => {
+                args.iter().any(|a| self.is_multiline(&a.value))
+                    || (self.is_pretty() && Self::spans_multi_lines(args))
+            }
+            Expr::List(elems) => {
+                elems.iter().any(|e| self.is_multiline(&e.value))
+                    || (self.is_pretty() && Self::spans_multi_lines(elems))
+            }
+            Expr::Tuple(elems) => {
+                elems.iter().any(|e| self.is_multiline(&e.value))
+                    || (self.is_pretty() && Self::spans_multi_lines(elems))
+            }
+            Expr::Record(fields) => {
+                fields
+                    .iter()
+                    .any(|f| self.is_multiline(&f.value.value.value))
+                    || (self.is_pretty() && Self::spans_multi_lines(fields))
+            }
+            Expr::RecordUpdate { updates, .. } => {
+                updates
+                    .iter()
+                    .any(|f| self.is_multiline(&f.value.value.value))
+                    || (self.is_pretty() && Self::spans_multi_lines(updates))
+            }
             Expr::OperatorApplication { left, right, .. } => {
-                self.is_multiline(&left.value) || self.is_multiline(&right.value)
+                self.is_multiline(&left.value)
+                    || self.is_multiline(&right.value)
+                    || (self.is_pretty() && Self::spans_cross_lines(left.span, right.span))
             }
             Expr::Parenthesized(inner) => self.is_multiline(&inner.value),
             Expr::Negation(inner) => self.is_multiline(&inner.value),
@@ -583,7 +608,8 @@ impl Printer {
 
             let line_start = self.buf.rfind('\n').map_or(0, |p| p + 1);
             let current_col = self.buf.len() - line_start;
-            if current_col + single_line.len() <= 200 {
+            let source_was_multiline = Self::spans_multi_lines(items);
+            if !source_was_multiline && current_col + single_line.len() <= 120 {
                 self.write(&single_line);
             } else {
                 // Multiline: each item on its own indented line.
@@ -768,8 +794,66 @@ impl Printer {
 
     fn write_signature(&mut self, sig: &Signature) {
         self.write(&sig.name.value);
-        self.write(" : ");
-        self.write_type(&sig.type_annotation.value);
+        if self.is_pretty() && Self::type_ann_spans_multi_lines(&sig.type_annotation) {
+            self.write(" :");
+            self.indent();
+            self.newline_indent();
+            self.write_type_multiline(&sig.type_annotation.value);
+            self.dedent();
+        } else {
+            self.write(" : ");
+            self.write_type(&sig.type_annotation.value);
+        }
+    }
+
+    /// True when the type annotation's span crosses source lines.
+    fn type_ann_spans_multi_lines(sp: &Spanned<TypeAnnotation>) -> bool {
+        sp.span.start.line != 0
+            && sp.span.end.line != 0
+            && sp.span.end.line > sp.span.start.line
+    }
+
+    /// Write a type annotation broken across lines: function arrows on their
+    /// own lines, record arguments expanded multi-line. Matches elm-format's
+    /// layout when the source annotation spans multiple lines.
+    fn write_type_multiline(&mut self, ty: &TypeAnnotation) {
+        match ty {
+            TypeAnnotation::FunctionType { from, to } => {
+                self.write_type_arm_multiline(&from.value);
+                let mut cur: &TypeAnnotation = &to.value;
+                loop {
+                    match cur {
+                        TypeAnnotation::FunctionType { from, to } => {
+                            self.newline_indent();
+                            self.write("-> ");
+                            self.write_type_arm_multiline(&from.value);
+                            cur = &to.value;
+                        }
+                        _ => {
+                            self.newline_indent();
+                            self.write("-> ");
+                            self.write_type_arm_multiline(cur);
+                            break;
+                        }
+                    }
+                }
+            }
+            TypeAnnotation::Record(fields) if fields.len() >= 2 => {
+                self.write_record_type_fields_multiline(fields, None);
+            }
+            _ => self.write_type(ty),
+        }
+    }
+
+    /// Write a single arm of a multi-line function type. Records expand
+    /// multi-line; other forms stay on one line (parenthesized if needed).
+    fn write_type_arm_multiline(&mut self, ty: &TypeAnnotation) {
+        match ty {
+            TypeAnnotation::Record(fields) if fields.len() >= 2 => {
+                self.write_record_type_fields_multiline(fields, None);
+            }
+            _ => self.write_type_non_arrow(ty),
+        }
     }
 
     fn write_function_impl(&mut self, imp: &FunctionImplementation) {
@@ -840,9 +924,32 @@ impl Printer {
 
     fn write_value_constructor(&mut self, ctor: &ValueConstructor) {
         self.write(&ctor.name.value);
-        for arg in &ctor.args {
-            self.write_char(' ');
-            self.write_type_atomic(&arg.value);
+        let any_multiline = self.is_pretty()
+            && ctor
+                .args
+                .iter()
+                .any(|a| Self::type_ann_spans_multi_lines(a));
+        if any_multiline {
+            self.indent();
+            for arg in &ctor.args {
+                self.newline_indent();
+                self.write_ctor_arg_multiline(&arg.value);
+            }
+            self.dedent();
+        } else {
+            for arg in &ctor.args {
+                self.write_char(' ');
+                self.write_type_atomic(&arg.value);
+            }
+        }
+    }
+
+    fn write_ctor_arg_multiline(&mut self, ty: &TypeAnnotation) {
+        match ty {
+            TypeAnnotation::Record(fields) if fields.len() >= 2 => {
+                self.write_record_type_fields_multiline(fields, None);
+            }
+            _ => self.write_type_atomic(ty),
         }
     }
 
@@ -1469,13 +1576,7 @@ impl Printer {
                 let any_arg_ml =
                     args.len() > 1 && args.iter().skip(1).any(|a| self.is_multiline(&a.value));
                 if any_arg_ml {
-                    self.write_expr_atomic(&args[0].value);
-                    self.indent();
-                    for arg in &args[1..] {
-                        self.newline_indent();
-                        self.write_expr_atomic(&arg.value);
-                    }
-                    self.dedent();
+                    self.write_application_vertical(args);
                 } else {
                     for (i, arg) in args.iter().enumerate() {
                         if i > 0 {
@@ -1491,6 +1592,33 @@ impl Printer {
             }
             _ => self.write_expr_atomic(expr),
         }
+    }
+
+    fn write_application_vertical(&mut self, args: &[Spanned<Expr>]) {
+        self.write_expr_atomic(&args[0].value);
+        self.indent();
+        // elm-format preserves source layout: an arg stays inline with its
+        // predecessor when the source had them on the same line; break
+        // otherwise. Multi-line args always start on their own line. Once
+        // we break, subsequent args also break (staircase layout would be
+        // invalid Elm indentation). Dummy spans (synthesized ASTs) fall
+        // back to break-all.
+        let mut broken = false;
+        let mut prev_end_line = args[0].span.end.line;
+        for arg in &args[1..] {
+            let arg_ml = self.is_multiline(&arg.value);
+            let dummy = arg.span.start.line == 0 || prev_end_line == 0;
+            let source_break = !dummy && arg.span.start.line > prev_end_line;
+            if broken || arg_ml || source_break || dummy {
+                self.newline_indent();
+                broken = true;
+            } else {
+                self.write_char(' ');
+            }
+            self.write_expr_atomic(&arg.value);
+            prev_end_line = arg.span.end.line;
+        }
+        self.dedent();
     }
 
     /// Write an expression in atomic (highest-precedence) position.
