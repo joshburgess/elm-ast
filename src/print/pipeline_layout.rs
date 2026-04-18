@@ -170,3 +170,34 @@ pub(super) fn flatten_mixed_arithmetic_chain<'a>(
 ) -> Option<(&'a Expr, Vec<(&'a str, &'a Expr)>)> {
     flatten_mixed_bidir_chain(expr, &|op| matches!(op, "+" | "-" | "*" | "/" | "//"))
 }
+
+/// Try to further flatten `expr` as any operator chain (cons/append,
+/// logical, arithmetic, compose). Used by the pipe-chain printer: when a
+/// pipe chain goes vertical and its head is itself a binop chain,
+/// elm-format lays out every operator at the same indent column. Returns
+/// `None` if `expr` isn't a chainable operator application.
+pub(super) fn flatten_as_chain<'a>(
+    expr: &'a Expr,
+) -> Option<(&'a Expr, Vec<(&'a str, &'a Expr)>)> {
+    match expr {
+        Expr::OperatorApplication { operator, .. } => {
+            let op = operator.as_str();
+            if matches!(op, "::" | "++") {
+                flatten_mixed_cons_append_chain(expr)
+            } else if matches!(op, "&&" | "||") {
+                flatten_mixed_logical_chain(expr)
+            } else if matches!(op, "+" | "-" | "*" | "/" | "//") {
+                flatten_mixed_arithmetic_chain(expr)
+            } else if matches!(op, ">>" | "<<") {
+                flatten_right_assoc_chain(expr, op).map(|chain| {
+                    let first = chain[0];
+                    let rest: Vec<(&str, &Expr)> = chain[1..].iter().map(|e| (op, *e)).collect();
+                    (first, rest)
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}

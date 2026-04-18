@@ -1366,13 +1366,25 @@ impl Printer {
                         || rest.iter().any(|(_, op)| self.is_multiline(op))
                         || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
+                        // When the pipe chain goes vertical and its head is
+                        // itself a binop chain (e.g. `a ++ b |> f`), elm-
+                        // format flattens the head's operators into the same
+                        // vertical layout at the same indent column.
+                        let (real_head, head_rest) = match flatten_as_chain(head) {
+                            Some(x) => x,
+                            None => (head, Vec::new()),
+                        };
+                        let first_op = head_rest
+                            .first()
+                            .map(|(op, _)| *op)
+                            .unwrap_or(operator.as_str());
                         let outer_chain = self.in_vertical_chain;
-                        self.write_expr_operand(head, operator, true);
+                        self.write_expr_operand(real_head, first_op, true);
                         if !outer_chain {
                             self.indent();
                         }
                         self.in_vertical_chain = true;
-                        for (op, operand) in &rest {
+                        for (op, operand) in head_rest.iter().chain(rest.iter()) {
                             self.newline_indent();
                             self.write(op);
                             self.write_char(' ');
@@ -1532,13 +1544,35 @@ impl Printer {
                     // right operand goes on a new indented line. `<|` does
                     // NOT flatten into an outer chain's indent column;
                     // cascading `<|` always adds one indent per level.
+                    //
+                    // When the RHS is itself a binop chain (`::`/`++`/`&&`/
+                    // arithmetic/compose), elm-format forces that chain
+                    // vertical too, aligned at the new indent column. This
+                    // matches the behavior where the `<|` break cascades
+                    // into any chain on the right.
                     self.write(" <|");
                     let saved_chain =
                         std::mem::replace(&mut self.in_vertical_chain, false);
                     self.indent();
                     self.newline_indent();
                     self.write_leading_comments(&right.comments);
-                    self.write_expr_inner(right_expr);
+                    if let Some((rhead, rrest)) = flatten_as_chain(right_expr)
+                        && !rrest.is_empty()
+                    {
+                        let first_op = rrest[0].0;
+                        self.write_expr_operand(rhead, first_op, true);
+                        self.indent();
+                        self.in_vertical_chain = true;
+                        for (op, operand) in &rrest {
+                            self.newline_indent();
+                            self.write(op);
+                            self.write_char(' ');
+                            self.write_expr_operand(operand, op, false);
+                        }
+                        self.dedent();
+                    } else {
+                        self.write_expr_inner(right_expr);
+                    }
                     self.dedent();
                     self.in_vertical_chain = saved_chain;
                 } else if use_vertical {
