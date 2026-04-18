@@ -386,10 +386,17 @@ impl Printer {
                 if self.is_pretty() && text.contains('\n') {
                     let brace_col = self.current_column();
                     self.write("{-");
-                    let reindented = reindent_block_comment(text, brace_col);
-                    // elm-format normalizes `{-- foo...` (block content
-                    // starting with "- ") by dropping the space after the
-                    // leading dash, keeping `{--` as a single marker.
+                    // elm-format does NOT re-indent contents of "comment-out"
+                    // style block comments `{-- ... -}` (text starts with a
+                    // literal `-`). For normal `{- ... -}`, it aligns
+                    // continuation lines so the min indent sits at
+                    // `{-col + 3`.
+                    let is_double_dash = text.starts_with('-');
+                    let reindented = if is_double_dash {
+                        text.to_string()
+                    } else {
+                        reindent_block_comment(text, brace_col)
+                    };
                     let reindented = if self.is_pretty() && reindented.starts_with("- ") {
                         format!("-{}", &reindented[2..])
                     } else {
