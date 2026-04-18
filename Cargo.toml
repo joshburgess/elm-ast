@@ -15,7 +15,9 @@ exclude = ["test-fixtures/"]
 default = ["full"]
 full = ["parsing", "printing", "visit", "visit-mut", "fold"]
 parsing = []
-printing = []
+# `printing` depends on `parsing` because the doc-comment normalizer
+# re-parses Elm code inside `{-| ... -}` blocks to format it.
+printing = ["parsing"]
 visit = []
 fold = []
 visit-mut = []

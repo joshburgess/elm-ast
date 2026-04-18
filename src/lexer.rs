@@ -342,8 +342,7 @@ impl<'src> Lexer<'src> {
 
             _ => {
                 // Skip any UTF-8 continuation bytes we may have landed inside.
-                while self.offset < self.source.len()
-                    && !self.source.is_char_boundary(self.offset)
+                while self.offset < self.source.len() && !self.source.is_char_boundary(self.offset)
                 {
                     self.advance();
                 }

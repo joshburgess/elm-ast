@@ -93,16 +93,12 @@ impl Parser {
 
     /// Take pending comments collected after the given snapshot, leaving
     /// earlier comments in place so they remain available for later attachment.
-    pub fn take_pending_comments_since(
-        &mut self,
-        snapshot: usize,
-    ) -> Vec<Spanned<Comment>> {
+    pub fn take_pending_comments_since(&mut self, snapshot: usize) -> Vec<Spanned<Comment>> {
         if snapshot >= self.collected_comments.len() {
             return Vec::new();
         }
         self.collected_comments.split_off(snapshot)
     }
-
 
     /// Returns true if currently inside parens/brackets/braces.
     /// When true, indentation-sensitive layout rules are suspended.

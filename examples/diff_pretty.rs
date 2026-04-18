@@ -1,9 +1,10 @@
 use std::io::Write;
 
 fn main() {
-    let file = std::env::args().nth(1).expect("Usage: diff_pretty <file.elm>");
-    let elm_format = std::env::var("ELM_FORMAT")
-        .unwrap_or_else(|_| "elm-format".to_string());
+    let file = std::env::args()
+        .nth(1)
+        .expect("Usage: diff_pretty <file.elm>");
+    let elm_format = std::env::var("ELM_FORMAT").unwrap_or_else(|_| "elm-format".to_string());
 
     let source = std::fs::read_to_string(&file).unwrap();
     let ast = elm_ast::parse(&source).unwrap();
@@ -16,7 +17,12 @@ fn main() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.as_mut().unwrap().write_all(pretty.as_bytes()).unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(pretty.as_bytes())
+        .unwrap();
     let output = child.wait_with_output().unwrap();
     let fmt = String::from_utf8(output.stdout).unwrap();
 
@@ -43,5 +49,9 @@ fn main() {
             }
         }
     }
-    println!("Total lines: pretty={}, elm-format={}", p_lines.len(), f_lines.len());
+    println!(
+        "Total lines: pretty={}, elm-format={}",
+        p_lines.len(),
+        f_lines.len()
+    );
 }

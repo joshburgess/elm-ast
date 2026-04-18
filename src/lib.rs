@@ -100,6 +100,6 @@ pub use parse::parse;
 #[cfg(feature = "parsing")]
 pub use parse::parse_recovering;
 #[cfg(feature = "printing")]
-pub use print::print;
-#[cfg(feature = "printing")]
 pub use print::pretty_print;
+#[cfg(feature = "printing")]
+pub use print::print;

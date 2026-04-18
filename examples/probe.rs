@@ -6,16 +6,15 @@ fn main() {
     println!("Imports: {}", ast.imports.len());
     println!("Decls: {}", ast.declarations.len());
     for (i, imp) in ast.imports.iter().enumerate() {
-        println!("imp {}: {}..{}", i, imp.span.start.offset, imp.span.end.offset);
+        println!(
+            "imp {}: {}..{}",
+            i, imp.span.start.offset, imp.span.end.offset
+        );
     }
     for (i, d) in ast.declarations.iter().enumerate() {
         println!(
             "decl {}: offset={}..{} line={}..{}",
-            i,
-            d.span.start.offset,
-            d.span.end.offset,
-            d.span.start.line,
-            d.span.end.line
+            i, d.span.start.offset, d.span.end.offset, d.span.start.line, d.span.end.line
         );
     }
     println!("module_comments: {}", ast.comments.len());
@@ -26,6 +25,9 @@ fn main() {
             Comment::Block(s) => format!("Block: {}", s.chars().take(40).collect::<String>()),
             Comment::Doc(s) => format!("Doc: {}", s.chars().take(40).collect::<String>()),
         };
-        println!("  offset={} line={} : {}", c.span.start.offset, c.span.start.line, s);
+        println!(
+            "  offset={} line={} : {}",
+            c.span.start.offset, c.span.start.line, s
+        );
     }
 }

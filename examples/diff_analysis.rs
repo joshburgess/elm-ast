@@ -1,11 +1,11 @@
 use std::env;
 use std::fs;
-use std::process::{Command, Stdio};
 use std::io::Write;
+use std::process::{Command, Stdio};
 
 fn main() {
     let elm_format = env::var("ELM_FORMAT").expect("Set ELM_FORMAT env var");
-    
+
     let dirs = vec![
         "test-fixtures/core/src",
         "test-fixtures/html/src",
@@ -58,9 +58,9 @@ fn main() {
         "test-fixtures/assoc-list/src",
         "test-fixtures/elm-bool-extra/src",
     ];
-    
+
     let mut results: Vec<(usize, String, String)> = Vec::new();
-    
+
     for dir in dirs {
         let files = find_elm_files(dir);
         for path in files {
@@ -68,35 +68,45 @@ fn main() {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            
+
             let ast = match elm_ast::parse::parse(&src) {
                 Ok(a) => a,
                 Err(_) => continue,
             };
-            
+
             let pretty = elm_ast::print::pretty_print(&ast);
-            
+
             let mut child = match Command::new(&elm_format)
                 .args(["--stdin", "--elm-version=0.19"])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
-                .spawn() {
+                .spawn()
+            {
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            
-            child.stdin.as_mut().unwrap().write_all(pretty.as_bytes()).unwrap();
+
+            child
+                .stdin
+                .as_mut()
+                .unwrap()
+                .write_all(pretty.as_bytes())
+                .unwrap();
             let output = match child.wait_with_output() {
                 Ok(o) => o,
                 Err(_) => continue,
             };
-            
-            if !output.status.success() { continue; }
-            
+
+            if !output.status.success() {
+                continue;
+            }
+
             let formatted = String::from_utf8_lossy(&output.stdout);
-            if pretty == formatted.as_ref() { continue; }
-            
+            if pretty == formatted.as_ref() {
+                continue;
+            }
+
             let p_lines: Vec<&str> = pretty.lines().collect();
             let f_lines: Vec<&str> = formatted.lines().collect();
 
@@ -108,20 +118,20 @@ fn main() {
                 if p != f {
                     let pt: &str = p.trim();
                     let ft: &str = f.trim();
-                    first_diff = format!("L{}: pp=[{}] ef=[{}]", i+1, pt, ft);
+                    first_diff = format!("L{}: pp=[{}] ef=[{}]", i + 1, pt, ft);
                     break;
                 }
             }
             if first_diff.is_empty() {
                 first_diff = format!("line count: pp={} ef={}", p_lines.len(), f_lines.len());
             }
-            
+
             results.push((diff_count, path, first_diff));
         }
     }
-    
+
     results.sort_by_key(|(count, _, _)| *count);
-    
+
     for (count, path, first_diff) in &results {
         println!("{}\t{}\t{}", count, path, first_diff);
     }
@@ -141,7 +151,9 @@ fn lcs_length(a: &[&str], b: &[&str]) -> usize {
             }
         }
         std::mem::swap(&mut prev, &mut curr);
-        for x in curr.iter_mut() { *x = 0; }
+        for x in curr.iter_mut() {
+            *x = 0;
+        }
     }
     prev[m]
 }
