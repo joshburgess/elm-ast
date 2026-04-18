@@ -706,6 +706,12 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
     if matches!(min_leading, Some(n) if n > 4) {
         return None;
     }
+    // A block with an assertion followed by a trailing comment-only
+    // paragraph is left verbatim by elm-format. Skip reparse so we don't
+    // rewrite compact lists/tuples inside it.
+    if block_has_assertion_then_comment_paragraph(block_lines) {
+        return None;
+    }
     // Strip the 4-space prefix from each line to get raw Elm code.
     let mut raw_lines: Vec<String> = Vec::new();
     for &line in block_lines {
