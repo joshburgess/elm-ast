@@ -824,15 +824,11 @@ impl Printer {
                 loop {
                     match cur {
                         TypeAnnotation::FunctionType { from, to } => {
-                            self.newline_indent();
-                            self.write("-> ");
-                            self.write_type_arm_multiline(&from.value);
+                            self.write_function_arm_arrow(&from.value);
                             cur = &to.value;
                         }
                         _ => {
-                            self.newline_indent();
-                            self.write("-> ");
-                            self.write_type_arm_multiline(cur);
+                            self.write_function_arm_arrow(cur);
                             break;
                         }
                     }
@@ -843,6 +839,28 @@ impl Printer {
             }
             _ => self.write_type(ty),
         }
+    }
+
+    /// Emit one `-> <arm>` step of a multi-line function type. When the arm
+    /// itself will expand onto multiple lines (e.g. a 2+ field record),
+    /// elm-format puts the arrow alone on its own line and indents the arm
+    /// below it; otherwise the arrow and arm sit on the same line.
+    fn write_function_arm_arrow(&mut self, arm: &TypeAnnotation) {
+        self.newline_indent();
+        if Self::type_arm_is_multiline(arm) {
+            self.write("->");
+            self.indent();
+            self.newline_indent();
+            self.write_type_arm_multiline(arm);
+            self.dedent();
+        } else {
+            self.write("-> ");
+            self.write_type_arm_multiline(arm);
+        }
+    }
+
+    fn type_arm_is_multiline(ty: &TypeAnnotation) -> bool {
+        matches!(ty, TypeAnnotation::Record(fields) if fields.len() >= 2)
     }
 
     /// Write a single arm of a multi-line function type. Records expand
@@ -1595,28 +1613,31 @@ impl Printer {
     }
 
     fn write_application_vertical(&mut self, args: &[Spanned<Expr>]) {
+        // elm-format's vertical layout: the first argument stays inline
+        // with the function head only when the source already had an
+        // argument on that line AND the argument is itself single-line.
+        // All remaining arguments break onto their own indented line.
+        // When the source has no argument on the function's line (the
+        // author broke immediately after the function name), we respect
+        // that by breaking every argument too.
         self.write_expr_atomic(&args[0].value);
         self.indent();
-        // elm-format preserves source layout: an arg stays inline with its
-        // predecessor when the source had them on the same line; break
-        // otherwise. Multi-line args always start on their own line. Once
-        // we break, subsequent args also break (staircase layout would be
-        // invalid Elm indentation). Dummy spans (synthesized ASTs) fall
-        // back to break-all.
-        let mut broken = false;
-        let mut prev_end_line = args[0].span.end.line;
-        for arg in &args[1..] {
-            let arg_ml = self.is_multiline(&arg.value);
-            let dummy = arg.span.start.line == 0 || prev_end_line == 0;
-            let source_break = !dummy && arg.span.start.line > prev_end_line;
-            if broken || arg_ml || source_break || dummy {
-                self.newline_indent();
-                broken = true;
-            } else {
+        if args.len() >= 2 {
+            let first = &args[1];
+            let func_end_line = args[0].span.end.line;
+            let first_start_line = first.span.start.line;
+            let dummy = func_end_line == 0 || first_start_line == 0;
+            let first_inline_in_source = !dummy && first_start_line == func_end_line;
+            if first_inline_in_source && !self.is_multiline(&first.value) {
                 self.write_char(' ');
+            } else {
+                self.newline_indent();
             }
-            self.write_expr_atomic(&arg.value);
-            prev_end_line = arg.span.end.line;
+            self.write_expr_atomic(&first.value);
+            for arg in &args[2..] {
+                self.newline_indent();
+                self.write_expr_atomic(&arg.value);
+            }
         }
         self.dedent();
     }
