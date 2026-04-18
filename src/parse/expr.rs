@@ -815,8 +815,10 @@ fn let_next_decl(
         p.expect(&Token::In)?;
         // Clear app_context_col for the `in` body.
         p.app_context_col = None;
+        let in_body_snapshot = p.pending_comments_snapshot();
         // Need body
-        return Ok(Step::NeedExpr(Box::new(move |p, body| {
+        return Ok(Step::NeedExpr(Box::new(move |p, mut body| {
+            attach_pre_body_comments(p, &mut body, in_body_snapshot);
             Ok(Step::Done(p.spanned_from(
                 start,
                 Expr::LetIn {
@@ -859,8 +861,10 @@ fn let_next_decl(
                 // Clear app_context_col for the function body.
                 p.app_context_col = None;
 
+                let body_snapshot = p.pending_comments_snapshot();
                 // Need function body
-                Ok(Step::NeedExpr(Box::new(move |p, body| {
+                Ok(Step::NeedExpr(Box::new(move |p, mut body| {
+                    attach_pre_body_comments(p, &mut body, body_snapshot);
                     let implementation = FunctionImplementation { name, args, body };
                     let func = Function {
                         documentation: None,
@@ -897,8 +901,10 @@ fn let_next_decl(
                 // Clear app_context_col for the function body.
                 p.app_context_col = None;
 
+                let body_snapshot = p.pending_comments_snapshot();
                 // Need function body
-                Ok(Step::NeedExpr(Box::new(move |p, body| {
+                Ok(Step::NeedExpr(Box::new(move |p, mut body| {
+                    attach_pre_body_comments(p, &mut body, body_snapshot);
                     let implementation = FunctionImplementation { name, args, body };
                     let func = Function {
                         documentation: None,
@@ -924,8 +930,10 @@ fn let_next_decl(
             // Clear app_context_col for the destructuring body.
             p.app_context_col = None;
 
+            let body_snapshot = p.pending_comments_snapshot();
             // Need destructuring body
-            Ok(Step::NeedExpr(Box::new(move |p, body| {
+            Ok(Step::NeedExpr(Box::new(move |p, mut body| {
+                attach_pre_body_comments(p, &mut body, body_snapshot);
                 let decl = LetDeclaration::Destructuring {
                     pattern: Box::new(pattern),
                     body: Box::new(body),

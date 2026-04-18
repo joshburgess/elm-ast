@@ -1654,7 +1654,7 @@ impl Printer {
                 self.write_case_expr(&subject.value, branches);
             }
             Expr::LetIn { declarations, body } => {
-                self.write_let_expr(declarations, &body.value);
+                self.write_let_expr(declarations, body);
             }
             Expr::Lambda { args, body } => {
                 self.write_lambda(args, body);
@@ -2462,7 +2462,7 @@ impl Printer {
         self.dedent();
     }
 
-    fn write_let_expr(&mut self, declarations: &[Spanned<LetDeclaration>], body: &Expr) {
+    fn write_let_expr(&mut self, declarations: &[Spanned<LetDeclaration>], body: &Spanned<Expr>) {
         if self.is_pretty() {
             let let_col = self.current_column();
             let saved_indent = self.indent;
@@ -2486,7 +2486,8 @@ impl Printer {
             self.newline_indent();
             self.write("in");
             self.newline_indent();
-            self.write_expr(body);
+            self.write_leading_comments(&body.comments);
+            self.write_expr(&body.value);
 
             self.indent = saved_indent;
             self.indent_extra = saved_extra;
@@ -2504,7 +2505,8 @@ impl Printer {
         self.newline_indent();
         self.write("in");
         self.newline_indent();
-        self.write_expr(body);
+        self.write_leading_comments(&body.comments);
+        self.write_expr(&body.value);
     }
 
     fn write_let_declaration(&mut self, decl: &LetDeclaration) {
@@ -2521,6 +2523,7 @@ impl Printer {
                 self.write(" =");
                 self.indent();
                 self.newline_indent();
+                self.write_leading_comments(&body.comments);
                 self.write_expr(&body.value);
                 self.dedent();
             }
