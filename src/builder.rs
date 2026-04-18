@@ -29,7 +29,7 @@ pub fn int(n: i64) -> Spanned<Expr> {
 
 /// Create a float literal expression.
 pub fn float(n: f64) -> Spanned<Expr> {
-    spanned(Expr::Literal(Literal::Float(n)))
+    spanned(Expr::Literal(Literal::Float(n, None)))
 }
 
 /// Create a string literal expression.

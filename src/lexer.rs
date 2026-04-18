@@ -454,7 +454,10 @@ impl<'src> Lexer<'src> {
 
         if is_float {
             match text.parse::<f64>() {
-                Ok(v) => Ok(self.make_span(start, Token::Literal(Literal::Float(v)))),
+                Ok(v) => Ok(self.make_span(
+                    start,
+                    Token::Literal(Literal::Float(v, Some(text.to_string()))),
+                )),
                 Err(_) => Err(self.make_error(start, format!("invalid float literal: {text}"))),
             }
         } else {

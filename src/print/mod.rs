@@ -3137,7 +3137,30 @@ impl Printer {
                     self.write(&format!("{n:02X}"));
                 }
             }
-            Literal::Float(f) => {
+            Literal::Float(f, lexeme) => {
+                // In ElmFormat mode, prefer the original source lexeme when it
+                // carried scientific notation. Rust's `f64::to_string` always
+                // normalizes to shortest round-trip decimal, losing forms like
+                // `3.969683028665376e1`. elm-format preserves the source form,
+                // so we do too. Compact mode ignores the lexeme and uses the
+                // normalized numeric form.
+                if self.is_pretty()
+                    && let Some(lex) = lexeme
+                    && lex.contains(['e', 'E'])
+                {
+                    let lower = lex.replace('E', "e");
+                    let e_pos = lower.find('e').expect("just checked for 'e'/'E'");
+                    let mantissa = &lower[..e_pos];
+                    let exp = &lower[e_pos..];
+                    if mantissa.contains('.') {
+                        self.write(&lower);
+                    } else {
+                        self.write(mantissa);
+                        self.write(".0");
+                        self.write(exp);
+                    }
+                    return;
+                }
                 let decimal = f.to_string();
                 // Rust's Display impl picks between decimal and scientific.
                 // For very small / very large magnitudes it can produce a long
