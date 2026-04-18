@@ -978,8 +978,58 @@ impl Printer {
                     self.write_type_atomic(&arg.value);
                 }
             }
+            TypeAnnotation::Tupled(elems) if elems.len() >= 2 => {
+                self.write_tupled_multiline(elems);
+            }
             _ => self.write_type(&ty.value),
         }
+    }
+
+    /// Emit a multi-line tuple type:
+    /// ```text
+    /// ( A
+    /// , B
+    /// , C
+    /// )
+    /// ```
+    /// Each element starts 2 columns past the opening paren. Nested
+    /// records inside elements expand multi-line at their element column.
+    fn write_tupled_multiline(&mut self, elems: &[Spanned<TypeAnnotation>]) {
+        self.write("( ");
+        self.write_tuple_elem(&elems[0]);
+        for elem in &elems[1..] {
+            self.newline_indent();
+            self.write(", ");
+            self.write_tuple_elem(elem);
+        }
+        self.newline_indent();
+        self.write(")");
+    }
+
+    /// Write a single tuple element. If the element is a multi-line record
+    /// type, expand it aligned to its own column (2 past the tuple's `(`).
+    fn write_tuple_elem(&mut self, elem: &Spanned<TypeAnnotation>) {
+        let elem_multi = Self::type_ann_spans_multi_lines(elem);
+        match &elem.value {
+            TypeAnnotation::Record(fields) if elem_multi && fields.len() >= 2 => {
+                self.with_extra_indent(2, |p| p.write_record_type_fields_multiline(fields, None));
+            }
+            TypeAnnotation::GenericRecord { base, fields } if elem_multi => {
+                self.with_extra_indent(2, |p| {
+                    p.write_record_type_fields_multiline(fields, Some(&base.value))
+                });
+            }
+            _ => self.write_type(&elem.value),
+        }
+    }
+
+    /// Run `f` with indent_extra bumped by `delta` columns so that
+    /// newline_indent within the closure aligns to the current column.
+    fn with_extra_indent(&mut self, delta: u32, f: impl FnOnce(&mut Self)) {
+        let saved = self.indent_extra;
+        self.indent_extra = saved + delta;
+        f(self);
+        self.indent_extra = saved;
     }
 
     /// Emit one `-> <arm>` step of a multi-line function type. When the arm
