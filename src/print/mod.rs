@@ -1599,15 +1599,15 @@ impl Printer {
                     && matches!(operator.as_str(), "|>" | "|." | "|=")
                     && let Some((head, rest)) = flatten_mixed_pipe_chain(expr)
                 {
-                    let any_ml = self.is_multiline(head)
-                        || rest.iter().any(|(_, op)| self.is_multiline(op))
+                    let any_ml = self.is_multiline(&head.value)
+                        || rest.iter().any(|(_, op)| self.is_multiline(&op.value))
                         || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
                         // When the pipe chain goes vertical and its head is
                         // itself a binop chain (e.g. `a ++ b |> f`), elm-
                         // format flattens the head's operators into the same
                         // vertical layout at the same indent column.
-                        let (real_head, head_rest) = match flatten_as_chain(head) {
+                        let (real_head, head_rest) = match flatten_as_chain(&head.value) {
                             Some(x) => x,
                             None => (head, Vec::new()),
                         };
@@ -1664,8 +1664,8 @@ impl Printer {
                     && matches!(operator.as_str(), "::" | "++")
                     && let Some((head, rest)) = flatten_mixed_cons_append_chain(expr)
                 {
-                    let any_ml = self.is_multiline(head)
-                        || rest.iter().any(|(_, e)| self.is_multiline(e))
+                    let any_ml = self.is_multiline(&head.value)
+                        || rest.iter().any(|(_, e)| self.is_multiline(&e.value))
                         || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
                         let outer_chain = self.in_vertical_chain;
@@ -1692,7 +1692,7 @@ impl Printer {
                     && matches!(operator.as_str(), ">>" | "<<")
                     && let Some(chain) = flatten_right_assoc_chain(expr, operator)
                 {
-                    let any_ml = chain.iter().any(|op| self.is_multiline(op))
+                    let any_ml = chain.iter().any(|op| self.is_multiline(&op.value))
                         || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
                         let outer_chain = self.in_vertical_chain;
@@ -1724,8 +1724,8 @@ impl Printer {
                     && matches!(operator.as_str(), "+" | "-" | "*" | "/" | "//")
                     && let Some((head, rest)) = flatten_mixed_arithmetic_chain(expr)
                 {
-                    let any_ml = self.is_multiline(head)
-                        || rest.iter().any(|(_, op)| self.is_multiline(op))
+                    let any_ml = self.is_multiline(&head.value)
+                        || rest.iter().any(|(_, op)| self.is_multiline(&op.value))
                         || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
                         let outer_chain = self.in_vertical_chain;
@@ -1756,8 +1756,8 @@ impl Printer {
                     && matches!(operator.as_str(), "&&" | "||")
                     && let Some((head, rest)) = flatten_mixed_logical_chain(expr)
                 {
-                    let any_ml = self.is_multiline(head)
-                        || rest.iter().any(|(_, e)| self.is_multiline(e))
+                    let any_ml = self.is_multiline(&head.value)
+                        || rest.iter().any(|(_, e)| self.is_multiline(&e.value))
                         || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
                         let outer_chain = self.in_vertical_chain;
@@ -1790,7 +1790,7 @@ impl Printer {
                 };
                 self.write_leading_comments(&left.comments);
                 let left_multiline = self.is_pretty() && self.is_multiline(&left.value);
-                self.write_expr_operand(&left.value, operator, true);
+                self.write_expr_operand(left.as_ref(), operator, true);
                 if use_vertical && operator == "<|" {
                     // Left-pipe: operator stays on same line as left operand,
                     // right operand goes on a new indented line. `<|` does
@@ -1848,7 +1848,7 @@ impl Printer {
                     self.write(operator);
                     self.write_char(' ');
                     self.write_leading_comments(&right.comments);
-                    self.write_expr_operand(right_expr, operator, false);
+                    self.write_expr_operand(right.as_ref(), operator, false);
                     if !outer_chain {
                         self.dedent();
                     }
@@ -1862,7 +1862,7 @@ impl Printer {
                     if operator == "<|" {
                         self.write_expr_inner(right_expr);
                     } else {
-                        self.write_expr_operand(right_expr, operator, false);
+                        self.write_expr_operand(right.as_ref(), operator, false);
                     }
                 }
             }
@@ -1933,11 +1933,12 @@ impl Printer {
     }
 
     /// Write an operator operand, adding parens for precedence.
-    fn write_expr_operand(&mut self, expr: &Expr, parent_op: &str, is_left: bool) {
+    fn write_expr_operand(&mut self, spanned: &Spanned<Expr>, parent_op: &str, is_left: bool) {
+        self.expr_span_stack.push(spanned.span);
         let expr = if self.is_pretty() {
-            unwrap_parens_non_block(expr)
+            unwrap_parens_non_block(&spanned.value)
         } else {
-            expr
+            &spanned.value
         };
         match expr {
             Expr::OperatorApplication { operator, .. } => {
@@ -1959,6 +1960,7 @@ impl Printer {
             }
             _ => self.write_expr_app(expr),
         }
+        self.expr_span_stack.pop();
     }
 
     /// Write a function application or negation.
