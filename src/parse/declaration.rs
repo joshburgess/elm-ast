@@ -119,7 +119,9 @@ fn parse_function_with_signature(
     }
 
     p.expect(&Token::Equals)?;
-    let body = parse_expr(p)?;
+    let body_snapshot = p.pending_comments_snapshot();
+    let mut body = parse_expr(p)?;
+    super::expr::attach_pre_body_comments(p, &mut body, body_snapshot);
 
     let implementation = FunctionImplementation { name, args, body };
 
@@ -150,7 +152,9 @@ fn parse_function_no_signature(
     }
 
     p.expect(&Token::Equals)?;
-    let body = parse_expr(p)?;
+    let body_snapshot = p.pending_comments_snapshot();
+    let mut body = parse_expr(p)?;
+    super::expr::attach_pre_body_comments(p, &mut body, body_snapshot);
 
     let implementation = FunctionImplementation { name, args, body };
 

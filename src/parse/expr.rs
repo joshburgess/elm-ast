@@ -650,7 +650,7 @@ fn if_after_then(
 /// Take comments collected since `snapshot` that appear before `body.span.start`
 /// and prepend them as leading comments on `body`. Comments after the body
 /// stay in the pending buffer for the next enclosing context to claim.
-fn attach_pre_body_comments(p: &mut Parser, body: &mut Spanned<Expr>, snapshot: usize) {
+pub(super) fn attach_pre_body_comments(p: &mut Parser, body: &mut Spanned<Expr>, snapshot: usize) {
     let body_start = body.span.start.offset;
     let pending = p.take_pending_comments_since(snapshot);
     if pending.is_empty() {

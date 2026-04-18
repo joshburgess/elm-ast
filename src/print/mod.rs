@@ -900,6 +900,9 @@ impl Printer {
         self.write(" =");
         self.indent();
         self.newline_indent();
+        if !imp.body.comments.is_empty() {
+            self.write_leading_comments(&imp.body.comments);
+        }
         // At the top of a value definition RHS, parens around an operator
         // application are always redundant. elm-format strips them.
         let body = if self.is_pretty() {
