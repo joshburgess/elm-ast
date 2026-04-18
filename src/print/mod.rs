@@ -3067,7 +3067,34 @@ impl Printer {
                 }
             }
             Literal::Float(f) => {
-                let s = f.to_string();
+                let decimal = f.to_string();
+                // Rust's Display impl picks between decimal and scientific.
+                // For very small / very large magnitudes it can produce a long
+                // stream of zeros (`0.000...01`, `6022...000`); elm-format
+                // keeps the literal in scientific form in those cases. Fall
+                // back to `{:e}` when the decimal form has a long run of
+                // zeros.
+                let has_long_zero_run = {
+                    let bytes = decimal.as_bytes();
+                    let mut run = 0usize;
+                    let mut max = 0usize;
+                    for &b in bytes {
+                        if b == b'0' {
+                            run += 1;
+                            if run > max {
+                                max = run;
+                            }
+                        } else {
+                            run = 0;
+                        }
+                    }
+                    max >= 10
+                };
+                let s = if has_long_zero_run {
+                    format!("{:e}", f)
+                } else {
+                    decimal
+                };
                 if s.contains('.') {
                     self.write(&s);
                 } else if let Some(e_pos) = s.find(['e', 'E']) {
