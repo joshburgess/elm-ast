@@ -1,6 +1,6 @@
 [package]
 name = "elm-ast"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "A syn-quality Rust library for parsing and constructing Elm 0.19.1 ASTs"
 license = "MIT OR Apache-2.0"
