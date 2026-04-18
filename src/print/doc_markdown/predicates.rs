@@ -316,6 +316,12 @@ pub(in crate::print) fn looks_like_simple_expr_line(trimmed: &str) -> bool {
     if contains_sentence_period(trimmed) {
         return false;
     }
+    // Reject markdown ordered-list items: `N. text` or `N.` alone.
+    // These collide with Elm decimal-literal lookahead and shouldn't be
+    // treated as expressions.
+    if looks_like_ordered_list_item(trimmed) {
+        return false;
+    }
     // Must begin with identifier (lower/upper) or opening delimiter.
     let first = match trimmed.chars().next() {
         Some(c) => c,
@@ -408,6 +414,30 @@ pub(in crate::print) fn looks_like_simple_expr_line(trimmed: &str) -> bool {
         return false;
     }
     true
+}
+
+/// True if the line is a markdown ordered-list item:
+///   "1. text" or "2." (number-dot with optional following content).
+/// These look like Elm decimals but aren't valid standalone syntax.
+fn looks_like_ordered_list_item(s: &str) -> bool {
+    let mut chars = s.chars();
+    let first = match chars.next() {
+        Some(c) if c.is_ascii_digit() => c,
+        _ => return false,
+    };
+    let _ = first;
+    // Consume additional digits.
+    let mut rest = &s[1..];
+    while rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        rest = &rest[1..];
+    }
+    // Must be followed by `.`.
+    if !rest.starts_with('.') {
+        return false;
+    }
+    // After the dot: either end of line or a space.
+    let after_dot = &rest[1..];
+    after_dot.is_empty() || after_dot.starts_with(' ')
 }
 
 /// True if the line contains a period followed by a space where the char
