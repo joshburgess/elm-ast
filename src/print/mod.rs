@@ -950,11 +950,18 @@ impl Printer {
 
     fn write_value_constructor(&mut self, ctor: &ValueConstructor) {
         self.write(&ctor.name.value);
+        // Only force multi-line constructor layout when an arg's printed
+        // form will genuinely span multiple lines. Function types,
+        // tuples, and applied types are always printed single-line via
+        // `write_type_atomic`, so forcing a break after the ctor name
+        // would be rewrapped by elm-format into a single line, breaking
+        // round-trip stability. Records with >=2 fields are the only
+        // arg kind that reliably print multi-line.
         let any_multiline = self.is_pretty()
-            && ctor
-                .args
-                .iter()
-                .any(|a| Self::type_ann_spans_multi_lines(a));
+            && ctor.args.iter().any(|a| {
+                Self::type_ann_spans_multi_lines(a)
+                    && matches!(&a.value, TypeAnnotation::Record(fs) if fs.len() >= 2)
+            });
         if any_multiline {
             self.indent();
             for arg in &ctor.args {
