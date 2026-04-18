@@ -118,7 +118,17 @@ pub(in crate::print) fn escape_bullet_leading_underscore(line: &str, marker_len:
     out.push_str(prefix);
     let mut in_link_text = false;
     let mut prev_raw: Option<u8> = None;
-    for (i, &b) in bytes.iter().enumerate() {
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        // Non-ASCII: copy the whole UTF-8 sequence and advance by its length.
+        if b >= 0x80 {
+            let seq_len = utf8_seq_len(b);
+            out.push_str(std::str::from_utf8(&bytes[i..i + seq_len]).unwrap_or(""));
+            prev_raw = Some(b);
+            i += seq_len;
+            continue;
+        }
         match b {
             b'[' if !in_link_text => in_link_text = true,
             b']' if in_link_text => in_link_text = false,
@@ -160,8 +170,24 @@ pub(in crate::print) fn escape_bullet_leading_underscore(line: &str, marker_len:
         }
         out.push(b as char);
         prev_raw = Some(b);
+        i += 1;
     }
     out
+}
+
+fn utf8_seq_len(first_byte: u8) -> usize {
+    if first_byte < 0x80 {
+        1
+    } else if first_byte < 0xC0 {
+        // Continuation byte alone; treat as 1 to avoid infinite loop.
+        1
+    } else if first_byte < 0xE0 {
+        2
+    } else if first_byte < 0xF0 {
+        3
+    } else {
+        4
+    }
 }
 
 /// Convert fenced code blocks (triple-backtick) to indented code blocks.
