@@ -258,7 +258,11 @@ pub fn walk_expr_mut<V: VisitMut + ?Sized>(v: &mut V, expr: &mut Spanned<Expr>) 
 
         Expr::Parenthesized(inner) => v.visit_expr_mut(inner),
 
-        Expr::LetIn { declarations, body } => {
+        Expr::LetIn {
+            declarations,
+            body,
+            trailing_comments: _,
+        } => {
             for decl in declarations {
                 v.visit_let_declaration_mut(decl);
             }

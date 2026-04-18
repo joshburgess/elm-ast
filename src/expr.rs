@@ -85,9 +85,18 @@ pub enum Expr {
     /// in
     ///     x + y
     /// ```
+    ///
+    /// `trailing_comments` captures any comments that appear between the
+    /// last declaration and the `in` keyword. elm-format preserves them
+    /// as a dangling block at the end of the let body.
     LetIn {
         declarations: Vec<Spanned<LetDeclaration>>,
         body: Box<Spanned<Expr>>,
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Vec::is_empty")
+        )]
+        trailing_comments: Vec<Spanned<Comment>>,
     },
 
     /// Case-of expression:

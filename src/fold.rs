@@ -311,12 +311,17 @@ pub fn fold_expr<F: Fold + ?Sized>(f: &mut F, expr: Spanned<Expr>) -> Spanned<Ex
 
         Expr::Parenthesized(inner) => Expr::Parenthesized(Box::new(f.fold_expr(*inner))),
 
-        Expr::LetIn { declarations, body } => Expr::LetIn {
+        Expr::LetIn {
+            declarations,
+            body,
+            trailing_comments,
+        } => Expr::LetIn {
             declarations: declarations
                 .into_iter()
                 .map(|d| f.fold_let_declaration(d))
                 .collect(),
             body: Box::new(f.fold_expr(*body)),
+            trailing_comments,
         },
 
         Expr::CaseOf {

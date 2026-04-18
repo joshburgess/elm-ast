@@ -920,6 +920,9 @@ fn let_next_decl(
         || (!p.in_paren_context() && p.current_column() < decl_col)
         || (!p.in_paren_context() && p.current_column() < let_col + 1)
     {
+        // Any comments captured between the last declaration and the `in`
+        // keyword stick to the let block as trailing comments.
+        let trailing_comments = p.take_pending_comments_since(comments_snapshot);
         p.expect(&Token::In)?;
         // Clear app_context_col for the `in` body.
         p.app_context_col = None;
@@ -932,6 +935,7 @@ fn let_next_decl(
                 Expr::LetIn {
                     declarations,
                     body: Box::new(body),
+                    trailing_comments,
                 },
             )))
         })));

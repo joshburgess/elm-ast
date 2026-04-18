@@ -712,10 +712,7 @@ x =
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
-            Expr::LetIn {
-                declarations,
-                body: _,
-            } => {
+            Expr::LetIn { declarations, .. } => {
                 assert_eq!(declarations.len(), 1);
             }
             other => panic!("expected LetIn, got {other:?}"),

@@ -2154,8 +2154,12 @@ impl Printer {
             } => {
                 self.write_case_expr(&subject.value, branches);
             }
-            Expr::LetIn { declarations, body } => {
-                self.write_let_expr(declarations, body);
+            Expr::LetIn {
+                declarations,
+                body,
+                trailing_comments,
+            } => {
+                self.write_let_expr(declarations, body, trailing_comments);
             }
             Expr::Lambda { args, body } => {
                 self.write_lambda(args, body);
@@ -3046,7 +3050,12 @@ impl Printer {
         self.dedent();
     }
 
-    fn write_let_expr(&mut self, declarations: &[Spanned<LetDeclaration>], body: &Spanned<Expr>) {
+    fn write_let_expr(
+        &mut self,
+        declarations: &[Spanned<LetDeclaration>],
+        body: &Spanned<Expr>,
+        trailing_comments: &[Spanned<Comment>],
+    ) {
         if self.is_pretty() {
             let let_col = self.current_column();
             let saved_indent = self.indent;
@@ -3066,6 +3075,13 @@ impl Printer {
                 self.write_leading_comments(&decl.comments);
                 self.write_let_declaration(&decl.value);
             }
+            if !trailing_comments.is_empty() {
+                self.newline();
+                for c in trailing_comments {
+                    self.newline_indent();
+                    self.write_comment(&c.value);
+                }
+            }
             self.dedent();
             self.newline_indent();
             self.write("in");
@@ -3084,6 +3100,12 @@ impl Printer {
             self.newline_indent();
             self.write_leading_comments(&decl.comments);
             self.write_let_declaration(&decl.value);
+        }
+        if !trailing_comments.is_empty() {
+            for c in trailing_comments {
+                self.newline_indent();
+                self.write_comment(&c.value);
+            }
         }
         self.dedent();
         self.newline_indent();
