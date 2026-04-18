@@ -307,7 +307,7 @@ fn block_mixes_decls_and_bare_exprs(block_lines: &[&str]) -> bool {
         }
         if looks_like_code_block_decl(trimmed) {
             has_decl = true;
-        } else if looks_like_assertion(trimmed) {
+        } else if line_looks_like_bare_expression(trimmed) {
             has_bare = true;
         }
         if has_decl && has_bare {
@@ -315,6 +315,53 @@ fn block_mixes_decls_and_bare_exprs(block_lines: &[&str]) -> bool {
         }
     }
     false
+}
+
+/// Accept any line that starts like an Elm expression: identifiers, literals,
+/// opening brackets/braces/parens, backslash lambdas, or leading negation.
+fn line_looks_like_bare_expression(trimmed: &str) -> bool {
+    // Reject block comment markers — a line like `{-| pair of values -}`
+    // starts with `{` but is not an expression.
+    if trimmed.starts_with("{-") {
+        return false;
+    }
+    let first = match trimmed.chars().next() {
+        Some(c) => c,
+        None => return false,
+    };
+    let starter_ok = first.is_ascii_alphabetic()
+        || first.is_ascii_digit()
+        || first == '_'
+        || first == '('
+        || first == '['
+        || first == '{'
+        || first == '\''
+        || first == '"'
+        || first == '\\'
+        || first == '-';
+    if !starter_ok {
+        return false;
+    }
+    // `-` only valid as leading negation when followed by a digit or paren.
+    if first == '-' {
+        let second = trimmed.chars().nth(1);
+        match second {
+            Some(c) if c.is_ascii_digit() || c == '(' => {}
+            _ => return false,
+        }
+    }
+    // Reject keyword-led lines that aren't expressions.
+    let first_word_end = trimmed
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '.')
+        .unwrap_or(trimmed.len());
+    let first_word = &trimmed[..first_word_end];
+    match first_word {
+        "type" | "port" | "module" | "import" | "exposing" | "effect" | "infix" => {
+            return false;
+        }
+        _ => {}
+    }
+    true
 }
 
 pub(in crate::print) fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
