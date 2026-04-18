@@ -1925,6 +1925,42 @@ impl Printer {
                     }
                 }
 
+                // Mixed comparison+arithmetic chains (e.g. doc-comment
+                // assertion reparses `14 / 4 == 3.5 - 1 / 4`). elm-format
+                // lays every operator at the same indent column regardless
+                // of precedence. Must run before the arithmetic-only
+                // flattener since the top operator here is `==`.
+                if self.is_pretty()
+                    && matches!(
+                        operator.as_str(),
+                        "==" | "/=" | "<" | ">" | "<=" | ">=" | "+" | "-" | "*" | "/" | "//"
+                    )
+                    && let Some((head, rest)) = flatten_mixed_comparison_arithmetic_chain(expr)
+                {
+                    let any_ml = self.is_multiline(&head.value)
+                        || rest.iter().any(|(_, e)| self.is_multiline(&e.value))
+                        || Self::spans_cross_lines(left.span, right.span);
+                    if any_ml {
+                        let outer_chain = self.in_vertical_chain;
+                        self.write_expr_operand(head, operator, true);
+                        if !outer_chain {
+                            self.indent();
+                        }
+                        self.in_vertical_chain = true;
+                        for (op, operand) in &rest {
+                            self.newline_indent();
+                            self.write(op);
+                            self.write_char(' ');
+                            self.write_expr_operand(operand, op, false);
+                        }
+                        self.in_vertical_chain = outer_chain;
+                        if !outer_chain {
+                            self.dedent();
+                        }
+                        return;
+                    }
+                }
+
                 // Arithmetic operators `+` `-` `*` `/` `//` sit at two
                 // precedences (6 and 7). Mixed chains (`a - k * p`) parse
                 // with the higher-precedence op nested inside, but
@@ -3104,7 +3140,7 @@ impl Printer {
                             run = 0;
                         }
                     }
-                    max >= 10
+                    max >= 18
                 };
                 let s = if has_long_zero_run {
                     format!("{:e}", f)

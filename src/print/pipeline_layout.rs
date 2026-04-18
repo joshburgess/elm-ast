@@ -174,6 +174,36 @@ pub(super) fn flatten_mixed_arithmetic_chain<'a>(
     flatten_mixed_bidir_chain(expr, &|op| matches!(op, "+" | "-" | "*" | "/" | "//"))
 }
 
+/// Flatten a chain of mixed comparison + arithmetic operators. When a chain
+/// contains comparison operators (`==`, `/=`, `<`, `>`, `<=`, `>=`) sitting
+/// above arithmetic operators (`+`, `-`, `*`, `/`, `//`), elm-format lays
+/// every operator out at the same indent column rather than nesting based on
+/// precedence. This is relevant for doc-comment assertion reparses like
+/// `14 / 4 == 3.5 - 1 / 4 == -0.25`.
+pub(super) fn flatten_mixed_comparison_arithmetic_chain<'a>(
+    expr: &'a Expr,
+) -> Option<(&'a Spanned<Expr>, Vec<(&'a str, &'a Spanned<Expr>)>)> {
+    let result = flatten_mixed_bidir_chain(expr, &|op| {
+        matches!(
+            op,
+            "==" | "/=" | "<" | ">" | "<=" | ">=" | "+" | "-" | "*" | "/" | "//"
+        )
+    })?;
+    let has_comparison = result
+        .1
+        .iter()
+        .any(|(op, _)| matches!(*op, "==" | "/=" | "<" | ">" | "<=" | ">="));
+    let has_arithmetic = result
+        .1
+        .iter()
+        .any(|(op, _)| matches!(*op, "+" | "-" | "*" | "/" | "//"));
+    if has_comparison && has_arithmetic {
+        Some(result)
+    } else {
+        None
+    }
+}
+
 /// Try to further flatten `expr` as any operator chain (cons/append,
 /// logical, arithmetic, compose). Used by the pipe-chain printer: when a
 /// pipe chain goes vertical and its head is itself a binop chain,
