@@ -322,6 +322,13 @@ pub(in crate::print) fn looks_like_simple_expr_line(trimmed: &str) -> bool {
     if looks_like_ordered_list_item(trimmed) {
         return false;
     }
+    // Reject lines containing a bare ` -> ` arrow outside strings/chars.
+    // A standalone line with `->` is typically a case-arm or lambda
+    // body with missing context (e.g. `0.5 -> half speed` in a doc
+    // block), not a valid top-level expression.
+    if contains_bare_arrow(trimmed) {
+        return false;
+    }
     // Must begin with identifier (lower/upper) or opening delimiter.
     let first = match trimmed.chars().next() {
         Some(c) => c,
@@ -414,6 +421,58 @@ pub(in crate::print) fn looks_like_simple_expr_line(trimmed: &str) -> bool {
         return false;
     }
     true
+}
+
+/// True if the line contains a bare ` -> ` arrow outside of string and
+/// char literals. Such lines are almost always case-arm or lambda bodies
+/// that need external context to parse.
+fn contains_bare_arrow(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if c == '\\' {
+                esc = true;
+            } else if c == '\'' {
+                in_char = false;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '\'' => in_char = true,
+            '-' if i + 2 < bytes.len()
+                && bytes[i + 1] == b'>'
+                && bytes[i + 2] == b' '
+                && i > 0
+                && bytes[i - 1] == b' ' =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 /// True if the line is a markdown ordered-list item:
