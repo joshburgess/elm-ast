@@ -216,12 +216,33 @@ fn parse_custom_type(p: &mut Parser, doc: Option<Spanned<String>>) -> ParseResul
 
     p.expect(&Token::Equals)?;
 
-    // Parse constructors separated by `|`.
+    // Parse constructors separated by `|`. Capture any line/block comments
+    // that appear between the pipe and the next constructor as leading
+    // comments on that constructor.
+    let start_snapshot = p.pending_comments_snapshot();
     let mut constructors = Vec::new();
     constructors.push(parse_value_constructor(p)?);
 
     while p.eat(&Token::Pipe) {
-        constructors.push(parse_value_constructor(p)?);
+        let mut ctor = parse_value_constructor(p)?;
+
+        let prev_end = constructors.last().unwrap().span.end.offset;
+        // Use the constructor NAME's start, not the outer span's start —
+        // the outer start is captured before skip_whitespace, which would
+        // put it at the position of any preceding block comment and make
+        // the comment fail the `end <= ctor_start` filter below.
+        let ctor_start = ctor.value.name.span.start.offset;
+        let all = p.take_pending_comments_since(start_snapshot);
+        let (leading, other): (Vec<_>, Vec<_>) = all.into_iter().partition(|c| {
+            c.span.start.offset > prev_end && c.span.end.offset <= ctor_start
+        });
+        p.restore_pending_comments(other);
+        if !leading.is_empty() {
+            let mut all_leading = leading;
+            all_leading.extend(std::mem::take(&mut ctor.comments));
+            ctor.comments = all_leading;
+        }
+        constructors.push(ctor);
     }
 
     Ok(CustomType {

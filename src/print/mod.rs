@@ -949,10 +949,33 @@ impl Printer {
         }
         self.indent();
         for (i, ctor) in ct.constructors.iter().enumerate() {
-            self.newline_indent();
+            let has_line_comment = ctor
+                .comments
+                .iter()
+                .any(|c| matches!(c.value, Comment::Line(_)));
+
+            let _ = has_line_comment;
             if i == 0 {
+                self.newline_indent();
                 self.write("= ");
+                for c in &ctor.comments {
+                    self.write_comment(&c.value);
+                    self.newline();
+                    self.write_indent();
+                    self.write("  ");
+                }
             } else {
+                // elm-format places both line AND block comments between
+                // constructors at the constructor-name column (indent + 2),
+                // on their own line(s), with NO blank line before, and then
+                // emits `| Ctor` on the next line.
+                for c in &ctor.comments {
+                    self.newline();
+                    self.write_indent();
+                    self.write("  ");
+                    self.write_comment(&c.value);
+                }
+                self.newline_indent();
                 self.write("| ");
             }
             self.write_value_constructor(&ctor.value);
