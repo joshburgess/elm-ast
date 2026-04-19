@@ -273,6 +273,7 @@ pub fn walk_expr<V: Visit + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
 
         Expr::List {
             elements,
+            element_inline_comments: _,
             trailing_comments: _,
         } => {
             for elem in elements {

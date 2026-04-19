@@ -1328,6 +1328,7 @@ fn parse_list_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
             start,
             Expr::List {
                 elements: Vec::new(),
+                element_inline_comments: Vec::new(),
                 trailing_comments: Vec::new(),
             },
         )));
@@ -1339,8 +1340,45 @@ fn parse_list_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
 
     // Need first element
     Ok(Step::NeedExpr(Box::new(move |p, first| {
-        list_after_element(p, start, bracket_col, Vec::new(), first, elem_snapshot)
+        list_after_element(
+            p,
+            start,
+            bracket_col,
+            Vec::new(),
+            Vec::new(),
+            first,
+            elem_snapshot,
+        )
     })))
+}
+
+/// Capture an inline trailing `-- comment` sitting on the same source line
+/// as `elem` (between `elem` end and the next `,` / `]`). Such a comment
+/// would otherwise be parked in `pending_comments` and attach to the next
+/// element as a leading comment, which breaks elm-format's layout:
+///     [ a -- inline
+///     , b
+///     ]
+fn take_element_inline_trailing(
+    p: &mut Parser,
+    elem: &Spanned<Expr>,
+) -> Option<Spanned<Comment>> {
+    let elem_end_line = elem.span.end.line;
+    let all = p.take_pending_comments_since(0);
+    let mut inline: Option<Spanned<Comment>> = None;
+    let mut keep: Vec<Spanned<Comment>> = Vec::with_capacity(all.len());
+    for c in all {
+        if inline.is_none()
+            && c.span.start.line == elem_end_line
+            && c.span.start.offset >= elem.span.end.offset
+        {
+            inline = Some(c);
+        } else {
+            keep.push(c);
+        }
+    }
+    p.restore_pending_comments(keep);
+    inline
 }
 
 fn list_after_element(
@@ -1348,6 +1386,7 @@ fn list_after_element(
     start: Position,
     bracket_col: u32,
     mut elements: Vec<Spanned<Expr>>,
+    mut element_inline_comments: Vec<Option<Spanned<Comment>>>,
     mut elem: Spanned<Expr>,
     elem_snapshot: usize,
 ) -> ParseResult<Step> {
@@ -1358,18 +1397,30 @@ fn list_after_element(
     // moved onto `elem`, so they won't leak into the next element.
     let next_snapshot = elem_snapshot;
     attach_pre_body_comments(p, &mut elem, elem_snapshot);
+    // Peek for an inline same-line trailing comment on this element before
+    // looking at `,` / `]`.
+    let inline = take_element_inline_trailing(p, &elem);
+    element_inline_comments.push(inline);
     elements.push(elem);
     if p.eat(&Token::Comma) {
         // Re-set the context column for the next element.
         p.app_context_col = Some(bracket_col);
         Ok(Step::NeedExpr(Box::new(move |p, next| {
-            list_after_element(p, start, bracket_col, elements, next, next_snapshot)
+            list_after_element(
+                p,
+                start,
+                bracket_col,
+                elements,
+                element_inline_comments,
+                next,
+                next_snapshot,
+            )
         })))
     } else {
         // Capture comments between the last element's end and the closing `]`
         // as trailing comments on the List. Only comments strictly on a later
         // line than the last element qualify — inline same-line comments
-        // belong to the element itself, not the list:
+        // have already been claimed as element_inline_comments above.
         //     [ a
         //     , b
         //     -- trailing     <- captured here
@@ -1382,10 +1433,18 @@ fn list_after_element(
         });
         p.restore_pending_comments(keep);
         p.expect(&Token::RightBracket)?;
+        // Drop the inline vec entirely if all None, to keep ASTs stable for
+        // files that don't use this feature.
+        let element_inline_comments = if element_inline_comments.iter().all(|c| c.is_none()) {
+            Vec::new()
+        } else {
+            element_inline_comments
+        };
         Ok(Step::Done(p.spanned_from(
             start,
             Expr::List {
                 elements,
+                element_inline_comments,
                 trailing_comments: trailing,
             },
         )))

@@ -258,6 +258,7 @@ pub fn walk_expr_mut<V: VisitMut + ?Sized>(v: &mut V, expr: &mut Spanned<Expr>) 
 
         Expr::List {
             elements,
+            element_inline_comments: _,
             trailing_comments: _,
         } => {
             for elem in elements {

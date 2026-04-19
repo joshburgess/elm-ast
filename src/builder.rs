@@ -79,6 +79,7 @@ pub fn binop(op: impl Into<String>, left: Spanned<Expr>, right: Spanned<Expr>) -
 pub fn list(elements: Vec<Spanned<Expr>>) -> Spanned<Expr> {
     spanned(Expr::List {
         elements,
+        element_inline_comments: Vec::new(),
         trailing_comments: Vec::new(),
     })
 }

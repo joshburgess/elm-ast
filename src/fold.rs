@@ -316,9 +316,11 @@ pub fn fold_expr<F: Fold + ?Sized>(f: &mut F, expr: Spanned<Expr>) -> Spanned<Ex
 
         Expr::List {
             elements,
+            element_inline_comments,
             trailing_comments,
         } => Expr::List {
             elements: elements.into_iter().map(|e| f.fold_expr(e)).collect(),
+            element_inline_comments,
             trailing_comments,
         },
 

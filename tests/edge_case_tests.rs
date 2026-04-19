@@ -2060,6 +2060,7 @@ fn display_expr_list() {
             Spanned::dummy(Expr::Literal(Literal::Int(1))),
             Spanned::dummy(Expr::Literal(Literal::Int(2))),
         ],
+        element_inline_comments: Vec::new(),
         trailing_comments: Vec::new(),
     };
     let output = format!("{list}");

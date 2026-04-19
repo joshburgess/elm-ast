@@ -163,6 +163,14 @@ pub enum Expr {
     /// ```
     List {
         elements: Vec<Spanned<Expr>>,
+        /// Inline `-- comment` that follows each element on the same source
+        /// line, e.g. `[ a -- foo\n, b -- bar\n]`. Empty, or parallel to
+        /// `elements` with `None` for elements lacking a comment.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Vec::is_empty")
+        )]
+        element_inline_comments: Vec<Option<Spanned<Comment>>>,
         #[cfg_attr(
             feature = "serde",
             serde(default, skip_serializing_if = "Vec::is_empty")

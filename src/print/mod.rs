@@ -243,11 +243,13 @@ impl Printer {
             }
             Expr::List {
                 elements,
+                element_inline_comments,
                 trailing_comments,
             } => {
                 elements.iter().any(|e| self.is_multiline(&e.value))
                     || (self.is_pretty() && Self::spans_multi_lines(elements))
                     || !trailing_comments.is_empty()
+                    || element_inline_comments.iter().any(|c| c.is_some())
             }
             Expr::Tuple(elems) => {
                 elems.iter().any(|e| self.is_multiline(&e.value))
@@ -2813,6 +2815,7 @@ impl Printer {
 
             Expr::List {
                 elements,
+                element_inline_comments,
                 trailing_comments,
             } => {
                 if elements.is_empty() {
@@ -2822,6 +2825,7 @@ impl Printer {
                         "[ ",
                         " ]",
                         elements,
+                        element_inline_comments,
                         trailing_comments,
                     );
                 }
@@ -3036,7 +3040,7 @@ impl Printer {
     /// Write a comma-separated list of expressions with adaptive layout.
     /// Uses single-line when all elements are single-line, multi-line otherwise.
     fn write_comma_sep(&mut self, open: &str, close: &str, elems: &[Spanned<Expr>]) {
-        self.write_comma_sep_inner(open, close, elems, false, &[]);
+        self.write_comma_sep_inner(open, close, elems, false, &[], &[]);
     }
 
     /// Like `write_comma_sep` but force multi-line when the enclosing span
@@ -3048,19 +3052,29 @@ impl Printer {
         close: &str,
         elems: &[Spanned<Expr>],
     ) {
-        self.write_comma_sep_inner(open, close, elems, true, &[]);
+        self.write_comma_sep_inner(open, close, elems, true, &[], &[]);
     }
 
-    /// Variant used by list printing that threads in trailing comments
-    /// sitting between the last element and the closing `]`.
+    /// Variant used by list printing that threads in per-element inline
+    /// trailing comments (same-line `-- foo` after each element) and any
+    /// block trailing comments sitting between the last element and the
+    /// closing `]`.
     fn write_comma_sep_force_multi_list(
         &mut self,
         open: &str,
         close: &str,
         elems: &[Spanned<Expr>],
+        element_inline_comments: &[Option<Spanned<Comment>>],
         trailing_comments: &[Spanned<Comment>],
     ) {
-        self.write_comma_sep_inner(open, close, elems, true, trailing_comments);
+        self.write_comma_sep_inner(
+            open,
+            close,
+            elems,
+            true,
+            element_inline_comments,
+            trailing_comments,
+        );
     }
 
     fn write_comma_sep_inner(
@@ -3069,6 +3083,7 @@ impl Printer {
         close: &str,
         elems: &[Spanned<Expr>],
         respect_outer_multi_line: bool,
+        element_inline_comments: &[Option<Spanned<Comment>>],
         trailing_comments: &[Spanned<Comment>],
     ) {
         let open_col = self.current_column();
@@ -3101,7 +3116,8 @@ impl Printer {
                 || (self.is_pretty() && Self::spans_multi_lines(elems))
                 || outer_multi_line
                 || any_elem_line_comment
-                || !trailing_comments.is_empty());
+                || !trailing_comments.is_empty()
+                || element_inline_comments.iter().any(|c| c.is_some()));
         if any_multiline && self.is_pretty() {
             // elm-format style: first element on same line as open bracket,
             // subsequent elements aligned with ", " prefix at same indent.
@@ -3150,7 +3166,12 @@ impl Printer {
             if bump_indent {
                 self.dedent();
             }
-            for elem in &elems[1..] {
+            // Inline same-line trailing comment after the first element.
+            if let Some(Some(c)) = element_inline_comments.first() {
+                self.write(" ");
+                self.write_comment(&c.value);
+            }
+            for (i, elem) in elems[1..].iter().enumerate() {
                 // Subsequent elements with leading line comments follow
                 // elm-format's layout: blank line, then the comment(s) at
                 // the open-bracket column, then the `, element` line.
@@ -3183,6 +3204,12 @@ impl Printer {
                 self.indent_extra = saved_extra;
                 if bump_indent {
                     self.dedent();
+                }
+                // Inline same-line trailing comment after this element.
+                // `i+1` because we skipped the first element above.
+                if let Some(Some(c)) = element_inline_comments.get(i + 1) {
+                    self.write(" ");
+                    self.write_comment(&c.value);
                 }
             }
             // Trailing comments between the last element and the close
@@ -3223,6 +3250,10 @@ impl Printer {
                     self.write(", ");
                 }
                 self.write_spanned_expr(&elem);
+                if let Some(Some(c)) = element_inline_comments.get(i) {
+                    self.write(" ");
+                    self.write_comment(&c.value);
+                }
             }
             for c in trailing_comments {
                 self.newline_indent();
