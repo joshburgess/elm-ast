@@ -1124,6 +1124,9 @@ fn parse_lambda_expr_cps(p: &mut Parser) -> ParseResult<Step> {
 
 fn parse_paren_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
     p.advance(); // consume `(`
+    // Snapshot BEFORE skip_whitespace so any leading line comments between
+    // `(` and the first element can be attached to the first element.
+    let first_snapshot = p.pending_comments_snapshot();
     p.skip_whitespace();
 
     // Unit: `()`
@@ -1164,7 +1167,7 @@ fn parse_paren_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
 
     // Regular parenthesized expression or tuple.
     Ok(Step::NeedExpr(Box::new(move |p, first| {
-        paren_after_first(p, start, first)
+        paren_after_first(p, start, first, first_snapshot)
     })))
 }
 
@@ -1183,7 +1186,11 @@ fn paren_neg_after_app(
             let neg_span = Span::new(minus_start, operand.span.end);
             let neg_spanned = Spanned::new(neg_span, Expr::Negation(Box::new(operand)));
             let bin_step = binary_loop(p, Vec::new(), neg_spanned)?;
-            paren_after_binary(p, paren_start, bin_step)
+            // `( -expr ... )` doesn't have a leading comment between `(`
+            // and the first expr slot, so there's nothing to attach — use
+            // the current snapshot as a no-op anchor.
+            let snap = p.pending_comments_snapshot();
+            paren_after_binary(p, paren_start, bin_step, snap)
         }
     }
 }
@@ -1192,25 +1199,34 @@ fn paren_after_binary(
     p: &mut Parser,
     paren_start: Position,
     step: Step,
+    first_snapshot: usize,
 ) -> ParseResult<Step> {
     match step {
         Step::NeedExpr(cont) => Ok(Step::NeedExpr(Box::new(move |p, sub_expr| {
             let step = cont(p, sub_expr)?;
-            paren_after_binary(p, paren_start, step)
+            paren_after_binary(p, paren_start, step, first_snapshot)
         }))),
-        Step::Done(first) => paren_after_first(p, paren_start, first),
+        Step::Done(first) => paren_after_first(p, paren_start, first, first_snapshot),
     }
 }
 
-fn paren_after_first(p: &mut Parser, start: Position, first: Spanned<Expr>) -> ParseResult<Step> {
+fn paren_after_first(
+    p: &mut Parser,
+    start: Position,
+    mut first: Spanned<Expr>,
+    first_snapshot: usize,
+) -> ParseResult<Step> {
+    attach_pre_body_comments(p, &mut first, first_snapshot);
     p.skip_whitespace();
     match p.peek() {
         Token::Comma => {
             p.advance(); // consume comma
             let elements = vec![first];
-            // Need next tuple element
+            // Snapshot BEFORE skip_whitespace / next-element parsing so
+            // comments between `,` and the next element are captured.
+            let next_snapshot = p.pending_comments_snapshot();
             Ok(Step::NeedExpr(Box::new(move |p, next| {
-                tuple_after_element(p, start, elements, next)
+                tuple_after_element(p, start, elements, next, next_snapshot)
             })))
         }
         Token::RightParen => {
@@ -1227,14 +1243,20 @@ fn tuple_after_element(
     p: &mut Parser,
     start: Position,
     mut elements: Vec<Spanned<Expr>>,
-    elem: Spanned<Expr>,
+    mut elem: Spanned<Expr>,
+    elem_snapshot: usize,
 ) -> ParseResult<Step> {
+    // Snapshot BEFORE attach_pre_body_comments so any post-body comments
+    // restored via restore_pending_comments remain visible to the next
+    // element's snapshot (see list_after_element for details).
+    let next_snapshot = elem_snapshot;
+    attach_pre_body_comments(p, &mut elem, elem_snapshot);
     elements.push(elem);
     p.skip_whitespace();
     if p.eat(&Token::Comma) {
         // More elements
         Ok(Step::NeedExpr(Box::new(move |p, next| {
-            tuple_after_element(p, start, elements, next)
+            tuple_after_element(p, start, elements, next, next_snapshot)
         })))
     } else {
         p.expect(&Token::RightParen)?;
