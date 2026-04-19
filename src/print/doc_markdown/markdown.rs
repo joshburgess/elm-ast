@@ -613,18 +613,22 @@ fn doc_comment_forces_preserve_all(lines: &[&str]) -> bool {
         // Track whether sibling blocks mix decl-flavored content with
         // bare-expression content across the whole doc; elm-format treats
         // any such doc as an "example" and preserves every block verbatim.
-        // Only count blocks that already look normalized (4-space indent,
-        // no compact tuples, etc.) — if a block needs reformatting we
-        // shouldn't preserve it just because another sibling is declish.
-        if !super::reformat::code_block_has_structural_reformat_signal(block) {
-            if super::reformat::block_looks_decl_only(block) {
-                any_decl_block = true;
-            } else if super::reformat::block_looks_bare_only(block) {
-                any_bare_block = true;
-            }
-            if any_decl_block && any_bare_block {
-                return true;
-            }
+        //
+        // For the decl-only side we only count blocks that are already
+        // normalized — a misformatted decl block is real reformat work, not
+        // a sibling signal. For the bare-expression side we count the block
+        // even if it carries compact-tuple/list syntax, because example
+        // docs commonly pair sorted imports with a bare expression that uses
+        // such syntax (e.g. Test.elm's `\(nums, target) ->` body).
+        let decl_gate_ok =
+            !super::reformat::code_block_has_structural_reformat_signal(block);
+        if decl_gate_ok && super::reformat::block_looks_decl_only(block) {
+            any_decl_block = true;
+        } else if super::reformat::block_looks_bare_only(block) {
+            any_bare_block = true;
+        }
+        if any_decl_block && any_bare_block {
+            return true;
         }
         i = block_end + 1;
     }
