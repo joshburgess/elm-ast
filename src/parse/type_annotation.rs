@@ -258,9 +258,9 @@ fn parse_record_fields(p: &mut Parser) -> ParseResult<Vec<Spanned<RecordField>>>
         let field_start = field.span.start.offset;
 
         let all = p.take_pending_comments_since(start_snapshot);
-        let (leading, other): (Vec<_>, Vec<_>) = all.into_iter().partition(|c| {
-            c.span.start.offset > prev_end && c.span.end.offset <= field_start
-        });
+        let (leading, other): (Vec<_>, Vec<_>) = all
+            .into_iter()
+            .partition(|c| c.span.start.offset > prev_end && c.span.end.offset <= field_start);
         p.restore_pending_comments(other);
 
         if !leading.is_empty() {

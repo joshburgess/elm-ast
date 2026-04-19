@@ -407,20 +407,16 @@ fn expr_eq(a: &Expr, b: &Expr) -> bool {
                     .zip(ab.iter())
                     .all(|(a, b)| expr_eq(&a.value, &b.value))
         }
-        (
-            Expr::List { elements: aa, .. },
-            Expr::List { elements: ab, .. },
-        ) => {
+        (Expr::List { elements: aa, .. }, Expr::List { elements: ab, .. }) => {
             aa.len() == ab.len()
                 && aa
                     .iter()
                     .zip(ab.iter())
                     .all(|(a, b)| expr_eq(&a.value, &b.value))
         }
-        (
-            Expr::Parenthesized { expr: a, .. },
-            Expr::Parenthesized { expr: b, .. },
-        ) => expr_eq(&a.value, &b.value),
+        (Expr::Parenthesized { expr: a, .. }, Expr::Parenthesized { expr: b, .. }) => {
+            expr_eq(&a.value, &b.value)
+        }
         // For deep comparison of case/let/lambda/record, check structural shape.
         (Expr::CaseOf { branches: ba, .. }, Expr::CaseOf { branches: bb, .. }) => {
             ba.len() == bb.len()

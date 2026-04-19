@@ -166,10 +166,7 @@ fn float_literals() {
             vec![Token::Literal(Literal::Float(3.14, None))]
         );
     }
-    assert_eq!(
-        lex("0.0"),
-        vec![Token::Literal(Literal::Float(0.0, None))]
-    );
+    assert_eq!(lex("0.0"), vec![Token::Literal(Literal::Float(0.0, None))]);
     assert_eq!(
         lex("1.0e10"),
         vec![Token::Literal(Literal::Float(1.0e10, None))]

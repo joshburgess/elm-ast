@@ -1,10 +1,10 @@
 use crate::comment::Comment;
 use crate::declaration::{CustomType, Declaration, InfixDef, TypeAlias, ValueConstructor};
-use crate::type_annotation::TypeAnnotation;
 use crate::expr::{Function, FunctionImplementation, Signature};
 use crate::node::Spanned;
 use crate::operator::InfixDirection;
 use crate::token::Token;
+use crate::type_annotation::TypeAnnotation;
 
 use super::expr::parse_expr;
 use super::pattern::parse_pattern;
@@ -310,8 +310,7 @@ fn parse_custom_type(p: &mut Parser, doc: Option<Spanned<String>>) -> ParseResul
         let mut post_pipe: Vec<Spanned<crate::comment::Comment>> = Vec::new();
         let mut other: Vec<Spanned<crate::comment::Comment>> = Vec::new();
         for c in all {
-            let in_gap =
-                c.span.start.offset > prev_end && c.span.end.offset <= ctor_name_start;
+            let in_gap = c.span.start.offset > prev_end && c.span.end.offset <= ctor_name_start;
             if !in_gap {
                 other.push(c);
             } else if c.span.start.offset < pipe_offset {
@@ -379,9 +378,7 @@ fn parse_value_constructor(p: &mut Parser) -> ParseResult<Spanned<ValueConstruct
         let mut i = pre_skip_len;
         while i < p.collected_comments.len() {
             let c = &p.collected_comments[i];
-            if c.span.start.offset >= prev_end_offset
-                && c.span.end.offset <= next_start_offset
-            {
+            if c.span.start.offset >= prev_end_offset && c.span.end.offset <= next_start_offset {
                 leading.push(p.collected_comments.remove(i));
             } else {
                 i += 1;

@@ -223,14 +223,12 @@ fn has_balanced_flanking_underscores(bytes: &[u8]) -> bool {
                 let flanking = if left_is_letter != right_is_letter {
                     true
                 } else if !left_is_letter && !right_is_letter {
-                    let prev_is_nonspace =
-                        prev.map(|c| !c.is_ascii_whitespace()).unwrap_or(false);
+                    let prev_is_nonspace = prev.map(|c| !c.is_ascii_whitespace()).unwrap_or(false);
                     let next_is_space_or_none =
                         next.map(|c| c.is_ascii_whitespace()).unwrap_or(true);
                     let prev_is_space_or_none =
                         prev.map(|c| c.is_ascii_whitespace()).unwrap_or(true);
-                    let next_is_nonspace =
-                        next.map(|c| !c.is_ascii_whitespace()).unwrap_or(false);
+                    let next_is_nonspace = next.map(|c| !c.is_ascii_whitespace()).unwrap_or(false);
                     (prev_is_nonspace && next_is_space_or_none)
                         || (prev_is_space_or_none && next_is_nonspace)
                 } else {
@@ -244,7 +242,7 @@ fn has_balanced_flanking_underscores(bytes: &[u8]) -> bool {
         prev_raw = Some(b);
         i += 1;
     }
-    count >= 2 && count % 2 == 0
+    count >= 2 && count.is_multiple_of(2)
 }
 
 fn utf8_seq_len(first_byte: u8) -> usize {
@@ -492,17 +490,16 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
 
         // This specific block mixes declarations with bare expressions — it
         // gets preserved verbatim even if sibling blocks get reformatted.
-        let block_mixes = super::reformat::block_mixes_decls_and_bare_exprs(
-            &lines[block_start..=block_end],
-        );
+        let block_mixes =
+            super::reformat::block_mixes_decls_and_bare_exprs(&lines[block_start..=block_end]);
         let preserve_this_block = doc_preserve_all || block_mixes;
 
         // Only try to reformat if the code block appears to use non-elm-format
         // indentation (e.g. 2-space indent). Code blocks already using 4-space
         // indentation are left unchanged to avoid regressions from imperfect
         // pretty printing.
-        let needs_reformat = !preserve_this_block
-            && code_block_needs_reformat(&lines[block_start..=block_end]);
+        let needs_reformat =
+            !preserve_this_block && code_block_needs_reformat(&lines[block_start..=block_end]);
 
         let reformatted = if needs_reformat {
             try_reformat_code_block(&lines[block_start..=block_end])
@@ -620,8 +617,7 @@ fn doc_comment_forces_preserve_all(lines: &[&str]) -> bool {
         // even if it carries compact-tuple/list syntax, because example
         // docs commonly pair sorted imports with a bare expression that uses
         // such syntax (e.g. Test.elm's `\(nums, target) ->` body).
-        let decl_gate_ok =
-            !super::reformat::code_block_has_structural_reformat_signal(block);
+        let decl_gate_ok = !super::reformat::code_block_has_structural_reformat_signal(block);
         if decl_gate_ok && super::reformat::block_looks_decl_only(block) {
             any_decl_block = true;
         } else if super::reformat::block_looks_bare_only(block) {

@@ -280,12 +280,6 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
     out
 }
 
-/// Check whether a code block needs reformatting.
-///
-/// Returns true if the block contains:
-/// - lines with non-4-aligned indentation (2-space indent), OR
-/// - compact list/tuple syntax that elm-format would space out
-///   (e.g., `[1,2]` -> `[ 1, 2 ]`, `(0,"a")` -> `( 0, "a" )`)
 /// Detect "mixed" code blocks: blocks containing BOTH a decl-like line
 /// (type, type alias, value decl, or type annotation) AND a bare expression
 /// at base indent. elm-format treats such blocks as verbatim examples and
@@ -486,6 +480,12 @@ fn has_same_line_triple_string_rhs(trimmed: &str) -> bool {
     true
 }
 
+/// Check whether a code block needs reformatting.
+///
+/// Returns true if the block contains:
+/// - lines with non-4-aligned indentation (2-space indent), OR
+/// - compact list/tuple syntax that elm-format would space out
+///   (e.g., `[1,2]` -> `[ 1, 2 ]`, `(0,"a")` -> `( 0, "a" )`)
 pub(in crate::print) fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
     // When a block mixes declarations with bare expressions, elm-format
     // preserves the block verbatim. Mirror that to keep compact tuples and
@@ -637,9 +637,7 @@ pub(in crate::print) fn code_block_has_narrow_indent(block_lines: &[&str]) -> bo
 /// `code_block_needs_reformat` uses — that one has false positives from
 /// legitimate deep-alignment artifacts in sample code. Use this as a gate
 /// for the cross-block "sample code doc" detector.
-pub(in crate::print) fn code_block_has_structural_reformat_signal(
-    block_lines: &[&str],
-) -> bool {
+pub(in crate::print) fn code_block_has_structural_reformat_signal(block_lines: &[&str]) -> bool {
     if block_mixes_decls_and_bare_exprs(block_lines) {
         return false;
     }
@@ -664,8 +662,9 @@ pub(in crate::print) fn code_block_has_structural_reformat_signal(
         if is_header_line {
             continue;
         }
-        if trimmed.contains('[') && trimmed.contains(']') {
-            if trimmed.contains("[\"")
+        if trimmed.contains('[')
+            && trimmed.contains(']')
+            && (trimmed.contains("[\"")
                 || trimmed.contains("[(")
                 || trimmed.contains("['")
                 || trimmed.contains("[0")
@@ -677,10 +676,9 @@ pub(in crate::print) fn code_block_has_structural_reformat_signal(
                 || trimmed.contains("[6")
                 || trimmed.contains("[7")
                 || trimmed.contains("[8")
-                || trimmed.contains("[9")
-            {
-                return true;
-            }
+                || trimmed.contains("[9"))
+        {
+            return true;
         }
         if trimmed.contains('(')
             && trimmed.contains(',')

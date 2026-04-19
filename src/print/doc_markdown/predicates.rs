@@ -919,10 +919,7 @@ pub(in crate::print) fn has_internal_ellipsis(trimmed: &str) -> bool {
     }
     let mut i = 0;
     while i + 4 <= bytes.len() {
-        if bytes[i] == b' '
-            && bytes[i + 1] == b'.'
-            && bytes[i + 2] == b'.'
-            && bytes[i + 3] == b'.'
+        if bytes[i] == b' ' && bytes[i + 1] == b'.' && bytes[i + 2] == b'.' && bytes[i + 3] == b'.'
         {
             // The `...` token is only considered "internal" when followed by
             // a non-dot, non-end character. `...` at end-of-string, or `....`
@@ -983,18 +980,17 @@ fn line_has_compact_list_or_tuple(line: &str) -> bool {
         if b == b'[' {
             // Compact list: `[` followed immediately by `"`, `'`, `(`, `[`,
             // `{`, digit, or identifier start.
-            if let Some(&next) = bytes.get(i + 1) {
-                if next == b'"'
+            if let Some(&next) = bytes.get(i + 1)
+                && (next == b'"'
                     || next == b'\''
                     || next == b'('
                     || next == b'['
                     || next == b'{'
                     || next.is_ascii_digit()
                     || next.is_ascii_alphabetic()
-                    || next == b'_'
-                {
-                    return true;
-                }
+                    || next == b'_')
+            {
+                return true;
             }
         }
         if b == b'(' {
@@ -1002,61 +998,61 @@ fn line_has_compact_list_or_tuple(line: &str) -> bool {
             // a comma before the matching `)`. Cheap heuristic: same as
             // `[` case — compact tuples almost always start with a digit or
             // identifier start.
-            if let Some(&next) = bytes.get(i + 1) {
-                if next == b'"' || next == b'\'' || next.is_ascii_digit() {
-                    // Scan forward for a comma before `)`, staying at depth 1.
-                    let mut depth = 1i32;
-                    let mut j = i + 1;
-                    let mut found_comma = false;
-                    let mut inner_str = false;
-                    let mut inner_char = false;
-                    let mut inner_esc = false;
-                    while j < bytes.len() {
-                        let c = bytes[j];
-                        if inner_esc {
-                            inner_esc = false;
-                            j += 1;
-                            continue;
-                        }
-                        if inner_str {
-                            if c == b'\\' {
-                                inner_esc = true;
-                            } else if c == b'"' {
-                                inner_str = false;
-                            }
-                            j += 1;
-                            continue;
-                        }
-                        if inner_char {
-                            if c == b'\\' {
-                                inner_esc = true;
-                            } else if c == b'\'' {
-                                inner_char = false;
-                            }
-                            j += 1;
-                            continue;
-                        }
-                        match c {
-                            b'"' => inner_str = true,
-                            b'\'' => inner_char = true,
-                            b'(' | b'[' | b'{' => depth += 1,
-                            b')' | b']' | b'}' => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    break;
-                                }
-                            }
-                            b',' if depth == 1 => {
-                                found_comma = true;
-                                break;
-                            }
-                            _ => {}
+            if let Some(&next) = bytes.get(i + 1)
+                && (next == b'"' || next == b'\'' || next.is_ascii_digit())
+            {
+                // Scan forward for a comma before `)`, staying at depth 1.
+                let mut depth = 1i32;
+                let mut j = i + 1;
+                let mut found_comma = false;
+                let mut inner_str = false;
+                let mut inner_char = false;
+                let mut inner_esc = false;
+                while j < bytes.len() {
+                    let c = bytes[j];
+                    if inner_esc {
+                        inner_esc = false;
+                        j += 1;
+                        continue;
+                    }
+                    if inner_str {
+                        if c == b'\\' {
+                            inner_esc = true;
+                        } else if c == b'"' {
+                            inner_str = false;
                         }
                         j += 1;
+                        continue;
                     }
-                    if found_comma {
-                        return true;
+                    if inner_char {
+                        if c == b'\\' {
+                            inner_esc = true;
+                        } else if c == b'\'' {
+                            inner_char = false;
+                        }
+                        j += 1;
+                        continue;
                     }
+                    match c {
+                        b'"' => inner_str = true,
+                        b'\'' => inner_char = true,
+                        b'(' | b'[' | b'{' => depth += 1,
+                        b')' | b']' | b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        b',' if depth == 1 => {
+                            found_comma = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if found_comma {
+                    return true;
                 }
             }
         }

@@ -10,12 +10,14 @@
 use crate::expr::Expr;
 use crate::node::Spanned;
 
+/// An operator chain: the initial operand plus a sequence of
+/// `(operator, operand)` pairs. Returned by the `flatten_*_chain` helpers.
+type OpChain<'a> = Option<(&'a Spanned<Expr>, Vec<(&'a str, &'a Spanned<Expr>)>)>;
+
 /// Flatten a mixed pipe chain (`|>`, `|.`, `|=`) into a list of
 /// `(operator, operand)` pairs plus the first operand. Returns `None` if
 /// `expr` is not a pipe-chain.
-pub(super) fn flatten_mixed_pipe_chain(
-    expr: &Expr,
-) -> Option<(&Spanned<Expr>, Vec<(&str, &Spanned<Expr>)>)> {
+pub(super) fn flatten_mixed_pipe_chain(expr: &Expr) -> OpChain<'_> {
     fn is_pipe(op: &str) -> bool {
         matches!(op, "|>" | "|." | "|=")
     }
@@ -28,29 +30,6 @@ pub(super) fn flatten_mixed_pipe_chain(
         } if is_pipe(operator) => {
             let (head, mut tail) =
                 flatten_mixed_pipe_chain(&left.value).unwrap_or((left.as_ref(), Vec::new()));
-            tail.push((operator.as_str(), right.as_ref()));
-            Some((head, tail))
-        }
-        _ => None,
-    }
-}
-
-/// Flatten a left-associative chain, with an operator predicate that decides
-/// which operators continue the chain. Returns the initial operand and a list
-/// of `(operator, operand)` pairs.
-pub(super) fn flatten_left_assoc_pred<'a>(
-    expr: &'a Expr,
-    pred: &impl Fn(&str) -> bool,
-) -> Option<(&'a Spanned<Expr>, Vec<(&'a str, &'a Spanned<Expr>)>)> {
-    match expr {
-        Expr::OperatorApplication {
-            operator,
-            left,
-            right,
-            ..
-        } if pred(operator) => {
-            let (head, mut tail) =
-                flatten_left_assoc_pred(&left.value, pred).unwrap_or((left.as_ref(), Vec::new()));
             tail.push((operator.as_str(), right.as_ref()));
             Some((head, tail))
         }
@@ -85,9 +64,7 @@ pub(super) fn flatten_right_assoc_chain<'a>(
 /// Flatten a right-associative chain where operators may mix between `::` and
 /// `++` (same precedence 5, right-associative in Elm). elm-format unifies
 /// such chains into one vertical layout.
-pub(super) fn flatten_mixed_cons_append_chain<'a>(
-    expr: &'a Expr,
-) -> Option<(&'a Spanned<Expr>, Vec<(&'a str, &'a Spanned<Expr>)>)> {
+pub(super) fn flatten_mixed_cons_append_chain<'a>(expr: &'a Expr) -> OpChain<'a> {
     fn is_cons_or_append(op: &str) -> bool {
         matches!(op, "::" | "++")
     }
@@ -122,10 +99,7 @@ pub(super) fn flatten_mixed_cons_append_chain<'a>(
 /// precedences, descending through both sides. elm-format lays out such
 /// mixed chains as a single vertical sequence with each operator aligned at
 /// the same indent column, regardless of the parse-tree grouping.
-fn flatten_mixed_bidir_chain<'a>(
-    expr: &'a Expr,
-    pred: &impl Fn(&str) -> bool,
-) -> Option<(&'a Spanned<Expr>, Vec<(&'a str, &'a Spanned<Expr>)>)> {
+fn flatten_mixed_bidir_chain<'a>(expr: &'a Expr, pred: &impl Fn(&str) -> bool) -> OpChain<'a> {
     match expr {
         Expr::OperatorApplication {
             operator,
@@ -157,9 +131,7 @@ fn flatten_mixed_bidir_chain<'a>(
 /// Flatten a chain of mixed `&&` / `||` operators. `&&` and `||` sit at
 /// different precedences (3 and 2), so grouping can favor either direction,
 /// but elm-format visually aligns all logical operators at the same column.
-pub(super) fn flatten_mixed_logical_chain<'a>(
-    expr: &'a Expr,
-) -> Option<(&'a Spanned<Expr>, Vec<(&'a str, &'a Spanned<Expr>)>)> {
+pub(super) fn flatten_mixed_logical_chain(expr: &Expr) -> OpChain<'_> {
     flatten_mixed_bidir_chain(expr, &|op| matches!(op, "&&" | "||"))
 }
 
@@ -168,9 +140,7 @@ pub(super) fn flatten_mixed_logical_chain<'a>(
 /// can nest either way depending on how the source was written. elm-format
 /// collapses all such mixed chains into a single vertical layout with every
 /// operator at the same indent column.
-pub(super) fn flatten_mixed_arithmetic_chain<'a>(
-    expr: &'a Expr,
-) -> Option<(&'a Spanned<Expr>, Vec<(&'a str, &'a Spanned<Expr>)>)> {
+pub(super) fn flatten_mixed_arithmetic_chain(expr: &Expr) -> OpChain<'_> {
     flatten_mixed_bidir_chain(expr, &|op| matches!(op, "+" | "-" | "*" | "/" | "//"))
 }
 
@@ -180,9 +150,7 @@ pub(super) fn flatten_mixed_arithmetic_chain<'a>(
 /// every operator out at the same indent column rather than nesting based on
 /// precedence. This is relevant for doc-comment assertion reparses like
 /// `14 / 4 == 3.5 - 1 / 4 == -0.25`.
-pub(super) fn flatten_mixed_comparison_arithmetic_chain<'a>(
-    expr: &'a Expr,
-) -> Option<(&'a Spanned<Expr>, Vec<(&'a str, &'a Spanned<Expr>)>)> {
+pub(super) fn flatten_mixed_comparison_arithmetic_chain(expr: &Expr) -> OpChain<'_> {
     let result = flatten_mixed_bidir_chain(expr, &|op| {
         matches!(
             op,
@@ -209,9 +177,7 @@ pub(super) fn flatten_mixed_comparison_arithmetic_chain<'a>(
 /// pipe chain goes vertical and its head is itself a binop chain,
 /// elm-format lays out every operator at the same indent column. Returns
 /// `None` if `expr` isn't a chainable operator application.
-pub(super) fn flatten_as_chain<'a>(
-    expr: &'a Expr,
-) -> Option<(&'a Spanned<Expr>, Vec<(&'a str, &'a Spanned<Expr>)>)> {
+pub(super) fn flatten_as_chain(expr: &Expr) -> OpChain<'_> {
     match expr {
         Expr::OperatorApplication { operator, .. } => {
             let op = operator.as_str();

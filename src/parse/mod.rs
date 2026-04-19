@@ -323,10 +323,7 @@ impl Parser {
                 _ => return self.tokens[i].span.start.offset,
             }
         }
-        self.tokens
-            .last()
-            .map(|t| t.span.end.offset)
-            .unwrap_or(0)
+        self.tokens.last().map(|t| t.span.end.offset).unwrap_or(0)
     }
 
     /// Peek ahead past whitespace, returning the next non-whitespace token

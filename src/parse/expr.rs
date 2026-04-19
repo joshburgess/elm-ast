@@ -1,8 +1,8 @@
+use crate::comment::Comment;
 use crate::expr::{
     CaseBranch, Expr, Function, FunctionImplementation, IfBranch, LetDeclaration, RecordSetter,
     Signature,
 };
-use crate::comment::Comment;
 use crate::node::Spanned;
 use crate::operator::InfixDirection;
 use crate::span::{Position, Span};
@@ -1359,10 +1359,7 @@ fn parse_list_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
 ///     [ a -- inline
 ///     , b
 ///     ]
-fn take_element_inline_trailing(
-    p: &mut Parser,
-    elem: &Spanned<Expr>,
-) -> Option<Spanned<Comment>> {
+fn take_element_inline_trailing(p: &mut Parser, elem: &Spanned<Expr>) -> Option<Spanned<Comment>> {
     let elem_end_line = elem.span.end.line;
     let all = p.take_pending_comments_since(0);
     let mut inline: Option<Spanned<Comment>> = None;
@@ -1428,9 +1425,9 @@ fn list_after_element(
         let last_line = elements.last().map(|e| e.span.end.line).unwrap_or(0);
         let rbracket_line = p.peek_span().start.line;
         let all = p.take_pending_comments_since(0);
-        let (trailing, keep): (Vec<_>, Vec<_>) = all.into_iter().partition(|c| {
-            c.span.start.line > last_line && c.span.end.line < rbracket_line
-        });
+        let (trailing, keep): (Vec<_>, Vec<_>) = all
+            .into_iter()
+            .partition(|c| c.span.start.line > last_line && c.span.end.line < rbracket_line);
         p.restore_pending_comments(keep);
         p.expect(&Token::RightBracket)?;
         // Drop the inline vec entirely if all None, to keep ASTs stable for
@@ -1526,6 +1523,7 @@ fn record_parse_setter(
     })))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_after_value(
     p: &mut Parser,
     rec_start: Position,
@@ -1560,9 +1558,7 @@ fn record_after_value(
     let mut i = 0;
     while i < p.collected_comments.len() {
         let c = &p.collected_comments[i];
-        if c.span.start.offset >= prev_boundary_offset
-            && c.span.end.offset <= field_start_offset
-        {
+        if c.span.start.offset >= prev_boundary_offset && c.span.end.offset <= field_start_offset {
             leading.push(p.collected_comments.remove(i));
         } else {
             i += 1;
@@ -1576,9 +1572,7 @@ fn record_after_value(
     let mut i = 0;
     while i < p.collected_comments.len() {
         let c = &p.collected_comments[i];
-        if c.span.start.offset >= field_start_offset
-            && c.span.end.offset <= value_start_offset
-        {
+        if c.span.start.offset >= field_start_offset && c.span.end.offset <= value_start_offset {
             value_leading.push(p.collected_comments.remove(i));
         } else {
             i += 1;

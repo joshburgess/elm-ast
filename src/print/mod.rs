@@ -806,31 +806,28 @@ impl Printer {
             let source_multi = self.is_pretty()
                 && exposing.span.end.line > exposing.span.start.line
                 && exposing.span.start.line != 0;
-            if source_multi {
-                if let Exposing::Explicit { items, .. } = &exposing.value {
-                    self.indent();
-                    self.newline_indent();
-                    self.write("exposing");
-                    self.indent();
-                    self.newline_indent();
-                    let mut sorted: Vec<&ExposedItem> =
-                        items.iter().map(|i| &i.value).collect();
-                    sorted.sort_by_key(|a| exposed_item_sort_key(a));
-                    self.write_char('(');
-                    self.write_char(' ');
-                    for (i, item) in sorted.iter().enumerate() {
-                        if i > 0 {
-                            self.newline_indent();
-                            self.write(", ");
-                        }
-                        self.write_exposed_item(item);
+            if source_multi && let Exposing::Explicit { items, .. } = &exposing.value {
+                self.indent();
+                self.newline_indent();
+                self.write("exposing");
+                self.indent();
+                self.newline_indent();
+                let mut sorted: Vec<&ExposedItem> = items.iter().map(|i| &i.value).collect();
+                sorted.sort_by_key(|a| exposed_item_sort_key(a));
+                self.write_char('(');
+                self.write_char(' ');
+                for (i, item) in sorted.iter().enumerate() {
+                    if i > 0 {
+                        self.newline_indent();
+                        self.write(", ");
                     }
-                    self.newline_indent();
-                    self.write_char(')');
-                    self.dedent();
-                    self.dedent();
-                    return;
+                    self.write_exposed_item(item);
                 }
+                self.newline_indent();
+                self.write_char(')');
+                self.dedent();
+                self.dedent();
+                return;
             }
             self.write(" exposing ");
             if self.is_pretty() {
@@ -940,7 +937,7 @@ impl Printer {
                 self.write(" =");
                 self.indent();
                 self.newline_indent();
-                self.write_spanned_expr(&body);
+                self.write_spanned_expr(body);
                 self.dedent();
             }
         }
@@ -960,8 +957,8 @@ impl Printer {
 
     fn write_signature(&mut self, sig: &Signature) {
         self.write(&sig.name.value);
-        let has_arm_comments = self.is_pretty()
-            && Self::type_ann_has_arm_comments(&sig.type_annotation);
+        let has_arm_comments =
+            self.is_pretty() && Self::type_ann_has_arm_comments(&sig.type_annotation);
         if self.is_pretty()
             && (Self::type_ann_spans_multi_lines(&sig.type_annotation) || has_arm_comments)
         {
@@ -1091,7 +1088,11 @@ impl Printer {
             TypeAnnotation::GenericRecord { base, fields } if !fields.is_empty() => {
                 self.write_record_type_fields_multiline(fields, Some(&base.value));
             }
-            TypeAnnotation::Typed { module_name, name, args } if !args.is_empty() => {
+            TypeAnnotation::Typed {
+                module_name,
+                name,
+                args,
+            } if !args.is_empty() => {
                 if !module_name.is_empty() {
                     self.write(&module_name.join("."));
                     self.write_char('.');
@@ -1107,13 +1108,13 @@ impl Printer {
                                 self.dedent();
                                 continue;
                             }
-                            TypeAnnotation::GenericRecord { base, fields: rfields } => {
+                            TypeAnnotation::GenericRecord {
+                                base,
+                                fields: rfields,
+                            } => {
                                 self.indent();
                                 self.newline_indent();
-                                self.write_record_type_fields_multiline(
-                                    rfields,
-                                    Some(&base.value),
-                                );
+                                self.write_record_type_fields_multiline(rfields, Some(&base.value));
                                 self.dedent();
                                 continue;
                             }
@@ -1267,7 +1268,9 @@ impl Printer {
             TypeAnnotation::Record(fields) if fields.len() >= 2 && source_multi => {
                 self.write_record_type_fields_multiline(fields, None);
             }
-            TypeAnnotation::GenericRecord { base, fields } if !fields.is_empty() && source_multi => {
+            TypeAnnotation::GenericRecord { base, fields }
+                if !fields.is_empty() && source_multi =>
+            {
                 self.write_record_type_fields_multiline(fields, Some(&base.value));
             }
             TypeAnnotation::Typed { args, .. } if !args.is_empty() && source_multi => {
@@ -1408,11 +1411,10 @@ impl Printer {
         // arg kinds that reliably print multi-line are records with 2+
         // fields, and function types that span multiple source lines
         // (printed in the parenthesized aligned-arrow form).
-        let any_arg_has_leading = self.is_pretty()
-            && ctor.args.iter().any(|a| !a.comments.is_empty());
+        let any_arg_has_leading =
+            self.is_pretty() && ctor.args.iter().any(|a| !a.comments.is_empty());
         let any_multiline = self.is_pretty()
-            && (ctor.args.iter().any(|a| Self::ctor_arg_prints_multiline(a))
-                || any_arg_has_leading);
+            && (ctor.args.iter().any(Self::ctor_arg_prints_multiline) || any_arg_has_leading);
         if any_multiline {
             self.indent();
             for arg in &ctor.args {
@@ -1649,7 +1651,10 @@ impl Printer {
                     self.dedent();
                     return;
                 }
-                TypeAnnotation::GenericRecord { base, fields: rfields } => {
+                TypeAnnotation::GenericRecord {
+                    base,
+                    fields: rfields,
+                } => {
                     self.write(" :");
                     self.indent();
                     self.newline_indent();
@@ -2001,9 +2006,7 @@ impl Printer {
     ///   - Block comment: `, {- .. -}\n<indent>  field` (+2 col for field)
     ///   - Line comment: blank line, then `<indent>-- line\n<indent>, field`
     fn write_record_field_separator_with_comments(&mut self, comments: &[Spanned<Comment>]) {
-        let has_line_comment = comments
-            .iter()
-            .any(|c| matches!(c.value, Comment::Line(_)));
+        let has_line_comment = comments.iter().any(|c| matches!(c.value, Comment::Line(_)));
 
         if has_line_comment {
             for (i, c) in comments.iter().enumerate() {
@@ -2162,8 +2165,7 @@ impl Printer {
                         } else {
                             let mut prev_end = head_end;
                             rest.iter().all(|(_, e)| {
-                                let ok = e.span.start.line != 0
-                                    && e.span.start.line == prev_end;
+                                let ok = e.span.start.line != 0 && e.span.start.line == prev_end;
                                 prev_end = e.span.end.line;
                                 ok
                             })
@@ -2200,9 +2202,8 @@ impl Printer {
                 if matches!(operator.as_str(), ">>" | "<<")
                     && let Some(chain) = flatten_right_assoc_chain(expr, operator)
                 {
-                    let any_line_comment = chain[1..]
-                        .iter()
-                        .any(|e| Self::has_leading_line_comment(e));
+                    let any_line_comment =
+                        chain[1..].iter().any(|e| Self::has_leading_line_comment(e));
                     let any_ml = self.is_pretty()
                         && (chain.iter().any(|op| self.is_multiline(&op.value))
                             || Self::spans_cross_lines(left.span, right.span));
@@ -2362,8 +2363,8 @@ impl Printer {
                             } else {
                                 let mut prev_end = head_end;
                                 rest.iter().all(|(_, e)| {
-                                    let ok = e.span.start.line != 0
-                                        && e.span.start.line == prev_end;
+                                    let ok =
+                                        e.span.start.line != 0 && e.span.start.line == prev_end;
                                     prev_end = e.span.end.line;
                                     ok
                                 })
@@ -2372,10 +2373,10 @@ impl Printer {
                         _ => false,
                     };
                 let use_vertical = if self.is_pretty() {
-                    (!chain_visually_inline && self.is_multiline(&left.value))
-                        || (!chain_visually_inline && self.is_multiline(right_expr))
-                        || (!chain_visually_inline
-                            && Self::spans_cross_lines(left.span, right.span))
+                    (!chain_visually_inline
+                        && (self.is_multiline(&left.value)
+                            || self.is_multiline(right_expr)
+                            || Self::spans_cross_lines(left.span, right.span)))
                         || right_has_line_leading
                 } else {
                     self.is_multiline(right_expr) || right_has_line_leading
@@ -2404,8 +2405,7 @@ impl Printer {
                     } else {
                         self.write(" <|");
                     }
-                    let saved_chain =
-                        std::mem::replace(&mut self.in_vertical_chain, false);
+                    let saved_chain = std::mem::replace(&mut self.in_vertical_chain, false);
                     self.indent();
                     self.newline_indent();
                     self.write_leading_comments(&right.comments);
@@ -2582,9 +2582,8 @@ impl Printer {
         // longer a direct operand of the outer chain. Reset the flag so
         // nested binop chains inside args establish their own indent.
         let saved = std::mem::replace(&mut self.in_vertical_chain, false);
-        let result = self.write_expr_app_inner(expr);
+        self.write_expr_app_inner(expr);
         self.in_vertical_chain = saved;
-        result
     }
 
     fn write_expr_app_inner(&mut self, expr: &Expr) {
@@ -2625,8 +2624,7 @@ impl Printer {
                 // `f -- comment arg` would commented out the rest of the call.
                 let any_arg_has_leading_line_comment = args.iter().any(|a| {
                     a.comments.iter().any(|c| {
-                        matches!(c.value, Comment::Line(_))
-                            || c.span.start.line != c.span.end.line
+                        matches!(c.value, Comment::Line(_)) || c.span.start.line != c.span.end.line
                     })
                 });
                 if any_arg_ml || source_vertical || any_arg_has_leading_line_comment {
@@ -2671,8 +2669,8 @@ impl Printer {
         //  - Line comment or multi-line block: emit on its own line before
         //    the arg at the current indent.
         for c in &spanned.comments {
-            let is_inline_block = matches!(c.value, Comment::Block(_))
-                && c.span.start.line == c.span.end.line;
+            let is_inline_block =
+                matches!(c.value, Comment::Block(_)) && c.span.start.line == c.span.end.line;
             if is_inline_block {
                 self.write_comment(&c.value);
                 self.write_char(' ');
@@ -2812,7 +2810,7 @@ impl Printer {
                         self.indent_extra = (col % w) as u32;
 
                         let start_len = self.buf.len();
-                        self.write_spanned_expr(&inner);
+                        self.write_spanned_expr(inner);
                         let wrote_newline = self.buf[start_len..].contains('\n');
 
                         // Restore indent state and write `)` at `(` column.
@@ -2841,7 +2839,7 @@ impl Printer {
                         self.indent = col / w;
                         self.indent_extra = (col % w) as u32;
 
-                        self.write_spanned_expr(&inner);
+                        self.write_spanned_expr(inner);
 
                         self.indent = saved_indent;
                         self.indent_extra = saved_extra;
@@ -2855,7 +2853,7 @@ impl Printer {
                     }
                 } else {
                     self.write_char('(');
-                    self.write_spanned_expr(&inner);
+                    self.write_spanned_expr(inner);
                     self.write_char(')');
                 }
             }
@@ -3094,18 +3092,6 @@ impl Printer {
         self.write_comma_sep_inner(open, close, elems, false, &[], &[]);
     }
 
-    /// Like `write_comma_sep` but force multi-line when the enclosing span
-    /// crosses source lines (used for lists where elm-format preserves
-    /// user-chosen multi-line layout even with single-element lists).
-    fn write_comma_sep_force_multi(
-        &mut self,
-        open: &str,
-        close: &str,
-        elems: &[Spanned<Expr>],
-    ) {
-        self.write_comma_sep_inner(open, close, elems, true, &[], &[]);
-    }
-
     /// Variant used by list printing that threads in per-element inline
     /// trailing comments (same-line `-- foo` after each element) and any
     /// block trailing comments sitting between the last element and the
@@ -3138,9 +3124,8 @@ impl Printer {
         trailing_comments: &[Spanned<Comment>],
     ) {
         let open_col = self.current_column();
-        let standard_indent =
-            self.indent * self.config.indent_width + self.indent_extra as usize;
-        let at_standard_indent = (open_col as usize) == standard_indent;
+        let standard_indent = self.indent * self.config.indent_width + self.indent_extra as usize;
+        let at_standard_indent = open_col == standard_indent;
         let outer_multi_line = respect_outer_multi_line
             && self.is_pretty()
             && at_standard_indent
@@ -3149,9 +3134,11 @@ impl Printer {
                 .map(|s| s.end.line > s.start.line && s.start.line != 0)
                 .unwrap_or(false);
         let any_elem_line_comment = self.is_pretty()
-            && elems
-                .iter()
-                .any(|e| e.comments.iter().any(|c| matches!(c.value, Comment::Line(_))));
+            && elems.iter().any(|e| {
+                e.comments
+                    .iter()
+                    .any(|c| matches!(c.value, Comment::Line(_)))
+            });
         // A single-element container whose element ends with a triple-quoted
         // string stays inline (`[ text """..."""]`). elm-format keeps the
         // open/close brackets compact around the string even though its
@@ -3281,7 +3268,7 @@ impl Printer {
                     self.indent();
                 }
                 self.indent_extra = saved_extra + 2;
-                self.write_spanned_expr(&elem);
+                self.write_spanned_expr(elem);
                 self.indent_extra = saved_extra;
                 if bump_indent {
                     self.dedent();
@@ -3330,7 +3317,7 @@ impl Printer {
                 } else {
                     self.write(", ");
                 }
-                self.write_spanned_expr(&elem);
+                self.write_spanned_expr(elem);
                 if let Some(Some(c)) = element_inline_comments.get(i) {
                     self.write(" ");
                     self.write_comment(&c.value);
@@ -3350,7 +3337,7 @@ impl Printer {
                 if i > 0 {
                     self.write(", ");
                 }
-                self.write_spanned_expr(&elem);
+                self.write_spanned_expr(elem);
             }
             self.write(close);
         }
@@ -3360,10 +3347,9 @@ impl Printer {
         self.write(&setter.field.value);
         // In pretty mode, preserve source layout: if the value started on a
         // line after the field name, keep the break. elm-format respects this.
-        let source_was_multiline = self.is_pretty()
-            && setter.field.span.end.line < setter.value.span.start.line;
-        let has_value_leading =
-            self.is_pretty() && !setter.value.comments.is_empty();
+        let source_was_multiline =
+            self.is_pretty() && setter.field.span.end.line < setter.value.span.start.line;
+        let has_value_leading = self.is_pretty() && !setter.value.comments.is_empty();
         if self.is_multiline(&setter.value.value) || source_was_multiline || has_value_leading {
             self.write(" =");
             self.indent();
@@ -3393,14 +3379,13 @@ impl Printer {
     ///     then
     fn write_if_condition(&mut self, keyword: &str, cond: &Spanned<Expr>) {
         let has_leading = !cond.comments.is_empty();
-        let multiline_cond =
-            self.is_pretty() && (self.is_multiline(&cond.value) || has_leading);
+        let multiline_cond = self.is_pretty() && (self.is_multiline(&cond.value) || has_leading);
         if multiline_cond {
             self.write(keyword);
             self.indent();
             self.newline_indent();
             self.write_leading_comments(&cond.comments);
-            self.write_spanned_expr(&cond);
+            self.write_spanned_expr(cond);
             self.dedent();
             self.newline_indent();
             self.write("then");
@@ -3408,7 +3393,7 @@ impl Printer {
             self.write(keyword);
             self.write_char(' ');
             self.write_leading_comments(&cond.comments);
-            self.write_spanned_expr(&cond);
+            self.write_spanned_expr(cond);
             self.write(" then");
         }
     }
@@ -3448,8 +3433,8 @@ impl Printer {
         let mut remaining: Vec<Spanned<Comment>> = Vec::new();
         for c in trailing {
             let is_block = matches!(c.value, Comment::Block(_));
-            let in_range = c.span.start.offset >= left_end_off
-                && c.span.end.offset <= right_start_off;
+            let in_range =
+                c.span.start.offset >= left_end_off && c.span.end.offset <= right_start_off;
             if is_block && in_range {
                 between.push(c.clone());
             } else {
@@ -3485,9 +3470,9 @@ impl Printer {
                 !self.is_multiline(&b.condition.value) && !self.is_multiline(&b.then_branch.value)
             })
             && !self.is_multiline(&else_branch.value)
-            && branches.iter().all(|b| {
-                b.then_branch.comments.is_empty() && b.trailing_comments.is_empty()
-            })
+            && branches
+                .iter()
+                .all(|b| b.then_branch.comments.is_empty() && b.trailing_comments.is_empty())
             && else_branch.comments.is_empty();
 
         if all_simple {
@@ -3497,7 +3482,7 @@ impl Printer {
             self.write(" then ");
             self.write_spanned_expr(&branch.then_branch);
             self.write(" else ");
-            self.write_spanned_expr(&else_branch);
+            self.write_spanned_expr(else_branch);
         } else if self.is_pretty() {
             // In pretty mode, use column-based indentation so that
             // branches are always indented relative to the `if` keyword,
@@ -3560,7 +3545,7 @@ impl Printer {
                 self.indent();
                 self.newline_indent();
                 self.write_leading_comments(&else_branch.comments);
-                self.write_spanned_expr(&else_branch);
+                self.write_spanned_expr(else_branch);
                 self.dedent();
             }
 
@@ -3597,7 +3582,7 @@ impl Printer {
             self.indent();
             self.newline_indent();
             self.write_leading_comments(&else_branch.comments);
-            self.write_spanned_expr(&else_branch);
+            self.write_spanned_expr(else_branch);
             self.dedent();
         }
     }
@@ -3635,7 +3620,7 @@ impl Printer {
             self.indent();
             self.newline_indent();
             self.write_leading_comments(&else_branch.comments);
-            self.write_spanned_expr(&else_branch);
+            self.write_spanned_expr(else_branch);
             self.dedent();
         }
     }
@@ -3753,7 +3738,7 @@ impl Printer {
             self.write("in");
             self.newline_indent();
             self.write_leading_comments(&body.comments);
-            self.write_spanned_expr(&body);
+            self.write_spanned_expr(body);
 
             self.indent = saved_indent;
             self.indent_extra = saved_extra;
@@ -3778,7 +3763,7 @@ impl Printer {
         self.write("in");
         self.newline_indent();
         self.write_leading_comments(&body.comments);
-        self.write_spanned_expr(&body);
+        self.write_spanned_expr(body);
     }
 
     fn write_let_declaration(&mut self, decl: &LetDeclaration) {
@@ -3796,7 +3781,7 @@ impl Printer {
                 self.indent();
                 self.newline_indent();
                 self.write_leading_comments(&body.comments);
-                self.write_spanned_expr(&body);
+                self.write_spanned_expr(body);
                 self.dedent();
             }
         }
@@ -3825,11 +3810,11 @@ impl Printer {
             self.indent();
             self.newline_indent();
             self.write_leading_comments(&body.comments);
-            self.write_spanned_expr(&body);
+            self.write_spanned_expr(body);
             self.dedent();
         } else {
             self.write(" -> ");
-            self.write_spanned_expr(&body);
+            self.write_spanned_expr(body);
         }
     }
 
