@@ -2061,7 +2061,7 @@ impl Printer {
                         self.in_vertical_chain = true;
                         for (op, operand) in head_rest.iter().chain(rest.iter()) {
                             for c in &operand.comments {
-                                if matches!(c.value, Comment::Line(_)) {
+                                if matches!(c.value, Comment::Line(_) | Comment::Block(_)) {
                                     self.newline_indent();
                                     self.write_comment(&c.value);
                                 }
@@ -3362,6 +3362,69 @@ impl Printer {
         }
     }
 
+    /// When an if-branch body is a pipeline and some of the branch's
+    /// `trailing_comments` are block comments positioned between the
+    /// pipeline's LHS and RHS in source, route those comments onto the
+    /// RHS operand so the chain printer emits them at the continuation
+    /// indent (between operands) rather than below the whole branch.
+    #[allow(clippy::type_complexity)]
+    fn route_ifbranch_pipeline_block_comments<'a>(
+        then_branch: &'a Spanned<Expr>,
+        trailing: &'a [Spanned<Comment>],
+    ) -> (
+        std::borrow::Cow<'a, Spanned<Expr>>,
+        std::borrow::Cow<'a, [Spanned<Comment>]>,
+    ) {
+        use std::borrow::Cow;
+        if trailing.is_empty() {
+            return (Cow::Borrowed(then_branch), Cow::Borrowed(trailing));
+        }
+        let Expr::OperatorApplication {
+            operator,
+            direction,
+            left,
+            right,
+        } = &then_branch.value
+        else {
+            return (Cow::Borrowed(then_branch), Cow::Borrowed(trailing));
+        };
+        if !matches!(operator.as_str(), "|>" | "|." | "|=") {
+            return (Cow::Borrowed(then_branch), Cow::Borrowed(trailing));
+        }
+        let left_end_off = left.span.end.offset;
+        let right_start_off = right.span.start.offset;
+        let mut between: Vec<Spanned<Comment>> = Vec::new();
+        let mut remaining: Vec<Spanned<Comment>> = Vec::new();
+        for c in trailing {
+            let is_block = matches!(c.value, Comment::Block(_));
+            let in_range = c.span.start.offset >= left_end_off
+                && c.span.end.offset <= right_start_off;
+            if is_block && in_range {
+                between.push(c.clone());
+            } else {
+                remaining.push(c.clone());
+            }
+        }
+        if between.is_empty() {
+            return (Cow::Borrowed(then_branch), Cow::Borrowed(trailing));
+        }
+        let mut new_right = right.as_ref().clone();
+        let mut new_right_comments = between;
+        new_right_comments.append(&mut new_right.comments);
+        new_right.comments = new_right_comments;
+        let new_body = Spanned {
+            span: then_branch.span,
+            value: Expr::OperatorApplication {
+                operator: operator.clone(),
+                direction: *direction,
+                left: left.clone(),
+                right: Box::new(new_right),
+            },
+            comments: then_branch.comments.clone(),
+        };
+        (Cow::Owned(new_body), Cow::Owned(remaining))
+    }
+
     fn write_if_expr(&mut self, branches: &[IfBranch], else_branch: &Spanned<Expr>) {
         // Single-line when all branches are simple non-block expressions.
         // elm-format always uses multiline, so skip single-line in pretty mode.
@@ -3403,8 +3466,12 @@ impl Printer {
                 self.indent();
                 self.newline_indent();
                 self.write_leading_comments(&branch.then_branch.comments);
-                self.write_spanned_expr(&branch.then_branch);
-                for c in &branch.trailing_comments {
+                let (body, trailing) = Self::route_ifbranch_pipeline_block_comments(
+                    &branch.then_branch,
+                    &branch.trailing_comments,
+                );
+                self.write_spanned_expr(&body);
+                for c in trailing.iter() {
                     self.newline_indent();
                     self.write_comment(&c.value);
                 }
@@ -3423,8 +3490,12 @@ impl Printer {
                     self.indent();
                     self.newline_indent();
                     self.write_leading_comments(&branch.then_branch.comments);
-                    self.write_spanned_expr(&branch.then_branch);
-                    for c in &branch.trailing_comments {
+                    let (body, trailing) = Self::route_ifbranch_pipeline_block_comments(
+                        &branch.then_branch,
+                        &branch.trailing_comments,
+                    );
+                    self.write_spanned_expr(&body);
+                    for c in trailing.iter() {
                         self.newline_indent();
                         self.write_comment(&c.value);
                     }
@@ -3458,8 +3529,12 @@ impl Printer {
                 self.indent();
                 self.newline_indent();
                 self.write_leading_comments(&branch.then_branch.comments);
-                self.write_spanned_expr(&branch.then_branch);
-                for c in &branch.trailing_comments {
+                let (body, trailing) = Self::route_ifbranch_pipeline_block_comments(
+                    &branch.then_branch,
+                    &branch.trailing_comments,
+                );
+                self.write_spanned_expr(&body);
+                for c in trailing.iter() {
                     self.newline_indent();
                     self.write_comment(&c.value);
                 }
@@ -3490,8 +3565,12 @@ impl Printer {
                 self.indent();
                 self.newline_indent();
                 self.write_leading_comments(&branch.then_branch.comments);
-                self.write_spanned_expr(&branch.then_branch);
-                for c in &branch.trailing_comments {
+                let (body, trailing) = Self::route_ifbranch_pipeline_block_comments(
+                    &branch.then_branch,
+                    &branch.trailing_comments,
+                );
+                self.write_spanned_expr(&body);
+                for c in trailing.iter() {
                     self.newline_indent();
                     self.write_comment(&c.value);
                 }
