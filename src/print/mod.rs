@@ -197,6 +197,7 @@ impl Printer {
             Expr::CaseOf { .. } | Expr::LetIn { .. } => true,
             Expr::Lambda { args, body } => {
                 self.is_multiline(&body.value)
+                    || (self.is_pretty() && !body.comments.is_empty())
                     || (self.is_pretty() && Self::span_crosses_lines(body.span))
                     || (self.is_pretty()
                         && match args.last() {
@@ -1135,7 +1136,13 @@ impl Printer {
         } else {
             &imp.body.value
         };
+        // Push the body span so that List/Tuple/etc. children can consult
+        // `current_expr_span()` to decide multi-line layout based on the
+        // outer brackets crossing source lines (e.g. a single-element list
+        // whose `[` and `]` are on different lines).
+        self.expr_span_stack.push(imp.body.span);
         self.write_expr(body);
+        self.expr_span_stack.pop();
         self.dedent();
     }
 
@@ -1239,6 +1246,10 @@ impl Printer {
                 self.write_char(' ');
                 self.write_type_atomic(&arg.value);
             }
+        }
+        if let Some(tc) = &ctor.trailing_comment {
+            self.write_char(' ');
+            self.write_comment(&tc.value);
         }
     }
 
@@ -3292,10 +3303,12 @@ impl Printer {
                 }
                 None => false,
             };
-        if self.is_multiline(&body.value) || body_broken_in_source {
+        let has_leading = !body.comments.is_empty();
+        if self.is_multiline(&body.value) || body_broken_in_source || has_leading {
             self.write(" ->");
             self.indent();
             self.newline_indent();
+            self.write_leading_comments(&body.comments);
             self.write_spanned_expr(&body);
             self.dedent();
         } else {

@@ -1,3 +1,4 @@
+use crate::comment::Comment;
 use crate::declaration::{CustomType, Declaration, InfixDef, TypeAlias, ValueConstructor};
 use crate::expr::{Function, FunctionImplementation, Signature};
 use crate::node::Spanned;
@@ -320,12 +321,27 @@ fn parse_value_constructor(p: &mut Parser) -> ParseResult<Spanned<ValueConstruct
         args.push(super::type_annotation::parse_type_atomic_public(p)?);
     }
 
+    // Claim a same-line trailing line comment: `| Ctor args -- text`.
+    // `skip_whitespace` inside the loop above has already pushed it into
+    // `collected_comments`.
+    let last_line = args
+        .last()
+        .map(|a| a.span.end.line)
+        .unwrap_or(name.span.end.line);
+    let trailing_comment = match p.collected_comments.last() {
+        Some(c) if c.span.start.line == last_line && matches!(c.value, Comment::Line(_)) => {
+            p.collected_comments.pop()
+        }
+        _ => None,
+    };
+
     Ok(p.spanned_from(
         start,
         ValueConstructor {
             name,
             args,
             pre_pipe_comments: Vec::new(),
+            trailing_comment,
         },
     ))
 }

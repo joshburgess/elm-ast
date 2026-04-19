@@ -113,6 +113,14 @@ pub struct ValueConstructor {
     /// first constructor.
     #[cfg_attr(feature = "serde", serde(default))]
     pub pre_pipe_comments: Vec<Spanned<Comment>>,
+    /// Optional trailing inline comment on the same source line as the
+    /// constructor: `| Ctor args -- comment`. elm-format keeps the comment
+    /// on the same line after the last arg.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub trailing_comment: Option<Spanned<Comment>>,
 }
 
 /// An infix operator definition.

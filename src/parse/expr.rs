@@ -1119,8 +1119,14 @@ fn parse_lambda_expr_cps(p: &mut Parser) -> ParseResult<Step> {
 
     p.expect(&Token::Arrow)?;
 
+    // Snapshot BEFORE parsing the body so a line comment sitting between the
+    // arrow and the body (e.g. a note above a `let`, `if`, or `case`) can be
+    // attached to the body as a leading comment.
+    let body_snapshot = p.pending_comments_snapshot();
+
     // Need body
-    Ok(Step::NeedExpr(Box::new(move |p, body| {
+    Ok(Step::NeedExpr(Box::new(move |p, mut body| {
+        attach_pre_body_comments(p, &mut body, body_snapshot);
         Ok(Step::Done(p.spanned_from(
             start,
             Expr::Lambda {

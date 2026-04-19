@@ -270,6 +270,7 @@ pub fn custom_type(
                     name: spanned(name.into()),
                     args,
                     pre_pipe_comments: Vec::new(),
+                    trailing_comment: None,
                 })
             })
             .collect(),
