@@ -2014,7 +2014,29 @@ impl Printer {
                 {
                     let any_line_comment =
                         rest.iter().any(|(_, e)| Self::has_leading_line_comment(e));
+                    // A chain is "visually inline" when every inter-operand
+                    // transition happens on a single source line (e.g.
+                    // `} """ ++ rules`, or `""" ++ classes.any ++ """`).
+                    // Triple-quoted strings may span lines internally, but
+                    // elm-format keeps the chain on one line when the
+                    // operators and operand boundaries all share the same
+                    // line. Exempt such chains from multi-line detection.
+                    let chain_visually_inline = {
+                        let head_end = head.span.end.line;
+                        if head_end == 0 || rest.is_empty() {
+                            false
+                        } else {
+                            let mut prev_end = head_end;
+                            rest.iter().all(|(_, e)| {
+                                let ok = e.span.start.line != 0
+                                    && e.span.start.line == prev_end;
+                                prev_end = e.span.end.line;
+                                ok
+                            })
+                        }
+                    };
                     let any_ml = self.is_pretty()
+                        && !chain_visually_inline
                         && (self.is_multiline(&head.value)
                             || rest.iter().any(|(_, e)| self.is_multiline(&e.value))
                             || Self::spans_cross_lines(left.span, right.span));
@@ -2191,11 +2213,35 @@ impl Printer {
                         .comments
                         .iter()
                         .any(|c| matches!(c.value, Comment::Line(_)));
+                // Check whether the full `::`/`++` chain rooted here is
+                // "visually inline": every inter-operand transition sits on
+                // a single source line (triple-quoted operands may span lines
+                // internally). elm-format keeps such chains on one line even
+                // when an operand is a multi-line triple-string.
+                let chain_visually_inline = self.is_pretty()
+                    && matches!(operator.as_str(), "::" | "++")
+                    && match flatten_mixed_cons_append_chain(expr) {
+                        Some((head, rest)) if !rest.is_empty() => {
+                            let head_end = head.span.end.line;
+                            if head_end == 0 {
+                                false
+                            } else {
+                                let mut prev_end = head_end;
+                                rest.iter().all(|(_, e)| {
+                                    let ok = e.span.start.line != 0
+                                        && e.span.start.line == prev_end;
+                                    prev_end = e.span.end.line;
+                                    ok
+                                })
+                            }
+                        }
+                        _ => false,
+                    };
                 let use_vertical = if self.is_pretty() {
-                    // elm-format: if either operand is multiline, break.
-                    self.is_multiline(&left.value)
-                        || self.is_multiline(right_expr)
-                        || Self::spans_cross_lines(left.span, right.span)
+                    (!chain_visually_inline && self.is_multiline(&left.value))
+                        || (!chain_visually_inline && self.is_multiline(right_expr))
+                        || (!chain_visually_inline
+                            && Self::spans_cross_lines(left.span, right.span))
                         || right_has_line_leading
                 } else {
                     self.is_multiline(right_expr) || right_has_line_leading
