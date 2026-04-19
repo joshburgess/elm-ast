@@ -1119,6 +1119,46 @@ impl Printer {
     /// sit on the same line.
     fn write_function_arm_arrow(&mut self, arm: &Spanned<TypeAnnotation>) {
         self.newline_indent();
+        // When the arm is a parenthesized function type whose paren group
+        // spans multiple source lines, elm-format breaks `->` onto its own
+        // line and expands the paren body across lines:
+        //   ->
+        //       (state
+        //        -> ReturnType
+        //       )
+        if self.is_pretty()
+            && matches!(arm.value, TypeAnnotation::FunctionType { .. })
+            && Self::type_ann_has_outer_parens(arm)
+            && arm.span.end.line > arm.span.start.line
+            && arm.span.start.line != 0
+        {
+            self.write("->");
+            self.indent();
+            self.newline_indent();
+            self.write("(");
+            if let TypeAnnotation::FunctionType { from, to } = &arm.value {
+                self.with_extra_indent(1, |p| {
+                    p.write_type_arm_multiline(from);
+                    let mut cur: &Spanned<TypeAnnotation> = to;
+                    loop {
+                        match &cur.value {
+                            TypeAnnotation::FunctionType { from: f2, to: t2 } => {
+                                p.write_function_arm_arrow(f2);
+                                cur = t2;
+                            }
+                            _ => {
+                                p.write_function_arm_arrow(cur);
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+            self.newline_indent();
+            self.write(")");
+            self.dedent();
+            return;
+        }
         if Self::type_arm_is_multiline(arm) {
             self.write("->");
             self.indent();
