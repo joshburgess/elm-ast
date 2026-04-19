@@ -1452,6 +1452,28 @@ fn record_after_value(
             i += 1;
         }
     }
+    // Claim any pending comments that appear between this setter's field
+    // start and the value start as leading comments on the value, e.g.
+    // `field =\n    -- comment\n    value`.
+    let value_start_offset = value.span.start.offset;
+    let mut value_leading: Vec<Spanned<Comment>> = Vec::new();
+    let mut i = 0;
+    while i < p.collected_comments.len() {
+        let c = &p.collected_comments[i];
+        if c.span.start.offset >= field_start_offset
+            && c.span.end.offset <= value_start_offset
+        {
+            value_leading.push(p.collected_comments.remove(i));
+        } else {
+            i += 1;
+        }
+    }
+    let mut value = value;
+    if !value_leading.is_empty() {
+        let mut merged = value_leading;
+        merged.extend(value.comments);
+        value.comments = merged;
+    }
     let setter = RecordSetter {
         field,
         value,

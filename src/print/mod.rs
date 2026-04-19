@@ -2614,6 +2614,8 @@ impl Printer {
                             && fields.iter().any(|f| f.value.trailing_comment.is_some()))
                         || (self.is_pretty()
                             && fields.iter().skip(1).any(|f| !f.comments.is_empty()))
+                        || (self.is_pretty()
+                            && fields.iter().any(|f| !f.value.value.comments.is_empty()))
                         || (self.is_pretty() && Self::spans_multi_lines(fields));
                     if any_ml {
                         // Align commas and closing brace with the column of `{`.
@@ -2968,10 +2970,15 @@ impl Printer {
         // line after the field name, keep the break. elm-format respects this.
         let source_was_multiline = self.is_pretty()
             && setter.field.span.end.line < setter.value.span.start.line;
-        if self.is_multiline(&setter.value.value) || source_was_multiline {
+        let has_value_leading =
+            self.is_pretty() && !setter.value.comments.is_empty();
+        if self.is_multiline(&setter.value.value) || source_was_multiline || has_value_leading {
             self.write(" =");
             self.indent();
             self.newline_indent();
+            if has_value_leading {
+                self.write_leading_comments(&setter.value.comments);
+            }
             self.write_spanned_expr(&setter.value);
             self.dedent();
         } else {
