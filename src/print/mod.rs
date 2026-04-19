@@ -2701,12 +2701,18 @@ impl Printer {
             }
 
             Expr::RecordUpdate { base, updates } => {
+                let base_updates_split = self.is_pretty()
+                    && updates
+                        .first()
+                        .map(|u| base.span.end.line < u.span.start.line)
+                        .unwrap_or(false);
                 let any_ml = updates
                     .iter()
                     .any(|f| self.is_multiline(&f.value.value.value))
                     || (self.is_pretty()
                         && updates.iter().any(|f| f.value.trailing_comment.is_some()))
-                    || (self.is_pretty() && Self::spans_multi_lines(updates));
+                    || (self.is_pretty() && Self::spans_multi_lines(updates))
+                    || base_updates_split;
                 if any_ml {
                     self.write("{ ");
                     self.write(&base.value);
