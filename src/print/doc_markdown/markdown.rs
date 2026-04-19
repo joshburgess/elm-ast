@@ -607,6 +607,9 @@ fn doc_comment_forces_preserve_all(lines: &[&str]) -> bool {
         if block_has_result_arrow_comment(block) {
             return true;
         }
+        if block_has_internal_ellipsis_placeholder(block) {
+            return true;
+        }
         // Track whether sibling blocks mix decl-flavored content with
         // bare-expression content across the whole doc; elm-format treats
         // any such doc as an "example" and preserves every block verbatim.
@@ -639,4 +642,30 @@ fn block_has_result_arrow_comment(block_lines: &[&str]) -> bool {
         }
     }
     false
+}
+
+/// Returns true if the block contains both decl-flavored content (a type
+/// annotation or a value binding) and at least one line with an in-line `...`
+/// placeholder followed by more content on the same line (e.g. `, ...]`).
+/// Such a block is structurally a declaration whose body elm-format cannot
+/// parse, so it preserves the whole doc's code blocks verbatim.
+///
+/// A pure bare-expression block containing `...` (e.g. Parser.elm's keyword
+/// assertions) does not qualify and does not propagate preservation to its
+/// sibling blocks.
+fn block_has_internal_ellipsis_placeholder(block_lines: &[&str]) -> bool {
+    let mut any_internal_ellipsis = false;
+    let mut any_decl_flavor = false;
+    for &line in block_lines {
+        let trimmed = line.trim_start();
+        if super::predicates::has_internal_ellipsis(trimmed) {
+            any_internal_ellipsis = true;
+        }
+        if super::predicates::looks_like_type_annotation(trimmed)
+            || super::predicates::is_single_line_value_decl(trimmed)
+        {
+            any_decl_flavor = true;
+        }
+    }
+    any_internal_ellipsis && any_decl_flavor
 }

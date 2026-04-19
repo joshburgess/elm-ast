@@ -912,7 +912,7 @@ pub(in crate::print) fn block_has_column_aligned_assertions(block_lines: &[&str]
 /// non-dot content after it on the same line (e.g. ` ... -- comment` or
 /// ` ... (expr)`). A trailing terminal ` ...` (with nothing after it) does
 /// not qualify.
-fn has_internal_ellipsis(trimmed: &str) -> bool {
+pub(in crate::print) fn has_internal_ellipsis(trimmed: &str) -> bool {
     let bytes = trimmed.as_bytes();
     if bytes.len() < 4 {
         return false;
