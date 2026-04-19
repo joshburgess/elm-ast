@@ -1,5 +1,6 @@
 use crate::comment::Comment;
 use crate::declaration::{CustomType, Declaration, InfixDef, TypeAlias, ValueConstructor};
+use crate::type_annotation::TypeAnnotation;
 use crate::expr::{Function, FunctionImplementation, Signature};
 use crate::node::Spanned;
 use crate::operator::InfixDirection;
@@ -336,24 +337,48 @@ fn parse_value_constructor(p: &mut Parser) -> ParseResult<Spanned<ValueConstruct
     let name = p.expect_upper_name()?;
 
     // Parse constructor argument types (atomic types only).
-    let mut args = Vec::new();
+    let mut args: Vec<Spanned<TypeAnnotation>> = Vec::new();
+    let mut prev_end_offset = name.span.end.offset;
     loop {
+        // Snapshot the pending comment length before `skip_whitespace` so
+        // we can identify comments that land in the window between the
+        // previous arg (or the constructor name) and the next arg. These
+        // attach as leading comments on that next arg.
+        let pre_skip_len = p.collected_comments.len();
         p.skip_whitespace();
         if !can_start_atomic_type(p.peek()) {
             break;
         }
-        // Stop at `|` (next constructor) or tokens that end the type def.
         if matches!(p.peek(), Token::Pipe) {
             break;
         }
-        // Arguments must be on the same line or indented past the constructor name.
         if !p.in_paren_context()
             && p.current_column() <= name.span.start.column
             && p.current_pos().line != name.span.start.line
         {
             break;
         }
-        args.push(super::type_annotation::parse_type_atomic_public(p)?);
+        let next_start_offset = p.peek_span().start.offset;
+        let mut arg = super::type_annotation::parse_type_atomic_public(p)?;
+        let mut leading: Vec<Spanned<Comment>> = Vec::new();
+        let mut i = pre_skip_len;
+        while i < p.collected_comments.len() {
+            let c = &p.collected_comments[i];
+            if c.span.start.offset >= prev_end_offset
+                && c.span.end.offset <= next_start_offset
+            {
+                leading.push(p.collected_comments.remove(i));
+            } else {
+                i += 1;
+            }
+        }
+        if !leading.is_empty() {
+            let mut merged = leading;
+            merged.extend(std::mem::take(&mut arg.comments));
+            arg.comments = merged;
+        }
+        prev_end_offset = arg.span.end.offset;
+        args.push(arg);
     }
 
     // Claim a same-line trailing line comment: `| Ctor args -- text`.

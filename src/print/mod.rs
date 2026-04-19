@@ -1302,12 +1302,19 @@ impl Printer {
         // arg kinds that reliably print multi-line are records with 2+
         // fields, and function types that span multiple source lines
         // (printed in the parenthesized aligned-arrow form).
+        let any_arg_has_leading = self.is_pretty()
+            && ctor.args.iter().any(|a| !a.comments.is_empty());
         let any_multiline = self.is_pretty()
-            && ctor.args.iter().any(|a| Self::ctor_arg_prints_multiline(a));
+            && (ctor.args.iter().any(|a| Self::ctor_arg_prints_multiline(a))
+                || any_arg_has_leading);
         if any_multiline {
             self.indent();
             for arg in &ctor.args {
                 self.newline_indent();
+                for c in &arg.comments {
+                    self.write_comment(&c.value);
+                    self.newline_indent();
+                }
                 self.write_ctor_arg_multiline(arg);
             }
             self.dedent();
