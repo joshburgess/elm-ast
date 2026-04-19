@@ -271,7 +271,10 @@ pub fn walk_expr<V: Visit + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
             }
         }
 
-        Expr::Parenthesized(inner) => v.visit_expr(inner),
+        Expr::Parenthesized {
+            expr,
+            trailing_comments: _,
+        } => v.visit_expr(expr),
 
         Expr::LetIn {
             declarations,

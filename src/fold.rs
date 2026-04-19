@@ -315,7 +315,13 @@ pub fn fold_expr<F: Fold + ?Sized>(f: &mut F, expr: Spanned<Expr>) -> Spanned<Ex
 
         Expr::List(elems) => Expr::List(elems.into_iter().map(|e| f.fold_expr(e)).collect()),
 
-        Expr::Parenthesized(inner) => Expr::Parenthesized(Box::new(f.fold_expr(*inner))),
+        Expr::Parenthesized {
+            expr,
+            trailing_comments,
+        } => Expr::Parenthesized {
+            expr: Box::new(f.fold_expr(*expr)),
+            trailing_comments,
+        },
 
         Expr::LetIn {
             declarations,

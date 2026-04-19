@@ -1368,7 +1368,7 @@ x = (42)
         Declaration::FunctionDeclaration(func) => {
             assert!(matches!(
                 &func.declaration.value.body.value,
-                Expr::Parenthesized(inner) if matches!(&inner.value, Expr::Literal(Literal::Int(42)))
+                Expr::Parenthesized { expr: inner, .. } if matches!(&inner.value, Expr::Literal(Literal::Int(42)))
             ));
         }
         _ => panic!("expected FunctionDeclaration"),
@@ -1387,7 +1387,7 @@ x = ((1 + 2))
         Declaration::FunctionDeclaration(func) => {
             assert!(matches!(
                 &func.declaration.value.body.value,
-                Expr::Parenthesized(_)
+                Expr::Parenthesized { .. }
             ));
         }
         _ => panic!("expected FunctionDeclaration"),
@@ -1407,7 +1407,7 @@ x = (1 + 2) * 3
         Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
             Expr::OperatorApplication { operator, left, .. } => {
                 assert_eq!(operator, "*");
-                assert!(matches!(&left.value, Expr::Parenthesized(_)));
+                assert!(matches!(&left.value, Expr::Parenthesized { .. }));
             }
             other => panic!("expected OperatorApplication, got {other:?}"),
         },
@@ -1463,7 +1463,7 @@ x = f (a + b) [1, 2] { name = \"hi\" }
         Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
             Expr::Application(args) => {
                 assert_eq!(args.len(), 4);
-                assert!(matches!(&args[1].value, Expr::Parenthesized(_)));
+                assert!(matches!(&args[1].value, Expr::Parenthesized { .. }));
                 assert!(matches!(&args[2].value, Expr::List(_)));
                 assert!(matches!(&args[3].value, Expr::Record(_)));
             }

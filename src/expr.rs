@@ -74,8 +74,24 @@ pub enum Expr {
     /// Tuple expression: `( a, b )` or `( a, b, c )`
     Tuple(Vec<Spanned<Expr>>),
 
-    /// Parenthesized expression: `( expr )`
-    Parenthesized(Box<Spanned<Expr>>),
+    /// Parenthesized expression: `( expr )`.
+    ///
+    /// `trailing_comments` captures comments that appear between the inner
+    /// expression and the closing `)`, e.g.
+    ///
+    /// ```elm
+    /// ( expr
+    ///   -- trailing
+    /// )
+    /// ```
+    Parenthesized {
+        expr: Box<Spanned<Expr>>,
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Vec::is_empty")
+        )]
+        trailing_comments: Vec<Spanned<Comment>>,
+    },
 
     /// Let-in expression:
     /// ```elm

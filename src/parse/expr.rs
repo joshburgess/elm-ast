@@ -1247,10 +1247,27 @@ fn paren_after_first(
             })))
         }
         Token::RightParen => {
+            // Capture comments between the inner expression's end and the
+            // closing `)` as trailing comments on the Parenthesized wrapper.
+            // elm-format keeps a dangling `-- comment` before `)` visible:
+            //     (   inner
+            //      -- trailing
+            //     )
+            let first_end = first.span.end.offset;
+            let rparen_start = p.peek_span().start.offset;
+            let all = p.take_pending_comments_since(0);
+            let (trailing, keep): (Vec<_>, Vec<_>) = all.into_iter().partition(|c| {
+                c.span.start.offset >= first_end && c.span.end.offset <= rparen_start
+            });
+            p.restore_pending_comments(keep);
             p.advance();
-            Ok(Step::Done(
-                p.spanned_from(start, Expr::Parenthesized(Box::new(first))),
-            ))
+            Ok(Step::Done(p.spanned_from(
+                start,
+                Expr::Parenthesized {
+                    expr: Box::new(first),
+                    trailing_comments: trailing,
+                },
+            )))
         }
         _ => Err(p.error("expected `,` or `)` in expression")),
     }

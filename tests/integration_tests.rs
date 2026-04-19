@@ -407,7 +407,10 @@ fn expr_eq(a: &Expr, b: &Expr) -> bool {
                     .zip(ab.iter())
                     .all(|(a, b)| expr_eq(&a.value, &b.value))
         }
-        (Expr::Parenthesized(a), Expr::Parenthesized(b)) => expr_eq(&a.value, &b.value),
+        (
+            Expr::Parenthesized { expr: a, .. },
+            Expr::Parenthesized { expr: b, .. },
+        ) => expr_eq(&a.value, &b.value),
         // For deep comparison of case/let/lambda/record, check structural shape.
         (Expr::CaseOf { branches: ba, .. }, Expr::CaseOf { branches: bb, .. }) => {
             ba.len() == bb.len()
@@ -439,9 +442,8 @@ fn expr_eq(a: &Expr, b: &Expr) -> bool {
         (Expr::GLSLExpression(a), Expr::GLSLExpression(b)) => a == b,
         // Parenthesized in one but not the other is OK if the inner matches.
         // The printer may add parens that weren't in the original.
-        (Expr::Parenthesized(inner), other) | (other, Expr::Parenthesized(inner)) => {
-            expr_eq(&inner.value, other)
-        }
+        (Expr::Parenthesized { expr: inner, .. }, other)
+        | (other, Expr::Parenthesized { expr: inner, .. }) => expr_eq(&inner.value, other),
         _ => false,
     }
 }

@@ -2480,7 +2480,7 @@ fn deeply_nested_parens() {
     let mut expr = body;
     loop {
         match expr {
-            Expr::Parenthesized(inner) => expr = &inner.value,
+            Expr::Parenthesized { expr: inner, .. } => expr = &inner.value,
             Expr::Literal(Literal::Int(1)) => break,
             _ => panic!("unexpected: {expr:?}"),
         }

@@ -266,7 +266,10 @@ impl Printer {
                     || self.is_multiline(&right.value)
                     || (self.is_pretty() && Self::spans_cross_lines(left.span, right.span))
             }
-            Expr::Parenthesized(inner) => self.is_multiline(&inner.value),
+            Expr::Parenthesized {
+                expr: inner,
+                trailing_comments,
+            } => self.is_multiline(&inner.value) || !trailing_comments.is_empty(),
             Expr::Negation(inner) => self.is_multiline(&inner.value),
             // A `"""..."""` literal whose content spans multiple lines prints
             // with its closing `"""` at column 1. In a binary-op chain this
@@ -1868,6 +1871,34 @@ impl Printer {
         }
     }
 
+    /// Emit trailing comments that sit between a Parenthesized expression's
+    /// inner value and its closing `)`. elm-format aligns them one column
+    /// past the opening `(`, e.g.
+    ///
+    /// ```elm
+    /// (   inner
+    ///  -- trailing
+    /// )
+    /// ```
+    ///
+    /// `paren_after_col` is the value of `current_column()` right after
+    /// writing `(` (i.e. chars since the last newline). `)` aligns at
+    /// `paren_after_col - 1` leading spaces; the trailing comment sits one
+    /// column further in, so `paren_after_col` leading spaces.
+    fn write_paren_trailing_comments(
+        &mut self,
+        comments: &[Spanned<Comment>],
+        paren_after_col: usize,
+    ) {
+        for c in comments {
+            self.newline();
+            for _ in 0..paren_after_col {
+                self.buf.push(' ');
+            }
+            self.write_comment(&c.value);
+        }
+    }
+
     /// Returns true if `spanned` has any leading line comments.
     fn has_leading_line_comment(spanned: &Spanned<Expr>) -> bool {
         spanned
@@ -2674,16 +2705,28 @@ impl Printer {
                 self.write_char(')');
             }
 
-            Expr::Parenthesized(inner) => {
+            Expr::Parenthesized {
+                expr: inner,
+                trailing_comments,
+            } => {
                 // elm-format strips redundant Parenthesized wrappers.
                 // In atomic position, strip parens when the inner expression
                 // is itself atomic or is Negation/Application (which are
-                // handled directly by write_expr_app).
-                if self.is_pretty() && is_naturally_atomic(&inner.value) {
+                // handled directly by write_expr_app). Only strip when there
+                // are no trailing comments to preserve.
+                if self.is_pretty()
+                    && trailing_comments.is_empty()
+                    && is_naturally_atomic(&inner.value)
+                {
                     self.write_expr_atomic(&inner.value);
-                } else if self.is_pretty() && matches!(inner.value, Expr::Negation(_)) {
+                } else if self.is_pretty()
+                    && trailing_comments.is_empty()
+                    && matches!(inner.value, Expr::Negation(_))
+                {
                     self.write_expr_app(&inner.value);
-                } else if self.is_pretty() && self.is_multiline(&inner.value) {
+                } else if self.is_pretty()
+                    && (self.is_multiline(&inner.value) || !trailing_comments.is_empty())
+                {
                     let is_block = matches!(
                         inner.value,
                         Expr::IfElse { .. }
@@ -2713,7 +2756,8 @@ impl Printer {
                         self.indent = saved_indent;
                         self.indent_extra = saved_extra;
                         self.indent_extra_stack = saved_stack;
-                        if wrote_newline {
+                        self.write_paren_trailing_comments(trailing_comments, col);
+                        if wrote_newline || !trailing_comments.is_empty() {
                             self.newline();
                             // `(` was at col - 1, write spaces to align `)` there.
                             for _ in 0..(col - 1) {
@@ -2739,6 +2783,7 @@ impl Printer {
                         self.indent = saved_indent;
                         self.indent_extra = saved_extra;
                         self.indent_extra_stack = saved_stack;
+                        self.write_paren_trailing_comments(trailing_comments, col);
                         self.newline();
                         for _ in 0..(col - 1) {
                             self.buf.push(' ');
@@ -3775,7 +3820,7 @@ fn is_naturally_atomic(expr: &Expr) -> bool {
             | Expr::Literal(_)
             | Expr::FunctionOrValue { .. }
             | Expr::PrefixOperator(_)
-            | Expr::Parenthesized(_)
+            | Expr::Parenthesized { .. }
             | Expr::Tuple(_)
             | Expr::List(_)
             | Expr::Record(_)
@@ -3790,7 +3835,7 @@ fn is_naturally_atomic(expr: &Expr) -> bool {
 /// Returns the inner expression if it is parenthesized, or the original expression otherwise.
 fn unwrap_parens(expr: &Expr) -> &Expr {
     match expr {
-        Expr::Parenthesized(inner) => &inner.value,
+        Expr::Parenthesized { expr: inner, .. } => &inner.value,
         other => other,
     }
 }
@@ -3800,8 +3845,11 @@ fn unwrap_parens(expr: &Expr) -> &Expr {
 /// parens around non-block, non-operator expressions in these positions.
 fn unwrap_parens_non_block(expr: &Expr) -> &Expr {
     match expr {
-        Expr::Parenthesized(inner)
-            if !matches!(
+        Expr::Parenthesized {
+            expr: inner,
+            trailing_comments,
+        } if trailing_comments.is_empty()
+            && !matches!(
                 inner.value,
                 Expr::OperatorApplication { .. }
                     | Expr::BinOps { .. }
