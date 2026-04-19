@@ -2727,9 +2727,14 @@ impl Printer {
                 .current_expr_span()
                 .map(|s| s.end.line > s.start.line && s.start.line != 0)
                 .unwrap_or(false);
+        let any_elem_line_comment = self.is_pretty()
+            && elems
+                .iter()
+                .any(|e| e.comments.iter().any(|c| matches!(c.value, Comment::Line(_))));
         let any_multiline = elems.iter().any(|e| self.is_multiline(&e.value))
             || (self.is_pretty() && Self::spans_multi_lines(elems))
-            || outer_multi_line;
+            || outer_multi_line
+            || any_elem_line_comment;
         if any_multiline && self.is_pretty() {
             // elm-format style: first element on same line as open bracket,
             // subsequent elements aligned with ", " prefix at same indent.
@@ -2755,15 +2760,52 @@ impl Printer {
                 self.indent();
             }
             self.indent_extra = saved_extra + 2;
+            // First element: if it has leading comments, write them inline
+            // after `[ ` (first on same line), then newline to element
+            // column (open_col + 2) for subsequent comments and the body.
+            if !elems[0].comments.is_empty() {
+                for (i, c) in elems[0].comments.iter().enumerate() {
+                    if i > 0 {
+                        self.newline();
+                        for _ in 0..(open_col + 2) {
+                            self.buf.push(' ');
+                        }
+                    }
+                    self.write_comment(&c.value);
+                }
+                self.newline();
+                for _ in 0..(open_col + 2) {
+                    self.buf.push(' ');
+                }
+            }
             self.write_spanned_expr(&elems[0]);
             self.indent_extra = saved_extra;
             if bump_indent {
                 self.dedent();
             }
             for elem in &elems[1..] {
-                self.newline();
-                for _ in 0..open_col {
-                    self.buf.push(' ');
+                // Subsequent elements with leading line comments follow
+                // elm-format's layout: blank line, then the comment(s) at
+                // the open-bracket column, then the `, element` line.
+                let has_comments = !elem.comments.is_empty();
+                if has_comments {
+                    self.newline();
+                    self.newline();
+                    for c in &elem.comments {
+                        for _ in 0..open_col {
+                            self.buf.push(' ');
+                        }
+                        self.write_comment(&c.value);
+                        self.newline();
+                    }
+                    for _ in 0..open_col {
+                        self.buf.push(' ');
+                    }
+                } else {
+                    self.newline();
+                    for _ in 0..open_col {
+                        self.buf.push(' ');
+                    }
                 }
                 self.write(", ");
                 if bump_indent {

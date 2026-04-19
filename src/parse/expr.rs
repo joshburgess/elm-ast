@@ -1247,6 +1247,10 @@ fn tuple_after_element(
 fn parse_list_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
     let bracket_col = start.column;
     p.advance(); // consume `[`
+    // Snapshot BEFORE skip_whitespace so any leading line comments between
+    // `[` and the first element can be attached to the first element via
+    // `attach_pre_body_comments`.
+    let elem_snapshot = p.pending_comments_snapshot();
     p.skip_whitespace();
 
     if matches!(p.peek(), Token::RightBracket) {
@@ -1260,7 +1264,7 @@ fn parse_list_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
 
     // Need first element
     Ok(Step::NeedExpr(Box::new(move |p, first| {
-        list_after_element(p, start, bracket_col, Vec::new(), first)
+        list_after_element(p, start, bracket_col, Vec::new(), first, elem_snapshot)
     })))
 }
 
@@ -1269,14 +1273,22 @@ fn list_after_element(
     start: Position,
     bracket_col: u32,
     mut elements: Vec<Spanned<Expr>>,
-    elem: Spanned<Expr>,
+    mut elem: Spanned<Expr>,
+    elem_snapshot: usize,
 ) -> ParseResult<Step> {
+    // Snapshot BEFORE `attach_pre_body_comments`. The `attach_pre_body_comments`
+    // call may push post-body comments back into pending (via
+    // `restore_pending_comments`) at index `elem_snapshot..`; we want the
+    // next element's snapshot to cover those. Any pre-body comments were
+    // moved onto `elem`, so they won't leak into the next element.
+    let next_snapshot = elem_snapshot;
+    attach_pre_body_comments(p, &mut elem, elem_snapshot);
     elements.push(elem);
     if p.eat(&Token::Comma) {
         // Re-set the context column for the next element.
         p.app_context_col = Some(bracket_col);
         Ok(Step::NeedExpr(Box::new(move |p, next| {
-            list_after_element(p, start, bracket_col, elements, next)
+            list_after_element(p, start, bracket_col, elements, next, next_snapshot)
         })))
     } else {
         p.expect(&Token::RightBracket)?;
