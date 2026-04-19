@@ -879,7 +879,11 @@ impl Printer {
 
     fn write_signature(&mut self, sig: &Signature) {
         self.write(&sig.name.value);
-        if self.is_pretty() && Self::type_ann_spans_multi_lines(&sig.type_annotation) {
+        let has_arm_comments = self.is_pretty()
+            && Self::type_ann_has_arm_comments(&sig.type_annotation);
+        if self.is_pretty()
+            && (Self::type_ann_spans_multi_lines(&sig.type_annotation) || has_arm_comments)
+        {
             self.write(" :");
             self.indent();
             self.newline_indent();
@@ -888,6 +892,20 @@ impl Printer {
         } else {
             self.write(" : ");
             self.write_type(&sig.type_annotation.value);
+        }
+    }
+
+    /// True if any arm in a FunctionType (including the first) has leading
+    /// comments attached. Forces multi-line layout.
+    fn type_ann_has_arm_comments(ta: &Spanned<TypeAnnotation>) -> bool {
+        if !ta.comments.is_empty() {
+            return true;
+        }
+        match &ta.value {
+            TypeAnnotation::FunctionType { from, to } => {
+                Self::type_ann_has_arm_comments(from) || Self::type_ann_has_arm_comments(to)
+            }
+            _ => false,
         }
     }
 
@@ -936,9 +954,24 @@ impl Printer {
     fn write_type_multiline(&mut self, ty: &Spanned<TypeAnnotation>) {
         match &ty.value {
             TypeAnnotation::FunctionType { from, to } => {
+                if self.is_pretty() && !from.comments.is_empty() {
+                    for c in &from.comments {
+                        self.write_comment(&c.value);
+                        self.newline_indent();
+                    }
+                }
                 self.write_type_arm_multiline(from);
                 let mut cur: &Spanned<TypeAnnotation> = to;
                 loop {
+                    // Emit leading comments on this arm (captured by the
+                    // parser as comments between the previous arm and the
+                    // current `->`). elm-format puts them above the `->`.
+                    if self.is_pretty() && !cur.comments.is_empty() {
+                        for c in &cur.comments {
+                            self.newline_indent();
+                            self.write_comment(&c.value);
+                        }
+                    }
                     // If the current RHS is a function type that had outer
                     // parens in source (e.g. `-> (a -> b)` on its own line),
                     // elm-format keeps the whole paren group on one arm line

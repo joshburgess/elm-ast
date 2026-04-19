@@ -1,3 +1,4 @@
+use crate::comment::Comment;
 use crate::node::Spanned;
 use crate::token::Token;
 use crate::type_annotation::{RecordField, TypeAnnotation};
@@ -13,12 +14,59 @@ use super::{ParseResult, Parser};
 ///   `a -> b -> c` = `a -> (b -> c)`
 pub fn parse_type(p: &mut Parser) -> ParseResult<Spanned<TypeAnnotation>> {
     let start = p.current_pos();
-    let left = parse_type_app(p)?;
+    let pre_left_len = p.collected_comments.len();
+    // Peek (without consuming) at the offset of the first non-whitespace
+    // token so we can identify comments that sit between here and the
+    // first arm. These are leading comments on the first arm:
+    //     name :
+    //         -- leading
+    //         FirstArm
+    //         -> ...
+    let first_token_offset = p.peek_past_whitespace_offset();
+    let mut left = parse_type_app(p)?;
+    let mut leading_on_left: Vec<Spanned<Comment>> = Vec::new();
+    let mut i = pre_left_len;
+    while i < p.collected_comments.len() {
+        let c = &p.collected_comments[i];
+        if c.span.end.offset <= first_token_offset {
+            leading_on_left.push(p.collected_comments.remove(i));
+        } else {
+            i += 1;
+        }
+    }
+    if !leading_on_left.is_empty() {
+        let mut merged = leading_on_left;
+        merged.extend(std::mem::take(&mut left.comments));
+        left.comments = merged;
+    }
 
     p.skip_whitespace();
     if matches!(p.peek(), Token::Arrow) {
+        let arrow_offset = p.peek_span().start.offset;
+        let left_end = left.span.end.offset;
+        // Claim any pending comments between the end of `left` and the
+        // `->` as leading comments on the right-hand side (the next arm).
+        // elm-format preserves these above the `->`:
+        //     Prev
+        //     -- leading
+        //     -> Next
+        let mut pre_arrow: Vec<Spanned<Comment>> = Vec::new();
+        let mut i = 0;
+        while i < p.collected_comments.len() {
+            let c = &p.collected_comments[i];
+            if c.span.start.offset >= left_end && c.span.end.offset <= arrow_offset {
+                pre_arrow.push(p.collected_comments.remove(i));
+            } else {
+                i += 1;
+            }
+        }
         p.advance(); // consume `->`
-        let right = parse_type(p)?; // right-recursive for right-associativity
+        let mut right = parse_type(p)?; // right-recursive for right-associativity
+        if !pre_arrow.is_empty() {
+            let mut merged = pre_arrow;
+            merged.extend(std::mem::take(&mut right.comments));
+            right.comments = merged;
+        }
         let ty = TypeAnnotation::FunctionType {
             from: Box::new(left),
             to: Box::new(right),

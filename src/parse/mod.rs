@@ -310,6 +310,25 @@ impl Parser {
         }
     }
 
+    /// Offset of the next non-whitespace token (or the end of input if
+    /// nothing remains). Does not modify parser state.
+    pub fn peek_past_whitespace_offset(&self) -> usize {
+        let mut i = self.pos;
+        while i < self.tokens.len() {
+            match &self.tokens[i].value {
+                Token::Newline
+                | Token::LineComment(_)
+                | Token::BlockComment(_)
+                | Token::DocComment(_) => i += 1,
+                _ => return self.tokens[i].span.start.offset,
+            }
+        }
+        self.tokens
+            .last()
+            .map(|t| t.span.end.offset)
+            .unwrap_or(0)
+    }
+
     /// Peek ahead past whitespace, returning the next non-whitespace token
     /// without consuming anything.
     pub fn peek_past_whitespace(&self) -> &Token {
