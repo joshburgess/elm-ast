@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-04-17
+
+### Added
+
+- Span-based multi-line detection in the `ElmFormat` printer. When the spans of consecutive items sit on different source lines, the following constructs are now preserved as multi-line regardless of whether child expressions are structurally multi-line:
+  - Record literals and record updates
+  - List and tuple expressions
+  - Operator chains: pipelines (`|>`/`|.`/`|=`), cons/append (`::`/`++`), function composition (`>>`/`<<`), arithmetic (`+`/`-`)
+- Matches elm-format output when source spans cross lines, eliminating prior cases where multi-line pipelines collapsed to a single long line.
+
 ## [0.1.0] - 2026-04-10
 
 Initial release.

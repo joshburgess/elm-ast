@@ -267,7 +267,7 @@ module Main exposing (..)
 x = []
 ";
     let m = parse_ok(src);
-    assert!(matches!(get_body(&m), Expr::List(elems) if elems.is_empty()));
+    assert!(matches!(get_body(&m), Expr::List { elements, .. } if elements.is_empty()));
     round_trip(src);
 }
 
@@ -2055,10 +2055,14 @@ fn display_expr_function_or_value() {
 
 #[test]
 fn display_expr_list() {
-    let list = Expr::List(vec![
-        Spanned::dummy(Expr::Literal(Literal::Int(1))),
-        Spanned::dummy(Expr::Literal(Literal::Int(2))),
-    ]);
+    let list = Expr::List {
+        elements: vec![
+            Spanned::dummy(Expr::Literal(Literal::Int(1))),
+            Spanned::dummy(Expr::Literal(Literal::Int(2))),
+        ],
+        element_inline_comments: Vec::new(),
+        trailing_comments: Vec::new(),
+    };
     let output = format!("{list}");
     assert!(
         output.contains("1") && output.contains("2"),
@@ -2415,10 +2419,10 @@ fn deeply_nested_lists() {
     let mut count = 0;
     loop {
         match expr {
-            Expr::List(elems) => {
+            Expr::List { elements, .. } => {
                 count += 1;
-                if elems.len() == 1 {
-                    expr = &elems[0].value;
+                if elements.len() == 1 {
+                    expr = &elements[0].value;
                 } else {
                     break;
                 }
@@ -2480,7 +2484,7 @@ fn deeply_nested_parens() {
     let mut expr = body;
     loop {
         match expr {
-            Expr::Parenthesized(inner) => expr = &inner.value,
+            Expr::Parenthesized { expr: inner, .. } => expr = &inner.value,
             Expr::Literal(Literal::Int(1)) => break,
             _ => panic!("unexpected: {expr:?}"),
         }

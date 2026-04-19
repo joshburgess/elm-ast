@@ -1,3 +1,4 @@
+use crate::comment::Comment;
 use crate::ident::{Ident, ModuleName};
 use crate::literal::Literal;
 use crate::node::Spanned;
@@ -61,9 +62,9 @@ pub enum Expr {
     /// If-then-else expression: `if a then b else c`
     ///
     /// Chained if-else: `if a then b else if c then d else e`
-    /// is represented as `IfElse { branches: [(a, b), (c, d)], else_branch: e }`
+    /// is represented as `IfElse { branches: [IfBranch(a, b), IfBranch(c, d)], else_branch: e }`
     IfElse {
-        branches: Vec<(Spanned<Expr>, Spanned<Expr>)>,
+        branches: Vec<IfBranch>,
         else_branch: Box<Spanned<Expr>>,
     },
 
@@ -73,8 +74,24 @@ pub enum Expr {
     /// Tuple expression: `( a, b )` or `( a, b, c )`
     Tuple(Vec<Spanned<Expr>>),
 
-    /// Parenthesized expression: `( expr )`
-    Parenthesized(Box<Spanned<Expr>>),
+    /// Parenthesized expression: `( expr )`.
+    ///
+    /// `trailing_comments` captures comments that appear between the inner
+    /// expression and the closing `)`, e.g.
+    ///
+    /// ```elm
+    /// ( expr
+    ///   -- trailing
+    /// )
+    /// ```
+    Parenthesized {
+        expr: Box<Spanned<Expr>>,
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Vec::is_empty")
+        )]
+        trailing_comments: Vec<Spanned<Comment>>,
+    },
 
     /// Let-in expression:
     /// ```elm
@@ -84,9 +101,18 @@ pub enum Expr {
     /// in
     ///     x + y
     /// ```
+    ///
+    /// `trailing_comments` captures any comments that appear between the
+    /// last declaration and the `in` keyword. elm-format preserves them
+    /// as a dangling block at the end of the let body.
     LetIn {
         declarations: Vec<Spanned<LetDeclaration>>,
         body: Box<Spanned<Expr>>,
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Vec::is_empty")
+        )]
+        trailing_comments: Vec<Spanned<Comment>>,
     },
 
     /// Case-of expression:
@@ -124,8 +150,33 @@ pub enum Expr {
     /// Record access function: `.name`
     RecordAccessFunction(Ident),
 
-    /// List expression: `[ 1, 2, 3 ]`
-    List(Vec<Spanned<Expr>>),
+    /// List expression: `[ 1, 2, 3 ]`.
+    ///
+    /// `trailing_comments` captures any comments that appear between the
+    /// last element and the closing `]`, e.g.
+    ///
+    /// ```elm
+    /// [ a
+    /// , b
+    /// -- dangling
+    /// ]
+    /// ```
+    List {
+        elements: Vec<Spanned<Expr>>,
+        /// Inline `-- comment` that follows each element on the same source
+        /// line, e.g. `[ a -- foo\n, b -- bar\n]`. Empty, or parallel to
+        /// `elements` with `None` for elements lacking a comment.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Vec::is_empty")
+        )]
+        element_inline_comments: Vec<Option<Spanned<Comment>>>,
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Vec::is_empty")
+        )]
+        trailing_comments: Vec<Spanned<Comment>>,
+    },
 
     /// GLSL shader block: `[glsl| ... |]`
     GLSLExpression(String),
@@ -133,6 +184,23 @@ pub enum Expr {
 
 // Manual Eq impl because Expr contains Literal which contains f64.
 impl Eq for Expr {}
+
+/// A single branch of an if-else chain: `if <condition> then <then_branch>`.
+///
+/// `trailing_comments` captures any comments that appear after `then_branch`
+/// and before the following `else` keyword. elm-format emits them as
+/// trailing comments on the branch body.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IfBranch {
+    pub condition: Spanned<Expr>,
+    pub then_branch: Spanned<Expr>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub trailing_comments: Vec<Spanned<Comment>>,
+}
 
 /// A field setter in a record expression or record update.
 ///
@@ -142,6 +210,15 @@ impl Eq for Expr {}
 pub struct RecordSetter {
     pub field: Spanned<Ident>,
     pub value: Spanned<Expr>,
+    /// Optional trailing inline comment: `field = value -- comment`.
+    /// elm-format keeps a short comment attached at the end of the setter,
+    /// before the next `,` or `}`. Preserved only when the comment appears
+    /// on the same source line as the value.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub trailing_comment: Option<Spanned<Comment>>,
 }
 
 /// A branch in a case-of expression.
@@ -196,12 +273,26 @@ pub struct Function {
     pub declaration: Spanned<FunctionImplementation>,
 }
 
-/// A type signature: `name : type`
+/// A type signature: `name : type`.
+///
+/// `trailing_comment` captures a short inline comment that appears on the
+/// same line as the signature's final token, e.g.
+///
+/// ```elm
+/// completeBlocks :
+///     State
+///     -> Parser State --Result Parser.Problem (List Block)
+/// ```
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Signature {
     pub name: Spanned<Ident>,
     pub type_annotation: Spanned<TypeAnnotation>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub trailing_comment: Option<Spanned<Comment>>,
 }
 
 /// The implementation part of a function definition: `name args = body`

@@ -47,7 +47,7 @@ fn normal_module_exposing_explicit() {
     let m = parse_ok("module Main exposing (main, view, Msg(..))");
     match v(&m.header) {
         ModuleHeader::Normal { exposing, .. } => match v(exposing) {
-            Exposing::Explicit(items) => {
+            Exposing::Explicit { items, .. } => {
                 assert_eq!(items.len(), 3);
                 assert!(matches!(v(&items[0]), ExposedItem::Function(n) if n == "main"));
                 assert!(matches!(v(&items[1]), ExposedItem::Function(n) if n == "view"));
@@ -124,7 +124,7 @@ fn import_with_exposing() {
     let m = parse_ok("module Main exposing (..)\n\nimport Html exposing (div, text)");
     let imp = v(&m.imports[0]);
     match v(imp.exposing.as_ref().unwrap()) {
-        Exposing::Explicit(items) => {
+        Exposing::Explicit { items, .. } => {
             assert_eq!(items.len(), 2);
         }
         _ => panic!("expected Explicit"),
@@ -577,7 +577,7 @@ x = [ 1, 2, 3 ]
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
-            Expr::List(elements) => {
+            Expr::List { elements, .. } => {
                 assert_eq!(elements.len(), 3);
             }
             other => panic!("expected List, got {other:?}"),
@@ -712,10 +712,7 @@ x =
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
-            Expr::LetIn {
-                declarations,
-                body: _,
-            } => {
+            Expr::LetIn { declarations, .. } => {
                 assert_eq!(declarations.len(), 1);
             }
             other => panic!("expected LetIn, got {other:?}"),
@@ -1371,7 +1368,7 @@ x = (42)
         Declaration::FunctionDeclaration(func) => {
             assert!(matches!(
                 &func.declaration.value.body.value,
-                Expr::Parenthesized(inner) if matches!(&inner.value, Expr::Literal(Literal::Int(42)))
+                Expr::Parenthesized { expr: inner, .. } if matches!(&inner.value, Expr::Literal(Literal::Int(42)))
             ));
         }
         _ => panic!("expected FunctionDeclaration"),
@@ -1390,7 +1387,7 @@ x = ((1 + 2))
         Declaration::FunctionDeclaration(func) => {
             assert!(matches!(
                 &func.declaration.value.body.value,
-                Expr::Parenthesized(_)
+                Expr::Parenthesized { .. }
             ));
         }
         _ => panic!("expected FunctionDeclaration"),
@@ -1410,7 +1407,7 @@ x = (1 + 2) * 3
         Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
             Expr::OperatorApplication { operator, left, .. } => {
                 assert_eq!(operator, "*");
-                assert!(matches!(&left.value, Expr::Parenthesized(_)));
+                assert!(matches!(&left.value, Expr::Parenthesized { .. }));
             }
             other => panic!("expected OperatorApplication, got {other:?}"),
         },
@@ -1466,8 +1463,8 @@ x = f (a + b) [1, 2] { name = \"hi\" }
         Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
             Expr::Application(args) => {
                 assert_eq!(args.len(), 4);
-                assert!(matches!(&args[1].value, Expr::Parenthesized(_)));
-                assert!(matches!(&args[2].value, Expr::List(_)));
+                assert!(matches!(&args[1].value, Expr::Parenthesized { .. }));
+                assert!(matches!(&args[2].value, Expr::List { .. }));
                 assert!(matches!(&args[3].value, Expr::Record(_)));
             }
             other => panic!("expected Application, got {other:?}"),

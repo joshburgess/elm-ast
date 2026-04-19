@@ -1,3 +1,4 @@
+use crate::comment::Comment;
 use crate::node::Spanned;
 use crate::token::Token;
 use crate::type_annotation::{RecordField, TypeAnnotation};
@@ -13,12 +14,59 @@ use super::{ParseResult, Parser};
 ///   `a -> b -> c` = `a -> (b -> c)`
 pub fn parse_type(p: &mut Parser) -> ParseResult<Spanned<TypeAnnotation>> {
     let start = p.current_pos();
-    let left = parse_type_app(p)?;
+    let pre_left_len = p.collected_comments.len();
+    // Peek (without consuming) at the offset of the first non-whitespace
+    // token so we can identify comments that sit between here and the
+    // first arm. These are leading comments on the first arm:
+    //     name :
+    //         -- leading
+    //         FirstArm
+    //         -> ...
+    let first_token_offset = p.peek_past_whitespace_offset();
+    let mut left = parse_type_app(p)?;
+    let mut leading_on_left: Vec<Spanned<Comment>> = Vec::new();
+    let mut i = pre_left_len;
+    while i < p.collected_comments.len() {
+        let c = &p.collected_comments[i];
+        if c.span.end.offset <= first_token_offset {
+            leading_on_left.push(p.collected_comments.remove(i));
+        } else {
+            i += 1;
+        }
+    }
+    if !leading_on_left.is_empty() {
+        let mut merged = leading_on_left;
+        merged.extend(std::mem::take(&mut left.comments));
+        left.comments = merged;
+    }
 
     p.skip_whitespace();
     if matches!(p.peek(), Token::Arrow) {
+        let arrow_offset = p.peek_span().start.offset;
+        let left_end = left.span.end.offset;
+        // Claim any pending comments between the end of `left` and the
+        // `->` as leading comments on the right-hand side (the next arm).
+        // elm-format preserves these above the `->`:
+        //     Prev
+        //     -- leading
+        //     -> Next
+        let mut pre_arrow: Vec<Spanned<Comment>> = Vec::new();
+        let mut i = 0;
+        while i < p.collected_comments.len() {
+            let c = &p.collected_comments[i];
+            if c.span.start.offset >= left_end && c.span.end.offset <= arrow_offset {
+                pre_arrow.push(p.collected_comments.remove(i));
+            } else {
+                i += 1;
+            }
+        }
         p.advance(); // consume `->`
-        let right = parse_type(p)?; // right-recursive for right-associativity
+        let mut right = parse_type(p)?; // right-recursive for right-associativity
+        if !pre_arrow.is_empty() {
+            let mut merged = pre_arrow;
+            merged.extend(std::mem::take(&mut right.comments));
+            right.comments = merged;
+        }
         let ty = TypeAnnotation::FunctionType {
             from: Box::new(left),
             to: Box::new(right),
@@ -125,8 +173,18 @@ fn parse_type_atomic(p: &mut Parser) -> ParseResult<Spanned<TypeAnnotation>> {
                 // Just parenthesized: `(Type)`
                 Token::RightParen => {
                     p.advance();
-                    // Unwrap the parentheses — they don't have semantic meaning in types.
-                    Ok(first)
+                    // Parens have no semantic meaning in types, so we unwrap them.
+                    // But when the inner type is a function type, elm-format
+                    // preserves redundant parens (e.g. `a -> (b -> c)`). We
+                    // signal that the parens were present by extending the
+                    // inner value's span to cover the parens. The pretty
+                    // printer detects this by comparing the outer span to the
+                    // inner `from`'s span.
+                    if matches!(first.value, TypeAnnotation::FunctionType { .. }) {
+                        Ok(p.spanned_from(start, first.value))
+                    } else {
+                        Ok(first)
+                    }
                 }
                 _ => Err(p.error("expected `,` or `)` in type")),
             }
@@ -182,11 +240,35 @@ fn parse_record_type(p: &mut Parser) -> ParseResult<Spanned<TypeAnnotation>> {
 
 /// Parse comma-separated record fields: `name : Type, age : Type`
 fn parse_record_fields(p: &mut Parser) -> ParseResult<Vec<Spanned<RecordField>>> {
+    // Snapshot once: trailing `skip_whitespace` at the end of one field's
+    // type parse may have pushed a `-- comment` between fields onto the
+    // pending buffer BEFORE we get a chance to snapshot locally. By
+    // snapshotting at the top, then partitioning by position after each
+    // subsequent field, we can attach those between-field comments to the
+    // next field and restore anything that doesn't belong.
+    let start_snapshot = p.pending_comments_snapshot();
     let mut fields = Vec::new();
     fields.push(parse_record_field(p)?);
 
     while p.eat(&Token::Comma) {
-        fields.push(parse_record_field(p)?);
+        p.skip_whitespace();
+        let mut field = parse_record_field(p)?;
+
+        let prev_end = fields.last().unwrap().span.end.offset;
+        let field_start = field.span.start.offset;
+
+        let all = p.take_pending_comments_since(start_snapshot);
+        let (leading, other): (Vec<_>, Vec<_>) = all
+            .into_iter()
+            .partition(|c| c.span.start.offset > prev_end && c.span.end.offset <= field_start);
+        p.restore_pending_comments(other);
+
+        if !leading.is_empty() {
+            let mut all_leading = leading;
+            all_leading.extend(std::mem::take(&mut field.comments));
+            field.comments = all_leading;
+        }
+        fields.push(field);
     }
 
     Ok(fields)

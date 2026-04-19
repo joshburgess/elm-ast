@@ -5,7 +5,7 @@
 
 use crate::declaration::{CustomType, Declaration, TypeAlias, ValueConstructor};
 use crate::exposing::Exposing;
-use crate::expr::{Expr, Function, FunctionImplementation, RecordSetter, Signature};
+use crate::expr::{Expr, Function, FunctionImplementation, IfBranch, RecordSetter, Signature};
 use crate::file::ElmModule;
 use crate::import::Import;
 use crate::literal::Literal;
@@ -29,7 +29,7 @@ pub fn int(n: i64) -> Spanned<Expr> {
 
 /// Create a float literal expression.
 pub fn float(n: f64) -> Spanned<Expr> {
-    spanned(Expr::Literal(Literal::Float(n)))
+    spanned(Expr::Literal(Literal::Float(n, None)))
 }
 
 /// Create a string literal expression.
@@ -77,7 +77,11 @@ pub fn binop(op: impl Into<String>, left: Spanned<Expr>, right: Spanned<Expr>) -
 
 /// Create a list expression: `[ a, b, c ]`
 pub fn list(elements: Vec<Spanned<Expr>>) -> Spanned<Expr> {
-    spanned(Expr::List(elements))
+    spanned(Expr::List {
+        elements,
+        element_inline_comments: Vec::new(),
+        trailing_comments: Vec::new(),
+    })
 }
 
 /// Create a tuple expression: `( a, b )`
@@ -94,6 +98,7 @@ pub fn record(fields: Vec<(impl Into<String>, Spanned<Expr>)>) -> Spanned<Expr> 
                 spanned(RecordSetter {
                     field: spanned(name.into()),
                     value,
+                    trailing_comment: None,
                 })
             })
             .collect(),
@@ -107,7 +112,11 @@ pub fn if_else(
     else_branch: Spanned<Expr>,
 ) -> Spanned<Expr> {
     spanned(Expr::IfElse {
-        branches: vec![(condition, then_branch)],
+        branches: vec![IfBranch {
+            condition,
+            then_branch,
+            trailing_comments: Vec::new(),
+        }],
         else_branch: Box::new(else_branch),
     })
 }
@@ -225,6 +234,7 @@ pub fn func_with_sig(
         signature: Some(spanned(Signature {
             name: spanned(name_str.clone()),
             type_annotation: type_ann,
+            trailing_comment: None,
         })),
         declaration: spanned(FunctionImplementation {
             name: spanned(name_str),
@@ -258,12 +268,15 @@ pub fn custom_type(
         documentation: None,
         name: spanned(name.into()),
         generics: generics.into_iter().map(|g| spanned(g.into())).collect(),
+        pre_equals_comments: Vec::new(),
         constructors: constructors
             .into_iter()
             .map(|(name, args)| {
                 spanned(ValueConstructor {
                     name: spanned(name.into()),
                     args,
+                    pre_pipe_comments: Vec::new(),
+                    trailing_comment: None,
                 })
             })
             .collect(),

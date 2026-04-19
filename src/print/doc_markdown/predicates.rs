@@ -212,6 +212,28 @@ pub(in crate::print) fn looks_like_type_annotation(line: &str) -> bool {
     false
 }
 
+/// Return true if the paragraph consists of exactly one non-comment line
+/// plus one or more standalone `-- ...` line comments (no blank separators).
+/// elm-format leaves such blocks verbatim when they fail to parse as
+/// declarations, so we mirror that to avoid introducing unrelated spacing
+/// differences inside example code.
+pub(in crate::print) fn paragraph_is_single_expr_with_line_comment(para: &[String]) -> bool {
+    let mut expr_lines = 0usize;
+    let mut comment_lines = 0usize;
+    for line in para {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("--") {
+            comment_lines += 1;
+        } else {
+            expr_lines += 1;
+        }
+    }
+    expr_lines == 1 && comment_lines >= 1
+}
+
 pub(in crate::print) fn is_assertion_only_paragraph(para: &[String]) -> bool {
     let non_empty: Vec<&String> = para.iter().filter(|l| !l.trim().is_empty()).collect();
     if non_empty.len() < 2 {
@@ -248,6 +270,11 @@ pub(in crate::print) fn looks_like_assertion(trimmed: &str) -> bool {
     if trimmed.starts_with("--") {
         return false;
     }
+    // Reject lines with unterminated string/char literals. elm-format can't
+    // parse these so it leaves the surrounding block verbatim; we do the same.
+    if has_unterminated_string_or_char(trimmed) {
+        return false;
+    }
     if let Some(eq) = trimmed.find(" == ") {
         let (left, right) = (&trimmed[..eq], &trimmed[eq + 4..]);
         if left.is_empty() || right.is_empty() {
@@ -279,6 +306,34 @@ pub(in crate::print) fn looks_like_assertion(trimmed: &str) -> bool {
 }
 
 pub(in crate::print) fn looks_like_simple_expr_line(trimmed: &str) -> bool {
+    // Reject lines that contain non-Elm operators or syntax, so non-Elm
+    // prose inside fenced code blocks (ASCII tables, bitstrings with `=>`,
+    // etc.) isn't mistaken for a simple expression and reformatted.
+    if trimmed.contains("=>") || trimmed.contains("|>>") {
+        return false;
+    }
+    // Reject lines that contain sentence-ending punctuation: a period
+    // followed by a space where the char before the period is a lowercase
+    // alphabetic (not a digit → decimal, not uppercase → module qualifier).
+    // This catches prose in doc-comment code blocks like
+    // "remapping of data for each pixel. It allows operations..." without
+    // also catching record access (`foo.bar baz`) or module paths (`Foo.bar`).
+    if contains_sentence_period(trimmed) {
+        return false;
+    }
+    // Reject markdown ordered-list items: `N. text` or `N.` alone.
+    // These collide with Elm decimal-literal lookahead and shouldn't be
+    // treated as expressions.
+    if looks_like_ordered_list_item(trimmed) {
+        return false;
+    }
+    // Reject lines containing a bare ` -> ` arrow outside strings/chars.
+    // A standalone line with `->` is typically a case-arm or lambda
+    // body with missing context (e.g. `0.5 -> half speed` in a doc
+    // block), not a valid top-level expression.
+    if contains_bare_arrow(trimmed) {
+        return false;
+    }
     // Must begin with identifier (lower/upper) or opening delimiter.
     let first = match trimmed.chars().next() {
         Some(c) => c,
@@ -371,6 +426,234 @@ pub(in crate::print) fn looks_like_simple_expr_line(trimmed: &str) -> bool {
         return false;
     }
     true
+}
+
+/// True if the line contains an unterminated `"` string or `'` char
+/// literal. Triple-quoted `"""` must also be closed on the same line.
+fn has_unterminated_string_or_char(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'"' {
+            // Triple-quoted string?
+            if i + 2 < bytes.len() && bytes[i + 1] == b'"' && bytes[i + 2] == b'"' {
+                // Scan for closing """.
+                let mut j = i + 3;
+                let mut esc = false;
+                let mut found = false;
+                while j < bytes.len() {
+                    if esc {
+                        esc = false;
+                        j += 1;
+                        continue;
+                    }
+                    if bytes[j] == b'\\' {
+                        esc = true;
+                        j += 1;
+                        continue;
+                    }
+                    if j + 2 < bytes.len()
+                        && bytes[j] == b'"'
+                        && bytes[j + 1] == b'"'
+                        && bytes[j + 2] == b'"'
+                    {
+                        found = true;
+                        j += 3;
+                        break;
+                    }
+                    j += 1;
+                }
+                if !found {
+                    return true;
+                }
+                i = j;
+                continue;
+            }
+            // Regular single-quoted string. Scan for unescaped closing ".
+            let mut j = i + 1;
+            let mut esc = false;
+            let mut found = false;
+            while j < bytes.len() {
+                if esc {
+                    esc = false;
+                    j += 1;
+                    continue;
+                }
+                if bytes[j] == b'\\' {
+                    esc = true;
+                    j += 1;
+                    continue;
+                }
+                if bytes[j] == b'"' {
+                    found = true;
+                    j += 1;
+                    break;
+                }
+                j += 1;
+            }
+            if !found {
+                return true;
+            }
+            i = j;
+            continue;
+        }
+        if c == b'\'' {
+            let mut j = i + 1;
+            let mut esc = false;
+            let mut found = false;
+            while j < bytes.len() {
+                if esc {
+                    esc = false;
+                    j += 1;
+                    continue;
+                }
+                if bytes[j] == b'\\' {
+                    esc = true;
+                    j += 1;
+                    continue;
+                }
+                if bytes[j] == b'\'' {
+                    found = true;
+                    j += 1;
+                    break;
+                }
+                j += 1;
+            }
+            if !found {
+                return true;
+            }
+            i = j;
+            continue;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// True if the line contains a bare ` -> ` arrow outside of string and
+/// char literals. Such lines are almost always case-arm or lambda bodies
+/// that need external context to parse.
+fn contains_bare_arrow(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if c == '\\' {
+                esc = true;
+            } else if c == '\'' {
+                in_char = false;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '\'' => in_char = true,
+            '-' if i + 2 < bytes.len()
+                && bytes[i + 1] == b'>'
+                && bytes[i + 2] == b' '
+                && i > 0
+                && bytes[i - 1] == b' ' =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// True if the line is a markdown ordered-list item:
+///   "1. text" or "2." (number-dot with optional following content).
+/// These look like Elm decimals but aren't valid standalone syntax.
+fn looks_like_ordered_list_item(s: &str) -> bool {
+    let mut chars = s.chars();
+    let first = match chars.next() {
+        Some(c) if c.is_ascii_digit() => c,
+        _ => return false,
+    };
+    let _ = first;
+    // Consume additional digits.
+    let mut rest = &s[1..];
+    while rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        rest = &rest[1..];
+    }
+    // Must be followed by `.`.
+    if !rest.starts_with('.') {
+        return false;
+    }
+    // After the dot: either end of line or a space.
+    let after_dot = &rest[1..];
+    after_dot.is_empty() || after_dot.starts_with(' ')
+}
+
+/// True if the line contains a period followed by a space where the char
+/// before the period is a lowercase letter. This pattern is a strong signal
+/// of English sentence punctuation inside what could otherwise look like
+/// Elm expressions (e.g. `"pixel. It allows ..."`). Elm decimals have a
+/// digit before `.`, record access has no space after, and module
+/// qualifiers start with uppercase, so this heuristic rejects prose
+/// without catching valid Elm syntax.
+fn contains_sentence_period(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    for i in 0..bytes.len() {
+        let c = bytes[i] as char;
+        if esc {
+            esc = false;
+            continue;
+        }
+        if in_str {
+            if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        if in_char {
+            if c == '\\' {
+                esc = true;
+            } else if c == '\'' {
+                in_char = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '\'' => in_char = true,
+            '.' if i + 1 < bytes.len() && bytes[i + 1] == b' ' && i > 0 => {
+                let prev = bytes[i - 1] as char;
+                if prev.is_ascii_lowercase() {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Add spaces around tight binary operators (`1/2` → `1 / 2`, `2^3` → `2 ^ 3`)
@@ -511,6 +794,379 @@ pub(in crate::print) fn block_has_unseparated_assertions(block_lines: &[&str]) -
         }
     }
     run_assert_count >= 2
+}
+
+/// Detect a block where 2+ assertion lines at the base (4-space) indent share
+/// the same column for their assertion operator (` == ` or ` -- `), with at
+/// least one line using alignment padding (2+ spaces before the operator),
+/// AND each line is otherwise already in canonical form (no internal
+/// double-spacing, no tight operators, no compact list/tuple syntax). Only
+/// such "pure alignment padding" blocks are preserved verbatim by elm-format.
+pub(in crate::print) fn block_has_column_aligned_assertions(block_lines: &[&str]) -> bool {
+    use super::spacing::{
+        collapse_spaces_outside_strings, space_tight_binary_ops, space_tight_tuples_lists,
+    };
+    let mut cols: Vec<usize> = Vec::new();
+    let mut any_padded = false;
+    let mut any_incomplete_marker = false;
+    let mut last_line_incomplete = false;
+    let mut any_internal_padding = false;
+    let mut any_compact_syntax = false;
+    let mut all_canonical_before_op = true;
+    let mut any_internal_ellipsis = false;
+    for &line in block_lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        if leading != 4 {
+            return false;
+        }
+        if trimmed.starts_with("--") {
+            // elm-format reformats blocks that mix line comments with
+            // aligned assertions: the comment stays but surrounding
+            // assertions get normalized. Don't preserve in that case.
+            return false;
+        }
+        if !looks_like_assertion(trimmed) {
+            return false;
+        }
+        let Some((col, padded)) = find_top_level_assertion_op(line) else {
+            return false;
+        };
+        // The line must be in canonical form except for alignment padding
+        // before the assertion operator. Use the content starting at the
+        // 4-space base indent so the leading spaces aren't treated as a
+        // collapsible run.
+        let before = &line[leading..col];
+        let op_and_after = &line[col..];
+        let canonical = format!("{} {}", before.trim_end(), op_and_after.trim_start());
+        let c1 = collapse_spaces_outside_strings(&canonical);
+        let c2 = space_tight_binary_ops(&c1);
+        let c3 = space_tight_tuples_lists(&c2);
+        if c3 != canonical {
+            all_canonical_before_op = false;
+        }
+        // Detect multi-space runs (outside strings) inside the expression
+        // to the left of the operator, excluding the op-alignment padding.
+        // This signals intentional internal alignment.
+        if has_multi_space_outside_strings(before.trim_end()) {
+            any_internal_padding = true;
+        }
+        // Detect compact list / tuple syntax (e.g. `["x"]`, `(0,1)`) anywhere
+        // on the line. elm-format preserves column-aligned assertion tables
+        // intact when the alignment involves compact collection literals.
+        if line_has_compact_list_or_tuple(line) {
+            any_compact_syntax = true;
+        }
+        let ends_incomplete = trimmed.ends_with(" ...") || trimmed.ends_with(" ..");
+        if ends_incomplete {
+            any_incomplete_marker = true;
+        }
+        last_line_incomplete = ends_incomplete;
+        if has_internal_ellipsis(trimmed) {
+            any_internal_ellipsis = true;
+        }
+        cols.push(col);
+        if padded {
+            any_padded = true;
+        }
+    }
+    if cols.len() < 2 {
+        return false;
+    }
+    let first_col = cols[0];
+    if !cols.iter().all(|&c| c == first_col) {
+        return false;
+    }
+    if !any_padded {
+        return false;
+    }
+    // elm-format preserves column-aligned assertion tables in two cases:
+    //   (a) the block contains an incomplete/unparseable marker (` ...`
+    //       or ` ..`) AND the last line ends with one — the chain never
+    //       terminates, and
+    //   (b) the lines have internal alignment padding (multi-space runs
+    //       outside strings to the left of the operator). This covers
+    //       tables with compact lists + padded closing brackets.
+    // In case (a) the expression is otherwise canonical; in case (b) the
+    // canonical check can fail because of compact tuples/lists that the
+    // author padded for visual alignment.
+    let case_a = all_canonical_before_op && any_incomplete_marker && last_line_incomplete;
+    let case_b = any_internal_padding && any_compact_syntax;
+    // Case (c): a line contains an in-line `...` followed by more content on
+    // the same line (e.g. `Err ... -- comment` or `Err ... (Ctor x) ...`).
+    // Such lines are unparseable as normal Elm, so elm-format preserves the
+    // surrounding column-aligned block.
+    let case_c = any_internal_ellipsis;
+    if !(case_a || case_b || case_c) {
+        return false;
+    }
+    true
+}
+
+/// Returns true if the line contains a ` ...` ellipsis token with any
+/// non-dot content after it on the same line (e.g. ` ... -- comment` or
+/// ` ... (expr)`). A trailing terminal ` ...` (with nothing after it) does
+/// not qualify.
+pub(in crate::print) fn has_internal_ellipsis(trimmed: &str) -> bool {
+    let bytes = trimmed.as_bytes();
+    if bytes.len() < 4 {
+        return false;
+    }
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        if bytes[i] == b' ' && bytes[i + 1] == b'.' && bytes[i + 2] == b'.' && bytes[i + 3] == b'.'
+        {
+            // The `...` token is only considered "internal" when followed by
+            // a non-dot, non-end character. `...` at end-of-string, or `....`
+            // (extra dots) is not treated as an internal ellipsis.
+            if i + 4 < bytes.len() && bytes[i + 4] != b'.' {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Detects compact list/tuple literals: `[x,...]` or `(x,y)` with no leading
+/// space after the open bracket/paren. String/char-literal aware. We reuse
+/// this as a hint that the block has non-canonical collection formatting.
+fn line_has_compact_list_or_tuple(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'\'' {
+                in_char = false;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' {
+            in_char = true;
+            i += 1;
+            continue;
+        }
+        if b == b'[' {
+            // Compact list: `[` followed immediately by `"`, `'`, `(`, `[`,
+            // `{`, digit, or identifier start.
+            if let Some(&next) = bytes.get(i + 1)
+                && (next == b'"'
+                    || next == b'\''
+                    || next == b'('
+                    || next == b'['
+                    || next == b'{'
+                    || next.is_ascii_digit()
+                    || next.is_ascii_alphabetic()
+                    || next == b'_')
+            {
+                return true;
+            }
+        }
+        if b == b'(' {
+            // Compact tuple: `(` followed by a literal/identifier and later
+            // a comma before the matching `)`. Cheap heuristic: same as
+            // `[` case — compact tuples almost always start with a digit or
+            // identifier start.
+            if let Some(&next) = bytes.get(i + 1)
+                && (next == b'"' || next == b'\'' || next.is_ascii_digit())
+            {
+                // Scan forward for a comma before `)`, staying at depth 1.
+                let mut depth = 1i32;
+                let mut j = i + 1;
+                let mut found_comma = false;
+                let mut inner_str = false;
+                let mut inner_char = false;
+                let mut inner_esc = false;
+                while j < bytes.len() {
+                    let c = bytes[j];
+                    if inner_esc {
+                        inner_esc = false;
+                        j += 1;
+                        continue;
+                    }
+                    if inner_str {
+                        if c == b'\\' {
+                            inner_esc = true;
+                        } else if c == b'"' {
+                            inner_str = false;
+                        }
+                        j += 1;
+                        continue;
+                    }
+                    if inner_char {
+                        if c == b'\\' {
+                            inner_esc = true;
+                        } else if c == b'\'' {
+                            inner_char = false;
+                        }
+                        j += 1;
+                        continue;
+                    }
+                    match c {
+                        b'"' => inner_str = true,
+                        b'\'' => inner_char = true,
+                        b'(' | b'[' | b'{' => depth += 1,
+                        b')' | b']' | b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        b',' if depth == 1 => {
+                            found_comma = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if found_comma {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Returns true if `s` contains a run of 2+ consecutive spaces outside any
+/// single- or triple-quoted string or char literal. Used to detect intentional
+/// internal alignment padding inside a source line.
+fn has_multi_space_outside_strings(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'\'' {
+                in_char = false;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' {
+            in_char = true;
+            i += 1;
+            continue;
+        }
+        if b == b' ' && i + 1 < bytes.len() && bytes[i + 1] == b' ' {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Scan a line for its top-level assertion operator (` == ` or ` -- `) outside
+/// strings/chars. Returns the column of the operator's first space plus a flag
+/// indicating whether the line has 2+ spaces before the operator (alignment
+/// padding).
+fn find_top_level_assertion_op(line: &str) -> Option<(usize, bool)> {
+    let bytes = line.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'\'' {
+                in_char = false;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' {
+            in_char = true;
+            i += 1;
+            continue;
+        }
+        if b == b' ' && i + 3 < bytes.len() && &bytes[i + 1..i + 4] == b"== " {
+            let padded = i >= 1 && bytes[i.saturating_sub(1)] == b' ';
+            return Some((i + 1, padded));
+        }
+        if b == b' ' && i + 3 < bytes.len() && &bytes[i + 1..i + 4] == b"-- " {
+            let padded = i >= 1 && bytes[i.saturating_sub(1)] == b' ';
+            return Some((i + 1, padded));
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Detect a line that is a single parenthesized operator expression like

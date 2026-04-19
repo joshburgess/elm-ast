@@ -843,7 +843,7 @@ impl Fold for AllLiteralsToZero {
     fn fold_literal(&mut self, lit: Literal) -> Literal {
         match lit {
             Literal::Int(_) => Literal::Int(0),
-            Literal::Float(_) => Literal::Float(0.0),
+            Literal::Float(_, _) => Literal::Float(0.0, None),
             Literal::Char(_) => Literal::Char('0'),
             Literal::Hex(_) => Literal::Hex(0),
             Literal::String(_) => Literal::String("0".into()),

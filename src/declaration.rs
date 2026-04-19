@@ -1,3 +1,4 @@
+use crate::comment::Comment;
 use crate::expr::{Function, Signature};
 use crate::ident::Ident;
 use crate::node::Spanned;
@@ -92,6 +93,19 @@ pub struct CustomType {
     /// Type parameters: `a` in `type Maybe a = ...`
     pub generics: Vec<Spanned<Ident>>,
 
+    /// Comments that appear between the type name/generics and the `=`.
+    /// elm-format preserves these by wrapping the `type` header over two
+    /// lines:
+    ///     type
+    ///         Sequence value
+    ///         -- repeat, delay, duration
+    ///         = Sequence ...
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub pre_equals_comments: Vec<Spanned<Comment>>,
+
     /// The constructors: `Just a | Nothing`
     pub constructors: Vec<Spanned<ValueConstructor>>,
 }
@@ -104,6 +118,22 @@ pub struct CustomType {
 pub struct ValueConstructor {
     pub name: Spanned<Ident>,
     pub args: Vec<Spanned<TypeAnnotation>>,
+    /// Comments that appeared BEFORE the preceding `|` separator (or for the
+    /// first constructor, before `=`). elm-format preserves these as
+    /// "trailing on previous constructor" style: they appear on their own
+    /// line(s) at the constructor-name column, with the `|` for THIS
+    /// constructor coming afterward on a new line. Leave empty for the
+    /// first constructor.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub pre_pipe_comments: Vec<Spanned<Comment>>,
+    /// Optional trailing inline comment on the same source line as the
+    /// constructor: `| Ctor args -- comment`. elm-format keeps the comment
+    /// on the same line after the last arg.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub trailing_comment: Option<Spanned<Comment>>,
 }
 
 /// An infix operator definition.

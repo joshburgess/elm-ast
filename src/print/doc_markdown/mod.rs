@@ -141,6 +141,29 @@ pub(super) fn normalize_doc_comment(text: &str) -> String {
     result
 }
 
+/// If the line at `start` (which must be the first non-space byte of a line)
+/// looks like a markdown horizontal rule — 3+ `*` characters optionally
+/// separated by whitespace — return the byte position of the end of the line
+/// (the `\n` or `len`). Otherwise return None.
+fn horizontal_rule_line_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut p = start;
+    let mut star_count = 0;
+    while p < bytes.len() && bytes[p] != b'\n' {
+        match bytes[p] {
+            b'*' => star_count += 1,
+            b' ' | b'\t' => {}
+            _ => return None,
+        }
+        p += 1;
+    }
+    if star_count >= 3 { Some(p) } else { None }
+}
+
+/// True if `result` ends with a blank line (i.e. `\n\n`) or is empty.
+fn ends_with_blank_line(result: &str) -> bool {
+    result.is_empty() || result.ends_with("\n\n")
+}
+
 /// Normalize emphasis markers in doc comment text: `*text*` → `_text_`.
 /// Also escapes lone `*` as `\*` (matching elm-format's Cheapskate round-trip).
 /// Does NOT convert `**bold**`. Does NOT modify `*` inside code spans or
@@ -216,7 +239,35 @@ pub(super) fn normalize_emphasis(text: &str) -> String {
             // renderer emits these as `- `. A leading `*` followed by a
             // space at the start of line content is a bullet, not
             // emphasis. Only apply outside of indented code blocks.
+            //
+            // Exception: a line consisting entirely of 3+ `*` characters
+            // optionally separated by whitespace (e.g. `* * *`, `***`) is a
+            // markdown horizontal rule, which Cheapskate renders as `---`
+            // surrounded by blank lines.
             if !in_indented_code_block && ch == b'*' && i + 1 < len && bytes[i + 1] == b' ' {
+                if let Some(line_end) = horizontal_rule_line_end(bytes, i) {
+                    // Ensure a blank line precedes `---`. If the preceding
+                    // output doesn't already end with `\n\n`, inject one.
+                    if !ends_with_blank_line(&result) {
+                        result.push('\n');
+                    }
+                    result.push_str("---");
+                    // Ensure a blank line follows `---`. If the next source
+                    // line isn't blank, inject one extra newline on top of the
+                    // source `\n` that the main loop will emit.
+                    let mut after = line_end;
+                    if after < len && bytes[after] == b'\n' {
+                        after += 1;
+                    }
+                    let next_blank = after >= len || bytes[after] == b'\n';
+                    if !next_blank {
+                        result.push('\n');
+                    }
+                    i = line_end;
+                    prev_line_blank = true;
+                    current_line_has_content = false;
+                    continue;
+                }
                 result.push('-');
                 i += 1;
                 continue;
@@ -308,37 +359,30 @@ pub(super) fn normalize_emphasis(text: &str) -> String {
                 continue;
             }
 
-            // Inline code span: look for a matching closer on the same line
-            // (for single backtick) or within the same paragraph (for multi-backtick).
+            // Inline code span: look for a matching closer within the same
+            // paragraph. CommonMark permits code spans to cross newlines
+            // (line endings are normalized to spaces); only blank lines
+            // terminate the paragraph.
             let after_open = bt_start + bt_count;
             let mut found_close = false;
             let mut close_start = after_open;
-            // Determine search boundary.
             let mut search_end = after_open;
-            if bt_count == 1 {
-                // Don't cross newlines for single-backtick spans.
-                while search_end < len && bytes[search_end] != b'\n' {
-                    search_end += 1;
-                }
-            } else {
-                // Multi-backtick spans stop at blank lines.
-                while search_end < len {
-                    if bytes[search_end] == b'\n' {
-                        let nls = search_end + 1;
-                        if nls >= len {
-                            search_end = len;
-                            break;
-                        }
-                        let mut ws = nls;
-                        while ws < len && bytes[ws] == b' ' {
-                            ws += 1;
-                        }
-                        if ws >= len || bytes[ws] == b'\n' {
-                            break;
-                        }
+            while search_end < len {
+                if bytes[search_end] == b'\n' {
+                    let nls = search_end + 1;
+                    if nls >= len {
+                        search_end = len;
+                        break;
                     }
-                    search_end += 1;
+                    let mut ws = nls;
+                    while ws < len && bytes[ws] == b' ' {
+                        ws += 1;
+                    }
+                    if ws >= len || bytes[ws] == b'\n' {
+                        break;
+                    }
                 }
+                search_end += 1;
             }
 
             while close_start < search_end {
@@ -789,10 +833,30 @@ pub(super) fn collapse_prose_internal_spaces(text: &str) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut result = String::with_capacity(text.len());
     let mut in_code_block = false;
+    let mut in_fenced_block = false;
 
     for (i, &line) in lines.iter().enumerate() {
         if i > 0 {
             result.push('\n');
+        }
+
+        // Track fenced code block state (```-delimited). Inside a preserved
+        // fence (e.g. ```ascii), contents must keep original spacing.
+        let trimmed_all = line.trim();
+        if trimmed_all.starts_with("```") {
+            if in_fenced_block {
+                in_fenced_block = false;
+                result.push_str(line);
+                continue;
+            } else {
+                in_fenced_block = true;
+                result.push_str(line);
+                continue;
+            }
+        }
+        if in_fenced_block {
+            result.push_str(line);
+            continue;
         }
 
         // Track code block state (4+ space indent after blank line).

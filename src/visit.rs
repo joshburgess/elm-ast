@@ -154,7 +154,7 @@ pub fn walk_import<V: Visit + ?Sized>(v: &mut V, import: &Spanned<Import>) {
 }
 
 pub fn walk_exposing<V: Visit + ?Sized>(v: &mut V, exposing: &Spanned<Exposing>) {
-    if let Exposing::Explicit(items) = &exposing.value {
+    if let Exposing::Explicit { items, .. } = &exposing.value {
         for item in items {
             v.visit_exposed_item(item);
         }
@@ -256,24 +256,41 @@ pub fn walk_expr<V: Visit + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
             branches,
             else_branch,
         } => {
-            for (cond, body) in branches {
-                v.visit_expr(cond);
-                v.visit_expr(body);
+            for branch in branches {
+                v.visit_expr(&branch.condition);
+                v.visit_expr(&branch.then_branch);
             }
             v.visit_expr(else_branch);
         }
 
         Expr::Negation(inner) => v.visit_expr(inner),
 
-        Expr::Tuple(elems) | Expr::List(elems) => {
+        Expr::Tuple(elems) => {
             for elem in elems {
                 v.visit_expr(elem);
             }
         }
 
-        Expr::Parenthesized(inner) => v.visit_expr(inner),
+        Expr::List {
+            elements,
+            element_inline_comments: _,
+            trailing_comments: _,
+        } => {
+            for elem in elements {
+                v.visit_expr(elem);
+            }
+        }
 
-        Expr::LetIn { declarations, body } => {
+        Expr::Parenthesized {
+            expr,
+            trailing_comments: _,
+        } => v.visit_expr(expr),
+
+        Expr::LetIn {
+            declarations,
+            body,
+            trailing_comments: _,
+        } => {
             for decl in declarations {
                 v.visit_let_declaration(decl);
             }

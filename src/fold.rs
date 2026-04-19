@@ -184,6 +184,7 @@ pub fn fold_signature<F: Fold + ?Sized>(f: &mut F, sig: Spanned<Signature>) -> S
     let value = Signature {
         name: sig.value.name.map(|n| f.fold_ident(n)),
         type_annotation: f.fold_type_annotation(sig.value.type_annotation),
+        trailing_comment: sig.value.trailing_comment,
     };
     Spanned::new(span, value)
 }
@@ -220,6 +221,7 @@ pub fn fold_custom_type<F: Fold + ?Sized>(f: &mut F, ct: CustomType) -> CustomTy
         documentation: ct.documentation,
         name: ct.name,
         generics: ct.generics,
+        pre_equals_comments: ct.pre_equals_comments,
         constructors: ct
             .constructors
             .into_iter()
@@ -241,6 +243,8 @@ pub fn fold_value_constructor<F: Fold + ?Sized>(
             .into_iter()
             .map(|a| f.fold_type_annotation(a))
             .collect(),
+        pre_pipe_comments: ctor.value.pre_pipe_comments,
+        trailing_comment: ctor.value.trailing_comment,
     };
     Spanned::new(span, value)
 }
@@ -297,7 +301,11 @@ pub fn fold_expr<F: Fold + ?Sized>(f: &mut F, expr: Spanned<Expr>) -> Spanned<Ex
         } => Expr::IfElse {
             branches: branches
                 .into_iter()
-                .map(|(c, b)| (f.fold_expr(c), f.fold_expr(b)))
+                .map(|b| crate::expr::IfBranch {
+                    condition: f.fold_expr(b.condition),
+                    then_branch: f.fold_expr(b.then_branch),
+                    trailing_comments: b.trailing_comments,
+                })
                 .collect(),
             else_branch: Box::new(f.fold_expr(*else_branch)),
         },
@@ -306,16 +314,35 @@ pub fn fold_expr<F: Fold + ?Sized>(f: &mut F, expr: Spanned<Expr>) -> Spanned<Ex
 
         Expr::Tuple(elems) => Expr::Tuple(elems.into_iter().map(|e| f.fold_expr(e)).collect()),
 
-        Expr::List(elems) => Expr::List(elems.into_iter().map(|e| f.fold_expr(e)).collect()),
+        Expr::List {
+            elements,
+            element_inline_comments,
+            trailing_comments,
+        } => Expr::List {
+            elements: elements.into_iter().map(|e| f.fold_expr(e)).collect(),
+            element_inline_comments,
+            trailing_comments,
+        },
 
-        Expr::Parenthesized(inner) => Expr::Parenthesized(Box::new(f.fold_expr(*inner))),
+        Expr::Parenthesized {
+            expr,
+            trailing_comments,
+        } => Expr::Parenthesized {
+            expr: Box::new(f.fold_expr(*expr)),
+            trailing_comments,
+        },
 
-        Expr::LetIn { declarations, body } => Expr::LetIn {
+        Expr::LetIn {
+            declarations,
+            body,
+            trailing_comments,
+        } => Expr::LetIn {
             declarations: declarations
                 .into_iter()
                 .map(|d| f.fold_let_declaration(d))
                 .collect(),
             body: Box::new(f.fold_expr(*body)),
+            trailing_comments,
         },
 
         Expr::CaseOf {
@@ -507,6 +534,7 @@ pub fn fold_record_setter<F: Fold + ?Sized>(
     let value = RecordSetter {
         field: setter.value.field,
         value: f.fold_expr(setter.value.value),
+        trailing_comment: setter.value.trailing_comment,
     };
     Spanned::new(span, value)
 }

@@ -100,6 +100,13 @@ impl Parser {
         self.collected_comments.split_off(snapshot)
     }
 
+    /// Put comments back into the pending buffer so a later stage can claim
+    /// them. Callers use this to return comments that turned out not to
+    /// belong to the node they were attached to.
+    pub fn restore_pending_comments(&mut self, comments: Vec<Spanned<Comment>>) {
+        self.collected_comments.extend(comments);
+    }
+
     /// Returns true if currently inside parens/brackets/braces.
     /// When true, indentation-sensitive layout rules are suspended.
     pub fn in_paren_context(&self) -> bool {
@@ -136,6 +143,29 @@ impl Parser {
     /// Check if we've reached Eof.
     pub fn is_eof(&self) -> bool {
         matches!(self.peek(), Token::Eof)
+    }
+
+    /// End-offset of the most recently consumed token (or 0 if nothing has
+    /// been consumed). Useful as a lower boundary for claiming pending
+    /// comments that sit between a just-consumed separator (like `|` or
+    /// `{`) and the next token.
+    pub fn prev_token_end_offset(&self) -> usize {
+        if self.pos == 0 {
+            0
+        } else {
+            self.tokens[self.pos - 1].span.end.offset
+        }
+    }
+
+    /// Peek at the raw token immediately after the current position,
+    /// without skipping whitespace. Returns `Token::Eof` if past the end.
+    pub fn peek_raw_next(&self) -> &Spanned<Token> {
+        let i = self.pos + 1;
+        if i < self.tokens.len() {
+            &self.tokens[i]
+        } else {
+            &self.tokens[self.tokens.len() - 1]
+        }
     }
 
     // ── Advancing ────────────────────────────────────────────────────
@@ -278,6 +308,22 @@ impl Parser {
         } else {
             false
         }
+    }
+
+    /// Offset of the next non-whitespace token (or the end of input if
+    /// nothing remains). Does not modify parser state.
+    pub fn peek_past_whitespace_offset(&self) -> usize {
+        let mut i = self.pos;
+        while i < self.tokens.len() {
+            match &self.tokens[i].value {
+                Token::Newline
+                | Token::LineComment(_)
+                | Token::BlockComment(_)
+                | Token::DocComment(_) => i += 1,
+                _ => return self.tokens[i].span.start.offset,
+            }
+        }
+        self.tokens.last().map(|t| t.span.end.offset).unwrap_or(0)
     }
 
     /// Peek ahead past whitespace, returning the next non-whitespace token

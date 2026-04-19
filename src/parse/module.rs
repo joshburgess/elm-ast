@@ -207,12 +207,25 @@ pub fn parse_exposing(p: &mut Parser) -> ParseResult<Spanned<Exposing>> {
     let mut items = Vec::new();
     items.push(parse_exposed_item(p)?);
 
+    // Snapshot BEFORE each `eat(Comma)` so if the eat fails (exiting the
+    // loop), we remember the point right after the last item — any comments
+    // pulled into pending by `eat`'s internal `skip_whitespace` (like a
+    // trailing `-- comment` before `)`) will then be retrievable below.
+    let mut trailing_snapshot = p.pending_comments_snapshot();
     while p.eat(&Token::Comma) {
         items.push(parse_exposed_item(p)?);
+        trailing_snapshot = p.pending_comments_snapshot();
     }
 
     p.expect(&Token::RightParen)?;
-    Ok(p.spanned_from(start, Exposing::Explicit(items)))
+    let trailing_comments = p.take_pending_comments_since(trailing_snapshot);
+    Ok(p.spanned_from(
+        start,
+        Exposing::Explicit {
+            items,
+            trailing_comments,
+        },
+    ))
 }
 
 fn parse_exposed_item(p: &mut Parser) -> ParseResult<Spanned<ExposedItem>> {

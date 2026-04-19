@@ -9,7 +9,7 @@ use elm_ast::expr::Expr;
 use elm_ast::file::ElmModule;
 use elm_ast::pattern::Pattern;
 use elm_ast::type_annotation::TypeAnnotation;
-use elm_ast::{parse, pretty_print, print};
+use elm_ast::{parse, pretty_print, pretty_print_converged, print};
 
 // ── Regression watchlist ─────────────────────────────────────────────
 //
@@ -393,20 +393,30 @@ fn expr_eq(a: &Expr, b: &Expr) -> bool {
             },
         ) => {
             ba.len() == bb.len()
-                && ba.iter().zip(bb.iter()).all(|((ca, ta), (cb, tb))| {
-                    expr_eq(&ca.value, &cb.value) && expr_eq(&ta.value, &tb.value)
+                && ba.iter().zip(bb.iter()).all(|(a, b)| {
+                    expr_eq(&a.condition.value, &b.condition.value)
+                        && expr_eq(&a.then_branch.value, &b.then_branch.value)
                 })
                 && expr_eq(&ea.value, &eb.value)
         }
         (Expr::Negation(a), Expr::Negation(b)) => expr_eq(&a.value, &b.value),
-        (Expr::Tuple(aa), Expr::Tuple(ab)) | (Expr::List(aa), Expr::List(ab)) => {
+        (Expr::Tuple(aa), Expr::Tuple(ab)) => {
             aa.len() == ab.len()
                 && aa
                     .iter()
                     .zip(ab.iter())
                     .all(|(a, b)| expr_eq(&a.value, &b.value))
         }
-        (Expr::Parenthesized(a), Expr::Parenthesized(b)) => expr_eq(&a.value, &b.value),
+        (Expr::List { elements: aa, .. }, Expr::List { elements: ab, .. }) => {
+            aa.len() == ab.len()
+                && aa
+                    .iter()
+                    .zip(ab.iter())
+                    .all(|(a, b)| expr_eq(&a.value, &b.value))
+        }
+        (Expr::Parenthesized { expr: a, .. }, Expr::Parenthesized { expr: b, .. }) => {
+            expr_eq(&a.value, &b.value)
+        }
         // For deep comparison of case/let/lambda/record, check structural shape.
         (Expr::CaseOf { branches: ba, .. }, Expr::CaseOf { branches: bb, .. }) => {
             ba.len() == bb.len()
@@ -438,9 +448,8 @@ fn expr_eq(a: &Expr, b: &Expr) -> bool {
         (Expr::GLSLExpression(a), Expr::GLSLExpression(b)) => a == b,
         // Parenthesized in one but not the other is OK if the inner matches.
         // The printer may add parens that weren't in the original.
-        (Expr::Parenthesized(inner), other) | (other, Expr::Parenthesized(inner)) => {
-            expr_eq(&inner.value, other)
-        }
+        (Expr::Parenthesized { expr: inner, .. }, other)
+        | (other, Expr::Parenthesized { expr: inner, .. }) => expr_eq(&inner.value, other),
         _ => false,
     }
 }
@@ -665,9 +674,10 @@ fn printer_idempotency() {
 
 // ── pretty_print vs elm-format ──────────────────────────────────────
 //
-// Verify that `pretty_print()` (ElmFormat mode) produces output identical
-// to `elm-format --stdin`. This is the gold-standard test: parse a file,
-// pretty-print it, feed the result to elm-format, and check nothing changes.
+// Round-trip through elm-format: pretty-print a file, feed the result back
+// through elm-format, and check nothing changes. Confirms our output is a
+// form elm-format accepts as canonical, so downstream tooling that runs
+// elm-format won't mutate our output.
 //
 // The test is skipped when elm-format is not found on the system.
 // Set ELM_FORMAT to a custom path if it's not in PATH.
@@ -752,7 +762,12 @@ fn pretty_print_matches_elm_format() {
                 Err(_) => continue,
             };
 
-            let pretty = pretty_print(&ast);
+            // This test checks the round-trip property: does our output
+            // survive an elm-format pass unchanged? Use the converged
+            // variant so we stay stable even on inputs where elm-format
+            // itself is non-idempotent (e.g. Task.elm's
+            // `-- comment → import` pattern inside doc code blocks).
+            let pretty = pretty_print_converged(&ast);
 
             // Feed pretty-printed output to elm-format.
             let formatted = match run_elm_format(&elm_format, &pretty) {
@@ -815,6 +830,112 @@ fn pretty_print_matches_elm_format() {
         passed,
         total,
         "{} of {} files differ from elm-format:\n{}",
+        total - passed,
+        total,
+        failures.join("\n")
+    );
+}
+
+/// Direct parity test: our `pretty_print` output on parsed source is
+/// byte-identical to what `elm-format` produces from the same source.
+///
+/// This is the strictest elm-format parity check — it asserts that we
+/// match elm-format's exact layout decisions, not just that elm-format
+/// would accept our output unchanged (that's what
+/// `pretty_print_matches_elm_format` checks).
+#[test]
+#[ignore] // Run explicitly: cargo test pretty_print_equals_elm_format_on_source -- --ignored --nocapture
+fn pretty_print_equals_elm_format_on_source() {
+    let elm_format = match find_elm_format() {
+        Some(path) => path,
+        None => {
+            eprintln!(
+                "elm-format not found — skipping pretty_print_equals_elm_format_on_source test"
+            );
+            eprintln!("Install elm-format or set ELM_FORMAT=/path/to/elm-format to enable");
+            return;
+        }
+    };
+
+    let dirs = all_fixture_dirs();
+
+    let mut total = 0;
+    let mut passed = 0;
+    let mut failures = Vec::new();
+
+    for (pkg, dir) in &dirs {
+        let files = find_elm_files(dir);
+        for file in &files {
+            if try_parse_file(file).is_err() {
+                continue;
+            }
+            let source = fs::read_to_string(file).unwrap();
+            let ast = match parse(&source) {
+                Ok(ast) => ast,
+                Err(_) => continue,
+            };
+
+            let pretty = pretty_print(&ast);
+
+            // Feed ORIGINAL source (not our pretty output) to elm-format.
+            let formatted_from_source = match run_elm_format(&elm_format, &source) {
+                Ok(f) => f,
+                Err(msg) => {
+                    failures.push(format!(
+                        "[{pkg}] elm-format rejected original source for {}: {msg}",
+                        file.display()
+                    ));
+                    total += 1;
+                    continue;
+                }
+            };
+
+            total += 1;
+            if pretty == formatted_from_source {
+                passed += 1;
+            } else {
+                let pretty_lines: Vec<&str> = pretty.lines().collect();
+                let fmt_lines: Vec<&str> = formatted_from_source.lines().collect();
+                let mut diff_msg = String::new();
+                for (i, (p, f)) in pretty_lines.iter().zip(fmt_lines.iter()).enumerate() {
+                    if p != f {
+                        diff_msg = format!(
+                            "first diff at line {}:\n  pretty_print: {}\n  elm-format:   {}",
+                            i + 1,
+                            p,
+                            f
+                        );
+                        break;
+                    }
+                }
+                if diff_msg.is_empty() && pretty_lines.len() != fmt_lines.len() {
+                    diff_msg = format!(
+                        "line count differs: pretty_print={} vs elm-format={}",
+                        pretty_lines.len(),
+                        fmt_lines.len()
+                    );
+                }
+                failures.push(format!(
+                    "[{pkg}] pretty_print differs from elm-format(source) for {}:\n  {diff_msg}",
+                    file.display()
+                ));
+            }
+        }
+    }
+
+    eprintln!("\n=== pretty_print vs elm-format(source) results ===");
+    eprintln!("{passed}/{total} files match elm-format(source) exactly");
+    for f in &failures {
+        eprintln!("\n{f}");
+    }
+    if total > 0 {
+        let pass_rate = (passed as f64 / total as f64) * 100.0;
+        eprintln!("\nMatch rate: {pass_rate:.1}%");
+    }
+    assert_eq!(
+        passed,
+        total,
+        "{} of {} files differ from elm-format(source):\n{}",
         total - passed,
         total,
         failures.join("\n")

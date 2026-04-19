@@ -138,9 +138,10 @@ fn parse_atomic_pattern(p: &mut Parser) -> ParseResult<Spanned<Pattern>> {
                     p.advance();
                     Ok(p.spanned_from(start, Pattern::Literal(Literal::Int(-n))))
                 }
-                Token::Literal(Literal::Float(n)) => {
+                Token::Literal(Literal::Float(n, lex)) => {
                     p.advance();
-                    Ok(p.spanned_from(start, Pattern::Literal(Literal::Float(-n))))
+                    let neg_lex = lex.map(|s| format!("-{s}"));
+                    Ok(p.spanned_from(start, Pattern::Literal(Literal::Float(-n, neg_lex))))
                 }
                 _ => Err(p.error("expected number after `-` in pattern")),
             }

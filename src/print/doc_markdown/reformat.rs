@@ -37,6 +37,16 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
                     if !last_trimmed.is_empty()
                         && !last_trimmed.starts_with("--")
                         && !last_trimmed.ends_with(" ...")
+                        // A case arm (`Pat ->`) that's followed by `...` is
+                        // using `...` as a body placeholder, not as a chain
+                        // continuation. Preserve the line break.
+                        && !last_trimmed.ends_with("->")
+                        // Only merge `...` into a preceding line that looks
+                        // like an Elm assertion or simple expression.
+                        // Without this, non-Elm content (e.g. CSS keyframes
+                        // `}` closing braces) inside a doc code block gets
+                        // silently joined with the placeholder.
+                        && super::predicates::looks_like_assertion(last_trimmed)
                     {
                         out[last_idx - 1] = format!("{} ...", last.trim_end());
                         // Drop any blank lines between assertion and `...`, and
@@ -67,6 +77,10 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
     // elm-format does not split adjacent assertions in this block. Emit
     // the block unchanged in that case.
     if block_has_non_assertion_content(block_lines) {
+        return block_lines.join("\n");
+    }
+    // Column-aligned assertion tables are preserved verbatim by elm-format.
+    if block_has_column_aligned_assertions(block_lines) {
         return block_lines.join("\n");
     }
     let mut out = String::new();
@@ -123,6 +137,7 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
         let first_indent = block_lines[run_start].len() - block_lines[run_start].trim_start().len();
         let mut all_valid = true;
         let mut assertion_count = 0usize;
+        let mut has_eq_or_comment_shape = false;
         #[allow(clippy::needless_range_loop)]
         for k in run_start..=run_end {
             let l = block_lines[k];
@@ -139,6 +154,9 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
                 // comment line — ok in between assertions
             } else if looks_like_assertion(trimmed) {
                 assertion_count += 1;
+                if trimmed.contains(" == ") || trimmed.contains(" -- ") {
+                    has_eq_or_comment_shape = true;
+                }
             } else {
                 all_valid = false;
                 break;
@@ -148,7 +166,11 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
             let trimmed = block_lines[run_end].trim();
             !trimmed.starts_with("--") && looks_like_assertion(trimmed)
         };
-        let is_assertion_run = all_valid && assertion_count >= 1 && last_is_assertion;
+        // elm-format only splits runs that contain at least one `==` or
+        // `-- comment` shaped assertion. Runs of pure standalone
+        // expressions are preserved verbatim.
+        let is_assertion_run =
+            all_valid && assertion_count >= 1 && last_is_assertion && has_eq_or_comment_shape;
 
         // If the run's last non-blank line ends with ` ...`, the chain would
         // be incomplete. elm-format preserves such blocks without chain
@@ -258,6 +280,206 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
     out
 }
 
+/// Detect "mixed" code blocks: blocks containing BOTH a decl-like line
+/// (type, type alias, value decl, or type annotation) AND a bare expression
+/// at base indent. elm-format treats such blocks as verbatim examples and
+/// leaves them untouched instead of re-running the module-body formatter.
+pub(in crate::print) fn block_mixes_decls_and_bare_exprs(block_lines: &[&str]) -> bool {
+    let mut has_decl = false;
+    let mut has_bare = false;
+    // Track whether we are currently inside a triple-quoted string so lines
+    // within it (which may look like bare expressions or decls syntactically)
+    // don't trigger the predicate.
+    let mut in_triple = false;
+    for &line in block_lines {
+        let was_in_triple = in_triple;
+        let triple_count = line.matches("\"\"\"").count();
+        if triple_count % 2 == 1 {
+            in_triple = !in_triple;
+        }
+        // A line that is interior content of a multi-line triple-string is
+        // skipped. A line that opens/closes one on the same position still
+        // gets classified by its leading code (e.g. `name = """..."""`).
+        if was_in_triple {
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        if leading != 4 {
+            continue;
+        }
+        if trimmed.starts_with("--") {
+            continue;
+        }
+        if trimmed.starts_with("module ")
+            || trimmed.starts_with("import ")
+            || trimmed.starts_with("port module ")
+            || trimmed.starts_with("effect module ")
+        {
+            continue;
+        }
+        if looks_like_code_block_decl(trimmed) {
+            has_decl = true;
+        } else if line_looks_like_bare_expression(trimmed) {
+            has_bare = true;
+        }
+        if has_decl && has_bare {
+            return true;
+        }
+    }
+    false
+}
+
+/// Classify a single code block by whether its base-indent (4-space) lines
+/// are all declaration-flavored (type/value binding/type annotation/module/
+/// import) with at least one such line. Ignores blank lines, comment-only
+/// lines, and continuation lines past the base indent.
+pub(in crate::print) fn block_looks_decl_only(block_lines: &[&str]) -> bool {
+    let mut has_decl = false;
+    let mut has_bare = false;
+    let mut in_triple = false;
+    for &line in block_lines {
+        let was_in_triple = in_triple;
+        let triple_count = line.matches("\"\"\"").count();
+        if triple_count % 2 == 1 {
+            in_triple = !in_triple;
+        }
+        if was_in_triple {
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("--") {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        if leading != 4 {
+            continue;
+        }
+        let is_header = trimmed.starts_with("module ")
+            || trimmed.starts_with("import ")
+            || trimmed.starts_with("port module ")
+            || trimmed.starts_with("effect module ");
+        if is_header || looks_like_code_block_decl(trimmed) {
+            has_decl = true;
+        } else if line_looks_like_bare_expression(trimmed) {
+            has_bare = true;
+        }
+    }
+    has_decl && !has_bare
+}
+
+/// Mirror of `block_looks_decl_only`, but for blocks consisting only of
+/// bare expressions at base indent. Used to detect "sample code" docs where
+/// decl-flavored blocks sit alongside bare-expression blocks; elm-format
+/// preserves every block in such docs verbatim.
+pub(in crate::print) fn block_looks_bare_only(block_lines: &[&str]) -> bool {
+    let mut has_decl = false;
+    let mut has_bare = false;
+    let mut in_triple = false;
+    for &line in block_lines {
+        let was_in_triple = in_triple;
+        let triple_count = line.matches("\"\"\"").count();
+        if triple_count % 2 == 1 {
+            in_triple = !in_triple;
+        }
+        if was_in_triple {
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("--") {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        if leading != 4 {
+            continue;
+        }
+        let is_header = trimmed.starts_with("module ")
+            || trimmed.starts_with("import ")
+            || trimmed.starts_with("port module ")
+            || trimmed.starts_with("effect module ");
+        if is_header || looks_like_code_block_decl(trimmed) {
+            has_decl = true;
+        } else if line_looks_like_bare_expression(trimmed) {
+            has_bare = true;
+        }
+    }
+    has_bare && !has_decl
+}
+
+/// Accept any line that starts like an Elm expression: identifiers, literals,
+/// opening brackets/braces/parens, backslash lambdas, or leading negation.
+fn line_looks_like_bare_expression(trimmed: &str) -> bool {
+    // Reject block comment markers — a line like `{-| pair of values -}`
+    // starts with `{` but is not an expression.
+    if trimmed.starts_with("{-") {
+        return false;
+    }
+    let first = match trimmed.chars().next() {
+        Some(c) => c,
+        None => return false,
+    };
+    let starter_ok = first.is_ascii_alphabetic()
+        || first.is_ascii_digit()
+        || first == '_'
+        || first == '('
+        || first == '['
+        || first == '{'
+        || first == '\''
+        || first == '"'
+        || first == '\\'
+        || first == '-';
+    if !starter_ok {
+        return false;
+    }
+    // `-` only valid as leading negation when followed by a digit or paren.
+    if first == '-' {
+        let second = trimmed.chars().nth(1);
+        match second {
+            Some(c) if c.is_ascii_digit() || c == '(' => {}
+            _ => return false,
+        }
+    }
+    // Reject keyword-led lines that aren't expressions.
+    let first_word_end = trimmed
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '.')
+        .unwrap_or(trimmed.len());
+    let first_word = &trimmed[..first_word_end];
+    match first_word {
+        "type" | "port" | "module" | "import" | "exposing" | "effect" | "infix" => {
+            return false;
+        }
+        _ => {}
+    }
+    true
+}
+
+/// Returns true if the trimmed line matches `ident = """..."""` with both
+/// triple-quote delimiters on this same line. elm-format preserves such lines
+/// verbatim inside doc comments, so we treat them as non-reformat signals.
+fn has_same_line_triple_string_rhs(trimmed: &str) -> bool {
+    if trimmed.matches("\"\"\"").count() < 2 {
+        return false;
+    }
+    // The RHS must open with `"""` right after `= `. Anything else (e.g.
+    // `"""`-triples embedded deep in an expression) is treated conservatively
+    // as "not this pattern" so normal reformat rules apply.
+    let Some(eq) = trimmed.find("= \"\"\"") else {
+        return false;
+    };
+    // Make sure the `=` isn't part of `==`, `/=`, etc.
+    if eq == 0 {
+        return false;
+    }
+    let prev = trimmed.as_bytes()[eq - 1];
+    if prev != b' ' {
+        return false;
+    }
+    true
+}
+
 /// Check whether a code block needs reformatting.
 ///
 /// Returns true if the block contains:
@@ -265,6 +487,12 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
 /// - compact list/tuple syntax that elm-format would space out
 ///   (e.g., `[1,2]` -> `[ 1, 2 ]`, `(0,"a")` -> `( 0, "a" )`)
 pub(in crate::print) fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
+    // When a block mixes declarations with bare expressions, elm-format
+    // preserves the block verbatim. Mirror that to keep compact tuples and
+    // single-line value decls inside examples.
+    if block_mixes_decls_and_bare_exprs(block_lines) {
+        return false;
+    }
     let mut count_non_4_aligned = 0usize;
     let mut has_compact_syntax = false;
     let mut has_single_line_decl = false;
@@ -316,8 +544,13 @@ pub(in crate::print) fn code_block_needs_reformat(block_lines: &[&str]) -> bool 
         }
         // Single-line value declaration at the block base-indent (4 spaces):
         // `name = expr` fits on one line. elm-format always expands these
-        // to two lines (`name =\n    expr`), so flag for reformat.
-        if leading == 4 && is_single_line_value_decl(trimmed) {
+        // to two lines (`name =\n    expr`), so flag for reformat. Exception:
+        // `name = """..."""` with the triple-string fully on the same line is
+        // left alone by elm-format inside doc comments.
+        if leading == 4
+            && is_single_line_value_decl(trimmed)
+            && !has_same_line_triple_string_rhs(trimmed)
+        {
             has_single_line_decl = true;
         }
         // Single-line type / type-alias declaration at base indent. elm-format
@@ -362,18 +595,161 @@ pub(in crate::print) fn code_block_needs_reformat(block_lines: &[&str]) -> bool 
     let has_indent_issues = count_non_4_aligned > 0;
     let has_unseparated_assertions = block_has_unseparated_assertions(block_lines);
     let has_single_line_if = block_has_single_line_if(block_lines);
-    has_indent_issues
+    // Column-aligned assertion tables (e.g. `foo "a"  == 1` / `foo "bb" == 2`)
+    // are preserved verbatim by elm-format when the alignment has a clear
+    // "intent" signal (incomplete marker or compact+padding). The predicate
+    // already rejects blocks that only have op-alignment without intent, so
+    // if it fires we can skip reformat even with sibling reformat signals.
+    if has_unseparated_assertions && block_has_column_aligned_assertions(block_lines) {
+        return false;
+    }
+    let other_reformat_signal = has_indent_issues
         || has_compact_syntax
         || has_single_line_decl
         || has_unsorted_import
-        || has_unseparated_assertions
-        || has_single_line_if
+        || has_single_line_if;
+    other_reformat_signal || has_unseparated_assertions
+}
+
+/// Narrower variant of `code_block_needs_reformat` for use by the
+/// "sample-code doc" detector: checks for 2-space-style indent (leading 2/6
+/// at base indent) but ignores alignment artifacts past a list/tuple open
+/// bracket column, which legitimately produce non-4-aligned leading.
+pub(in crate::print) fn code_block_has_narrow_indent(block_lines: &[&str]) -> bool {
+    for &line in block_lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        if leading > 0 && leading < 4 {
+            return true;
+        }
+        if leading > 4 && leading < 8 && (leading - 4) % 4 != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Does the block contain structural signals that definitely require
+/// reformatting (compact syntax, single-line decls, unsorted imports, etc.),
+/// excluding the broad "non-4-aligned indent" check that the primary
+/// `code_block_needs_reformat` uses — that one has false positives from
+/// legitimate deep-alignment artifacts in sample code. Use this as a gate
+/// for the cross-block "sample code doc" detector.
+pub(in crate::print) fn code_block_has_structural_reformat_signal(block_lines: &[&str]) -> bool {
+    if block_mixes_decls_and_bare_exprs(block_lines) {
+        return false;
+    }
+    if code_block_has_narrow_indent(block_lines) {
+        return true;
+    }
+    for &line in block_lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        let trimmed = line.trim();
+        if leading == 4 && import_has_unsorted_exposing(trimmed) {
+            return true;
+        }
+        // Import/module/port header lines can contain exposing `(x, y)` lists
+        // that look like compact tuples to the lexical checks below; skip them.
+        let is_header_line = trimmed.starts_with("import ")
+            || trimmed.starts_with("module ")
+            || trimmed.starts_with("port module ")
+            || trimmed.starts_with("effect module ");
+        if is_header_line {
+            continue;
+        }
+        if trimmed.contains('[')
+            && trimmed.contains(']')
+            && (trimmed.contains("[\"")
+                || trimmed.contains("[(")
+                || trimmed.contains("['")
+                || trimmed.contains("[0")
+                || trimmed.contains("[1")
+                || trimmed.contains("[2")
+                || trimmed.contains("[3")
+                || trimmed.contains("[4")
+                || trimmed.contains("[5")
+                || trimmed.contains("[6")
+                || trimmed.contains("[7")
+                || trimmed.contains("[8")
+                || trimmed.contains("[9"))
+        {
+            return true;
+        }
+        if trimmed.contains('(')
+            && trimmed.contains(',')
+            && trimmed.contains(')')
+            && has_compact_tuple(trimmed)
+        {
+            return true;
+        }
+        if leading == 4
+            && is_single_line_value_decl(trimmed)
+            && !has_same_line_triple_string_rhs(trimmed)
+        {
+            return true;
+        }
+        if leading == 4
+            && (trimmed.starts_with("type alias ") || trimmed.starts_with("type "))
+            && trimmed.contains(" = ")
+        {
+            return true;
+        }
+        if leading == 4
+            && trimmed.starts_with("{-|")
+            && trimmed.ends_with("-}")
+            && trimmed.len() > 5
+        {
+            return true;
+        }
+        if has_tight_binary_op(trimmed) {
+            return true;
+        }
+        if leading == 4 && is_redundant_paren_expr(trimmed) {
+            return true;
+        }
+        if line_has_unpadded_hex(trimmed) {
+            return true;
+        }
+        if line_has_sci_float_without_dot(trimmed) {
+            return true;
+        }
+    }
+    if block_has_unseparated_assertions(block_lines) {
+        return true;
+    }
+    if block_has_single_line_if(block_lines) {
+        return true;
+    }
+    false
 }
 
 /// Detect a code block containing a line with a single-line `if ... then ... else ...`
 /// expression. elm-format always breaks `if-then-else` across multiple lines, so
 /// such blocks need reformat.
 pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<String> {
+    // If every non-blank line's leading exceeds 4, this is an indented-code
+    // block with deeper-than-base indent (e.g. ASCII art, box drawings,
+    // poetry). elm-format preserves these verbatim rather than treating them
+    // as parse-able Elm code.
+    let min_leading = block_lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min();
+    if matches!(min_leading, Some(n) if n > 4) {
+        return None;
+    }
+    // A block with an assertion followed by a trailing comment-only
+    // paragraph is left verbatim by elm-format. Skip reparse so we don't
+    // rewrite compact lists/tuples inside it.
+    if block_has_assertion_then_comment_paragraph(block_lines) {
+        return None;
+    }
     // Strip the 4-space prefix from each line to get raw Elm code.
     let mut raw_lines: Vec<String> = Vec::new();
     for &line in block_lines {
@@ -427,6 +803,29 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
     // try each paragraph individually. Some may be expressions, some
     // declarations.
     let paragraphs = split_into_paragraphs(&raw_lines);
+
+    // If the block has an `import` paragraph and the module-parse path
+    // above already failed, elm-format leaves the whole block verbatim
+    // (it won't reformat expression paragraphs that co-exist with
+    // imports inside a single code block). Mirror that here.
+    if paragraphs.iter().any(|p| paragraph_is_all_imports(p)) {
+        let mut out_lines: Vec<String> = Vec::new();
+        let mut prev_blank = false;
+        for l in raw_lines.iter() {
+            if l.trim().is_empty() {
+                if prev_blank {
+                    continue;
+                }
+                prev_blank = true;
+                out_lines.push(String::new());
+            } else {
+                prev_blank = false;
+                out_lines.push(format!("    {}", l));
+            }
+        }
+        return Some(out_lines.join("\n"));
+    }
+
     let mut formatted_paragraphs: Vec<String> = Vec::new();
 
     for para in &paragraphs {
@@ -436,6 +835,23 @@ pub(in crate::print) fn try_reformat_code_block(block_lines: &[&str]) -> Option<
         let wrapped_decl = format!("module DocTemp__ exposing (..)\n\n\n{}\n", para_text);
         if let Some(result) = try_parse_and_format_module_raw(&wrapped_decl) {
             formatted_paragraphs.push(result);
+            continue;
+        }
+
+        // A single bare expression followed by `-- comment` lines is left
+        // verbatim by elm-format when it can't parse the paragraph as
+        // declarations. Mirror that to avoid adding unrelated spacing inside
+        // example code.
+        if paragraph_is_single_expr_with_line_comment(para) {
+            formatted_paragraphs.push(para_text);
+            continue;
+        }
+
+        // Triple-quoted strings are rarely re-printable safely (the parser
+        // loses attached line comments and interior formatting). Preserve
+        // the paragraph verbatim if it contains one.
+        if para.iter().any(|l| l.contains("\"\"\"")) {
+            formatted_paragraphs.push(para_text);
             continue;
         }
 

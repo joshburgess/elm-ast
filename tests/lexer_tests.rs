@@ -157,13 +157,24 @@ fn hex_literals() {
 
 #[test]
 fn float_literals() {
+    // PartialEq for Literal ignores the Float lexeme, so these still compare
+    // equal to the parser-produced `Some(text)` forms.
     #[allow(clippy::approx_constant)]
     {
-        assert_eq!(lex("3.14"), vec![Token::Literal(Literal::Float(3.14))]);
+        assert_eq!(
+            lex("3.14"),
+            vec![Token::Literal(Literal::Float(3.14, None))]
+        );
     }
-    assert_eq!(lex("0.0"), vec![Token::Literal(Literal::Float(0.0))]);
-    assert_eq!(lex("1.0e10"), vec![Token::Literal(Literal::Float(1.0e10))]);
-    assert_eq!(lex("2.5E-3"), vec![Token::Literal(Literal::Float(2.5e-3))]);
+    assert_eq!(lex("0.0"), vec![Token::Literal(Literal::Float(0.0, None))]);
+    assert_eq!(
+        lex("1.0e10"),
+        vec![Token::Literal(Literal::Float(1.0e10, None))]
+    );
+    assert_eq!(
+        lex("2.5E-3"),
+        vec![Token::Literal(Literal::Float(2.5e-3, None))]
+    );
 }
 
 // ── Char literals ────────────────────────────────────────────────────

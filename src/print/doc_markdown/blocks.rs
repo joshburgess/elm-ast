@@ -84,11 +84,22 @@ pub(in crate::print) fn block_has_non_assertion_content(block_lines: &[&str]) ->
         }
         if trimmed.starts_with("--") {
             // Standalone line-comment paragraph that comes after an
-            // assertion: elm-format preserves the block unchanged.
+            // assertion: elm-format preserves the block unchanged. The
+            // paragraph may span multiple adjacent comment lines.
             let prev_blank = i == 0 || block_lines[i - 1].trim().is_empty();
-            let next_blank = i + 1 >= block_lines.len() || block_lines[i + 1].trim().is_empty();
-            if seen_assertion && prev_blank && next_blank {
-                return true;
+            if seen_assertion && prev_blank {
+                let mut j = i;
+                let mut all_comments = true;
+                while j < block_lines.len() && !block_lines[j].trim().is_empty() {
+                    if !block_lines[j].trim().starts_with("--") {
+                        all_comments = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if all_comments {
+                    return true;
+                }
             }
             continue;
         }
@@ -98,6 +109,46 @@ pub(in crate::print) fn block_has_non_assertion_content(block_lines: &[&str]) ->
         }
         // Any other line shape bails out (prose, decl, etc.).
         return true;
+    }
+    false
+}
+
+/// Return true if the block contains an `==`-shaped assertion followed
+/// (after a blank) by a paragraph of only line comments. elm-format leaves
+/// such blocks verbatim rather than reparsing them, because the trailing
+/// comment paragraph doesn't fit its single-expression / single-declaration
+/// patterns. We require a real ` == ` (not just any expression-shape line)
+/// to avoid false positives on blocks that mix declarations with a final
+/// comment-only example line.
+pub(in crate::print) fn block_has_assertion_then_comment_paragraph(block_lines: &[&str]) -> bool {
+    let mut seen_eq_assertion = false;
+    let mut i = 0;
+    while i < block_lines.len() {
+        let trimmed = block_lines[i].trim();
+        if trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+        if trimmed.starts_with("--") {
+            let prev_blank = i == 0 || block_lines[i - 1].trim().is_empty();
+            if seen_eq_assertion && prev_blank {
+                let mut j = i;
+                let mut all_comments = true;
+                while j < block_lines.len() && !block_lines[j].trim().is_empty() {
+                    if !block_lines[j].trim().starts_with("--") {
+                        all_comments = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if all_comments {
+                    return true;
+                }
+            }
+        } else if trimmed.contains(" == ") && looks_like_assertion(trimmed) {
+            seen_eq_assertion = true;
+        }
+        i += 1;
     }
     false
 }
@@ -138,14 +189,17 @@ pub(in crate::print) fn insert_loose_paragraph_breaks(joined: &str) -> String {
     };
 
     // Indices (into `lines`) where an extra blank should be inserted BEFORE.
+    // elm-format's Cheapskate inserts a double blank between an
+    // imports-paragraph and a following comments-paragraph. A
+    // comments-paragraph followed by imports gets only a single blank,
+    // so don't insert in that direction (see Task.elm where a split-out
+    // inline comment leads the paragraph).
     let mut extra_before: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for pair in paragraphs.windows(2) {
         let prev = &pair[0];
         let cur = &pair[1];
         let cur_start = cur[0];
-        let prev_imports_cur_comments = is_all_imports(prev) && is_all_comments(cur);
-        let prev_comments_cur_imports = is_all_comments(prev) && is_all_imports(cur);
-        if prev_imports_cur_comments || prev_comments_cur_imports {
+        if is_all_imports(prev) && is_all_comments(cur) {
             extra_before.insert(cur_start);
         }
     }

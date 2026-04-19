@@ -114,17 +114,36 @@ pub(in crate::print) fn escape_bullet_leading_underscore(line: &str, marker_len:
     }
     let (prefix, content) = line.split_at(marker_len);
     let bytes = content.as_bytes();
+    // Pre-scan: if flanking underscores in the bullet content pair up as a
+    // balanced italic span (even count, at least one pair), cheapskate treats
+    // them as italic and emits them literally. Only unmatched flanking
+    // underscores need to be escaped.
+    if has_balanced_flanking_underscores(bytes) {
+        return line.to_string();
+    }
     let mut out = String::with_capacity(line.len() + 2);
     out.push_str(prefix);
     let mut in_link_text = false;
+    let mut in_backticks = false;
     let mut prev_raw: Option<u8> = None;
-    for (i, &b) in bytes.iter().enumerate() {
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        // Non-ASCII: copy the whole UTF-8 sequence and advance by its length.
+        if b >= 0x80 {
+            let seq_len = utf8_seq_len(b);
+            out.push_str(std::str::from_utf8(&bytes[i..i + seq_len]).unwrap_or(""));
+            prev_raw = Some(b);
+            i += seq_len;
+            continue;
+        }
         match b {
-            b'[' if !in_link_text => in_link_text = true,
+            b'[' if !in_link_text && !in_backticks => in_link_text = true,
             b']' if in_link_text => in_link_text = false,
+            b'`' => in_backticks = !in_backticks,
             _ => {}
         }
-        if b == b'_' && !in_link_text {
+        if b == b'_' && !in_link_text && !in_backticks {
             // Skip if already escaped (prev char is an unescaped backslash).
             let already_escaped = prev_raw == Some(b'\\');
             if !already_escaped {
@@ -160,8 +179,85 @@ pub(in crate::print) fn escape_bullet_leading_underscore(line: &str, marker_len:
         }
         out.push(b as char);
         prev_raw = Some(b);
+        i += 1;
     }
     out
+}
+
+/// Returns true when the bullet content has an even, nonzero number of
+/// word-boundary flanking underscores — i.e. they pair up as markdown italic
+/// spans. In that case cheapskate renders them verbatim and no escape is
+/// needed. A single unmatched flanking underscore (e.g. `_blank foo`) must
+/// still be escaped.
+fn has_balanced_flanking_underscores(bytes: &[u8]) -> bool {
+    let mut count = 0usize;
+    let mut in_link_text = false;
+    let mut in_backticks = false;
+    let mut prev_raw: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b >= 0x80 {
+            let seq_len = utf8_seq_len(b);
+            prev_raw = Some(b);
+            i += seq_len;
+            continue;
+        }
+        match b {
+            b'[' if !in_link_text && !in_backticks => in_link_text = true,
+            b']' if in_link_text => in_link_text = false,
+            b'`' => in_backticks = !in_backticks,
+            _ => {}
+        }
+        if b == b'_' && !in_link_text && !in_backticks {
+            let already_escaped = prev_raw == Some(b'\\');
+            if !already_escaped {
+                let prev = if i == 0 { None } else { Some(bytes[i - 1]) };
+                let next = if i + 1 < bytes.len() {
+                    Some(bytes[i + 1])
+                } else {
+                    None
+                };
+                let left_is_letter = prev.map(|c| c.is_ascii_alphanumeric()).unwrap_or(false);
+                let right_is_letter = next.map(|c| c.is_ascii_alphanumeric()).unwrap_or(false);
+                let flanking = if left_is_letter != right_is_letter {
+                    true
+                } else if !left_is_letter && !right_is_letter {
+                    let prev_is_nonspace = prev.map(|c| !c.is_ascii_whitespace()).unwrap_or(false);
+                    let next_is_space_or_none =
+                        next.map(|c| c.is_ascii_whitespace()).unwrap_or(true);
+                    let prev_is_space_or_none =
+                        prev.map(|c| c.is_ascii_whitespace()).unwrap_or(true);
+                    let next_is_nonspace = next.map(|c| !c.is_ascii_whitespace()).unwrap_or(false);
+                    (prev_is_nonspace && next_is_space_or_none)
+                        || (prev_is_space_or_none && next_is_nonspace)
+                } else {
+                    false
+                };
+                if flanking {
+                    count += 1;
+                }
+            }
+        }
+        prev_raw = Some(b);
+        i += 1;
+    }
+    count >= 2 && count.is_multiple_of(2)
+}
+
+fn utf8_seq_len(first_byte: u8) -> usize {
+    if first_byte < 0x80 {
+        1
+    } else if first_byte < 0xC0 {
+        // Continuation byte alone; treat as 1 to avoid infinite loop.
+        1
+    } else if first_byte < 0xE0 {
+        2
+    } else if first_byte < 0xF0 {
+        3
+    } else {
+        4
+    }
 }
 
 /// Convert fenced code blocks (triple-backtick) to indented code blocks.
@@ -178,13 +274,17 @@ pub(in crate::print) fn normalize_fenced_code_blocks(text: &str) -> String {
         // Detect opening fence: plain ``` or ```<language-tag>.
         // elm-format's Cheapskate renderer converts all fenced blocks to
         // 4-space indented blocks, stripping the fences and language tag.
+        // Cheapskate only converts fences with no language tag or the `elm`
+        // language tag to indented code blocks. Fences tagged for other
+        // languages (e.g. `javascript`) are left intact.
         let is_fence_open = trimmed == "```"
             || (trimmed.starts_with("```")
                 && trimmed.len() > 3
                 && !trimmed[3..].contains('`')
                 && trimmed[3..]
                     .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                && trimmed[3..].eq_ignore_ascii_case("elm"));
         if is_fence_open {
             // Find the closing fence
             let mut end = i + 1;
@@ -344,6 +444,13 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut result = String::with_capacity(text.len());
 
+    // Pre-pass: elm-format preserves ALL code blocks in a doc comment
+    // verbatim when the doc has sibling decl-only and bare-only blocks, or
+    // when any block uses `-->` result-comment output markers. An individual
+    // block that mixes decls with bare exprs is preserved on its own but
+    // doesn't force sibling blocks to be preserved.
+    let doc_preserve_all = doc_comment_forces_preserve_all(&lines);
+
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
@@ -381,11 +488,18 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
             }
         }
 
+        // This specific block mixes declarations with bare expressions — it
+        // gets preserved verbatim even if sibling blocks get reformatted.
+        let block_mixes =
+            super::reformat::block_mixes_decls_and_bare_exprs(&lines[block_start..=block_end]);
+        let preserve_this_block = doc_preserve_all || block_mixes;
+
         // Only try to reformat if the code block appears to use non-elm-format
         // indentation (e.g. 2-space indent). Code blocks already using 4-space
         // indentation are left unchanged to avoid regressions from imperfect
         // pretty printing.
-        let needs_reformat = code_block_needs_reformat(&lines[block_start..=block_end]);
+        let needs_reformat =
+            !preserve_this_block && code_block_needs_reformat(&lines[block_start..=block_end]);
 
         let reformatted = if needs_reformat {
             try_reformat_code_block(&lines[block_start..=block_end])
@@ -410,8 +524,18 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
             // look like `expr == value` get a blank line inserted between them
             // and have multi-space runs (outside strings) collapsed, matching
             // elm-format's behavior.
+            //
+            // When the doc comment is an "example" (any block shows expected
+            // output via `-->` or has sibling decl/bare blocks), preserve every
+            // block exactly as written. The assertion transform would
+            // otherwise rewrite compact tuples and trim alignment spaces that
+            // elm-format leaves alone.
             let block = &lines[block_start..=block_end];
-            let transformed = transform_assertion_paragraphs(block);
+            let transformed = if preserve_this_block {
+                block.join("\n")
+            } else {
+                transform_assertion_paragraphs(block)
+            };
             let transformed = insert_loose_paragraph_breaks(&transformed);
             let end_idx = result.len();
             result.push_str(&transformed);
@@ -439,4 +563,109 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
     }
 
     result
+}
+
+/// Pre-scan all 4-space-indented code blocks in a doc comment body and return
+/// true if any block indicates the whole comment is an "example" that
+/// elm-format preserves verbatim. Currently two signals qualify:
+///
+/// 1. A single block mixes declarations with bare expressions (e.g. a `foo :`
+///    annotation plus a `foo 42` usage line).
+/// 2. Any block contains one or more `-->` result-comment lines used to show
+///    expected output of the preceding expression.
+fn doc_comment_forces_preserve_all(lines: &[&str]) -> bool {
+    let mut any_decl_block = false;
+    let mut any_bare_block = false;
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let starts_code = line.starts_with("    ") && (i == 0 || lines[i - 1].trim().is_empty());
+        if !starts_code {
+            i += 1;
+            continue;
+        }
+        let block_start = i;
+        let mut block_end = i;
+        while block_end + 1 < lines.len() {
+            let next = lines[block_end + 1];
+            if next.trim().is_empty() {
+                if block_end + 2 < lines.len() && lines[block_end + 2].starts_with("    ") {
+                    block_end += 1;
+                    continue;
+                }
+                break;
+            } else if next.starts_with("    ") {
+                block_end += 1;
+            } else {
+                break;
+            }
+        }
+        let block = &lines[block_start..=block_end];
+        if block_has_result_arrow_comment(block) {
+            return true;
+        }
+        if block_has_internal_ellipsis_placeholder(block) {
+            return true;
+        }
+        // Track whether sibling blocks mix decl-flavored content with
+        // bare-expression content across the whole doc; elm-format treats
+        // any such doc as an "example" and preserves every block verbatim.
+        //
+        // For the decl-only side we only count blocks that are already
+        // normalized — a misformatted decl block is real reformat work, not
+        // a sibling signal. For the bare-expression side we count the block
+        // even if it carries compact-tuple/list syntax, because example
+        // docs commonly pair sorted imports with a bare expression that uses
+        // such syntax (e.g. Test.elm's `\(nums, target) ->` body).
+        let decl_gate_ok = !super::reformat::code_block_has_structural_reformat_signal(block);
+        if decl_gate_ok && super::reformat::block_looks_decl_only(block) {
+            any_decl_block = true;
+        } else if super::reformat::block_looks_bare_only(block) {
+            any_bare_block = true;
+        }
+        if any_decl_block && any_bare_block {
+            return true;
+        }
+        i = block_end + 1;
+    }
+    false
+}
+
+/// Returns true if any line in the block is a `-->` result-comment at base
+/// (4-space) indent. elm-format treats these blocks as example output and
+/// preserves them and their sibling blocks verbatim.
+fn block_has_result_arrow_comment(block_lines: &[&str]) -> bool {
+    for &line in block_lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with("-->") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true if the block contains both decl-flavored content (a type
+/// annotation or a value binding) and at least one line with an in-line `...`
+/// placeholder followed by more content on the same line (e.g. `, ...]`).
+/// Such a block is structurally a declaration whose body elm-format cannot
+/// parse, so it preserves the whole doc's code blocks verbatim.
+///
+/// A pure bare-expression block containing `...` (e.g. Parser.elm's keyword
+/// assertions) does not qualify and does not propagate preservation to its
+/// sibling blocks.
+fn block_has_internal_ellipsis_placeholder(block_lines: &[&str]) -> bool {
+    let mut any_internal_ellipsis = false;
+    let mut any_decl_flavor = false;
+    for &line in block_lines {
+        let trimmed = line.trim_start();
+        if super::predicates::has_internal_ellipsis(trimmed) {
+            any_internal_ellipsis = true;
+        }
+        if super::predicates::looks_like_type_annotation(trimmed)
+            || super::predicates::is_single_line_value_decl(trimmed)
+        {
+            any_decl_flavor = true;
+        }
+    }
+    any_internal_ellipsis && any_decl_flavor
 }

@@ -1,3 +1,4 @@
+use crate::comment::Comment;
 use crate::node::Spanned;
 use crate::span::Span;
 
@@ -9,7 +10,18 @@ pub enum Exposing {
     All(Span),
 
     /// `exposing (foo, Bar, Baz(..))` — expose specific items.
-    Explicit(Vec<Spanned<ExposedItem>>),
+    ///
+    /// `trailing_comments` captures any comments appearing after the last
+    /// item but before the closing `)`. elm-format preserves them on their
+    /// own lines just before the closing paren.
+    Explicit {
+        items: Vec<Spanned<ExposedItem>>,
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Vec::is_empty")
+        )]
+        trailing_comments: Vec<Spanned<Comment>>,
+    },
 }
 
 /// A single item in an explicit exposing list.

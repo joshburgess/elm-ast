@@ -102,4 +102,6 @@ pub use parse::parse_recovering;
 #[cfg(feature = "printing")]
 pub use print::pretty_print;
 #[cfg(feature = "printing")]
+pub use print::pretty_print_converged;
+#[cfg(feature = "printing")]
 pub use print::print;

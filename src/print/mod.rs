@@ -34,7 +34,8 @@ use crate::comment::Comment;
 use crate::declaration::{CustomType, Declaration, InfixDef, TypeAlias, ValueConstructor};
 use crate::exposing::{ExposedItem, Exposing};
 use crate::expr::{
-    CaseBranch, Expr, Function, FunctionImplementation, LetDeclaration, RecordSetter, Signature,
+    CaseBranch, Expr, Function, FunctionImplementation, IfBranch, LetDeclaration, RecordSetter,
+    Signature,
 };
 use crate::file::ElmModule;
 use crate::import::Import;
@@ -43,7 +44,37 @@ use crate::module_header::ModuleHeader;
 use crate::node::Spanned;
 use crate::operator::InfixDirection;
 use crate::pattern::Pattern;
+use crate::span::Span;
 use crate::type_annotation::{RecordField, TypeAnnotation};
+
+/// Thread-local flag read by doc-comment reparse helpers to opt into the
+/// `ElmFormatConverged` mutations without threading a parameter through
+/// every caller. Set automatically by `Printer::print_module` based on the
+/// printer's `PrintStyle`; cleared when the returned guard is dropped.
+pub(crate) mod converged_mode {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FLAG: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(crate) struct Guard(bool);
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            FLAG.with(|f| f.set(self.0));
+        }
+    }
+
+    pub(crate) fn set(on: bool) -> Guard {
+        let prev = FLAG.with(|f| f.replace(on));
+        Guard(prev)
+    }
+
+    pub(crate) fn is_on() -> bool {
+        FLAG.with(|f| f.get())
+    }
+}
 
 /// Controls how aggressively the printer breaks lines.
 ///
@@ -54,15 +85,29 @@ use crate::type_annotation::{RecordField, TypeAnnotation};
 ///
 /// - `ElmFormat`: break lines in the same places elm-format does — pipelines
 ///   always vertical, records and lists with 2+ entries always multiline.
-///   Designed for **code generation** where the AST is built from scratch and
-///   readability matters more than exact round-tripping.
+///   Output matches `elm-format(source)` byte-for-byte on real-world
+///   packages.
+///
+/// - `ElmFormatConverged`: identical to `ElmFormat`, plus it pre-applies
+///   the mutations elm-format makes on a second pass. elm-format is not
+///   idempotent on `-- comment\n<blank>\nimport` inside doc-comment code
+///   blocks: one pass keeps 1 blank, a second pass adds another. This
+///   variant emits the 2-blank form up front, so feeding the output
+///   through elm-format a second time produces no changes
+///   (`pp(source) == elm-format(pp(source))`). Diverges from
+///   `elm-format(source)` on source that has the 1-blank form. Use when
+///   downstream tooling re-runs elm-format and you need round-trip
+///   stability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PrintStyle {
     /// Round-trip-safe minimal line breaking.
     #[default]
     Compact,
-    /// elm-format-style pretty printing.
+    /// elm-format-style pretty printing; matches `elm-format(source)`.
     ElmFormat,
+    /// elm-format-style pretty printing pre-converged to elm-format's
+    /// second-pass fixed point.
+    ElmFormatConverged,
 }
 
 /// Configuration for the Elm printer.
@@ -94,10 +139,22 @@ pub struct Printer {
     indent_extra: u32,
     /// Stack of saved indent_extra values, pushed by indent(), popped by dedent().
     indent_extra_stack: Vec<u32>,
+    /// When true, the enclosing vertical operator chain has already bumped
+    /// indent for its operators. Nested binop layouts should align at this
+    /// same column rather than bumping another level, matching elm-format's
+    /// rule that every operator in a multi-line chain sits at one column
+    /// regardless of precedence or parse-tree grouping. Cleared whenever an
+    /// operand crosses a paren, application, or block boundary.
+    in_vertical_chain: bool,
     /// Groups of exposed names parsed from `@docs` directives in the module doc.
     /// Each inner Vec is one `@docs` line. Used by `write_exposing_pretty` to
     /// match elm-format's grouping of exposing items.
     doc_groups: Vec<Vec<String>>,
+    /// Stack of the current expression's source span. Pushed/popped by
+    /// `write_spanned_expr`. Used by List/Tuple/etc. to detect when the
+    /// outer brackets spanned multiple source lines even if the inner
+    /// elements are all single-line.
+    expr_span_stack: Vec<Span>,
 }
 
 impl Printer {
@@ -108,12 +165,15 @@ impl Printer {
             indent: 0,
             indent_extra: 0,
             indent_extra_stack: Vec::new(),
+            in_vertical_chain: false,
             doc_groups: Vec::new(),
+            expr_span_stack: Vec::new(),
         }
     }
 
     /// Print a complete Elm module to a string.
     pub fn print_module(mut self, module: &ElmModule) -> String {
+        let _guard = converged_mode::set(self.is_converged());
         self.write_module(module);
         self.buf
     }
@@ -124,7 +184,57 @@ impl Printer {
     }
 
     fn is_pretty(&self) -> bool {
-        self.config.style == PrintStyle::ElmFormat
+        matches!(
+            self.config.style,
+            PrintStyle::ElmFormat | PrintStyle::ElmFormatConverged
+        )
+    }
+
+    fn is_converged(&self) -> bool {
+        self.config.style == PrintStyle::ElmFormatConverged
+    }
+
+    /// True when the two spans sit on different source lines (both non-dummy).
+    /// Used by container layout decisions so that multi-line source stays
+    /// multi-line in pretty output — mirroring elm-format's "preserve source
+    /// layout" behavior. Also lets synthesized ASTs (codegen) opt into
+    /// multi-line layout by setting operand spans on different lines.
+    fn spans_cross_lines(a: Span, b: Span) -> bool {
+        a.start.line != 0 && b.end.line != 0 && b.end.line > a.start.line
+    }
+
+    /// True when a single span covers multiple source lines (non-dummy).
+    fn span_crosses_lines(s: Span) -> bool {
+        s.start.line != 0 && s.end.line > s.start.line
+    }
+
+    /// True if `expr` is a multi-line triple-quoted string, or a container
+    /// (Application, List, Parenthesized) whose content bottoms out in one.
+    /// Used to exempt trailing triple-strings from forcing vertical layout.
+    fn expr_ends_with_triple_string(expr: &Expr) -> bool {
+        match unwrap_parens_non_block(expr) {
+            Expr::Literal(Literal::MultilineString(s)) => s.contains('\n'),
+            Expr::Application(args) => args
+                .last()
+                .map(|a| Self::expr_ends_with_triple_string(&a.value))
+                .unwrap_or(false),
+            Expr::List { elements, .. } => {
+                elements.len() == 1
+                    && elements
+                        .last()
+                        .map(|e| Self::expr_ends_with_triple_string(&e.value))
+                        .unwrap_or(false)
+            }
+            _ => false,
+        }
+    }
+
+    /// True when a sequence of spanned nodes spans multiple source lines.
+    fn spans_multi_lines<T>(items: &[Spanned<T>]) -> bool {
+        match (items.first(), items.last()) {
+            (Some(first), Some(last)) => Self::spans_cross_lines(first.span, last.span),
+            _ => false,
+        }
     }
 
     /// Check if an expression will produce multi-line output.
@@ -146,9 +256,9 @@ impl Printer {
                 }
                 // In Compact mode, single-line when simple.
                 if branches.len() == 1 {
-                    let (c, b) = &branches[0];
-                    if !self.is_multiline(&c.value)
-                        && !self.is_multiline(&b.value)
+                    let branch = &branches[0];
+                    if !self.is_multiline(&branch.condition.value)
+                        && !self.is_multiline(&branch.then_branch.value)
                         && !self.is_multiline(&else_branch.value)
                     {
                         return false;
@@ -157,20 +267,66 @@ impl Printer {
                 true
             }
             Expr::CaseOf { .. } | Expr::LetIn { .. } => true,
-            Expr::Lambda { body, .. } => self.is_multiline(&body.value),
-            Expr::Application(args) => args.iter().any(|a| self.is_multiline(&a.value)),
-            Expr::List(elems) => elems.iter().any(|e| self.is_multiline(&e.value)),
-            Expr::Tuple(elems) => elems.iter().any(|e| self.is_multiline(&e.value)),
-            Expr::Record(fields) => fields
-                .iter()
-                .any(|f| self.is_multiline(&f.value.value.value)),
-            Expr::RecordUpdate { updates, .. } => updates
-                .iter()
-                .any(|f| self.is_multiline(&f.value.value.value)),
-            Expr::OperatorApplication { left, right, .. } => {
-                self.is_multiline(&left.value) || self.is_multiline(&right.value)
+            Expr::Lambda { args, body } => {
+                self.is_multiline(&body.value)
+                    || (self.is_pretty() && !body.comments.is_empty())
+                    || (self.is_pretty() && Self::span_crosses_lines(body.span))
+                    || (self.is_pretty()
+                        && match args.last() {
+                            Some(last) => {
+                                last.span.end.line != 0
+                                    && body.span.start.line != 0
+                                    && body.span.start.line > last.span.end.line
+                            }
+                            None => false,
+                        })
             }
-            Expr::Parenthesized(inner) => self.is_multiline(&inner.value),
+            Expr::Application(args) => {
+                args.iter().any(|a| self.is_multiline(&a.value))
+                    || (self.is_pretty() && Self::spans_multi_lines(args))
+                    || (self.is_pretty()
+                        && args.iter().any(|a| {
+                            a.comments.iter().any(|c| {
+                                matches!(c.value, Comment::Line(_))
+                                    || c.span.start.line != c.span.end.line
+                            })
+                        }))
+            }
+            Expr::List {
+                elements,
+                element_inline_comments,
+                trailing_comments,
+            } => {
+                elements.iter().any(|e| self.is_multiline(&e.value))
+                    || (self.is_pretty() && Self::spans_multi_lines(elements))
+                    || !trailing_comments.is_empty()
+                    || element_inline_comments.iter().any(|c| c.is_some())
+            }
+            Expr::Tuple(elems) => {
+                elems.iter().any(|e| self.is_multiline(&e.value))
+                    || (self.is_pretty() && Self::spans_multi_lines(elems))
+            }
+            Expr::Record(fields) => {
+                fields
+                    .iter()
+                    .any(|f| self.is_multiline(&f.value.value.value))
+                    || (self.is_pretty() && Self::spans_multi_lines(fields))
+            }
+            Expr::RecordUpdate { updates, .. } => {
+                updates
+                    .iter()
+                    .any(|f| self.is_multiline(&f.value.value.value))
+                    || (self.is_pretty() && Self::spans_multi_lines(updates))
+            }
+            Expr::OperatorApplication { left, right, .. } => {
+                self.is_multiline(&left.value)
+                    || self.is_multiline(&right.value)
+                    || (self.is_pretty() && Self::spans_cross_lines(left.span, right.span))
+            }
+            Expr::Parenthesized {
+                expr: inner,
+                trailing_comments,
+            } => self.is_multiline(&inner.value) || !trailing_comments.is_empty(),
             Expr::Negation(inner) => self.is_multiline(&inner.value),
             // A `"""..."""` literal whose content spans multiple lines prints
             // with its closing `"""` at column 1. In a binary-op chain this
@@ -320,10 +476,17 @@ impl Printer {
                 if self.is_pretty() && text.contains('\n') {
                     let brace_col = self.current_column();
                     self.write("{-");
-                    let reindented = reindent_block_comment(text, brace_col);
-                    // elm-format normalizes `{-- foo...` (block content
-                    // starting with "- ") by dropping the space after the
-                    // leading dash, keeping `{--` as a single marker.
+                    // elm-format does NOT re-indent contents of "comment-out"
+                    // style block comments `{-- ... -}` (text starts with a
+                    // literal `-`). For normal `{- ... -}`, it aligns
+                    // continuation lines so the min indent sits at
+                    // `{-col + 3`.
+                    let is_double_dash = text.starts_with('-');
+                    let reindented = if is_double_dash {
+                        text.to_string()
+                    } else {
+                        reindent_block_comment(text, brace_col)
+                    };
                     let reindented = if self.is_pretty() && reindented.starts_with("- ") {
                         format!("-{}", &reindented[2..])
                     } else {
@@ -416,9 +579,12 @@ impl Printer {
     fn write_exposing(&mut self, exposing: &Exposing, is_module_header: bool) {
         match exposing {
             Exposing::All(_) => self.write("(..)"),
-            Exposing::Explicit(items) => {
+            Exposing::Explicit {
+                items,
+                trailing_comments,
+            } => {
                 if self.is_pretty() {
-                    self.write_exposing_pretty(items, is_module_header);
+                    self.write_exposing_pretty(items, trailing_comments, is_module_header);
                 } else {
                     self.write_char('(');
                     for (i, item) in items.iter().enumerate() {
@@ -441,7 +607,12 @@ impl Printer {
     /// - 2+ `@docs` groups → multiline with one group per line
     ///
     /// Without `@docs`, items are listed one per line when the list is long.
-    fn write_exposing_pretty(&mut self, items: &[Spanned<ExposedItem>], is_module_header: bool) {
+    fn write_exposing_pretty(
+        &mut self,
+        items: &[Spanned<ExposedItem>],
+        trailing_comments: &[Spanned<Comment>],
+        is_module_header: bool,
+    ) {
         let doc_groups = self.doc_groups.clone();
 
         if is_module_header && !doc_groups.is_empty() {
@@ -499,7 +670,8 @@ impl Printer {
                 resolved_groups.push(leftovers);
             }
 
-            if resolved_groups.len() <= 1 {
+            let force_multiline = !trailing_comments.is_empty();
+            if resolved_groups.len() <= 1 && !force_multiline {
                 // Single group (or all items in one group) → single-line.
                 let all_items: Vec<&ExposedItem> = resolved_groups
                     .into_iter()
@@ -535,6 +707,10 @@ impl Printer {
                         self.write_exposed_item(item);
                     }
                 }
+                for c in trailing_comments {
+                    self.newline_indent();
+                    self.write_comment(&c.value);
+                }
                 self.newline_indent();
                 self.write_char(')');
                 self.dedent();
@@ -563,9 +739,10 @@ impl Printer {
                 format!("({})", parts.join(", "))
             };
 
-            let line_start = self.buf.rfind('\n').map_or(0, |p| p + 1);
-            let current_col = self.buf.len() - line_start;
-            if current_col + single_line.len() <= 200 {
+            let source_was_multiline = Self::spans_multi_lines(items);
+            if !source_was_multiline && trailing_comments.is_empty() {
+                // elm-format preserves single-line source layout regardless
+                // of line length for module exposing.
                 self.write(&single_line);
             } else {
                 // Multiline: each item on its own indented line.
@@ -581,6 +758,10 @@ impl Printer {
                         self.write(", ");
                     }
                     self.write_exposed_item(item);
+                }
+                for c in trailing_comments {
+                    self.newline_indent();
+                    self.write_comment(&c.value);
                 }
                 self.newline_indent();
                 self.write_char(')');
@@ -622,6 +803,32 @@ impl Printer {
             }
         }
         if let Some(exposing) = &import.exposing {
+            let source_multi = self.is_pretty()
+                && exposing.span.end.line > exposing.span.start.line
+                && exposing.span.start.line != 0;
+            if source_multi && let Exposing::Explicit { items, .. } = &exposing.value {
+                self.indent();
+                self.newline_indent();
+                self.write("exposing");
+                self.indent();
+                self.newline_indent();
+                let mut sorted: Vec<&ExposedItem> = items.iter().map(|i| &i.value).collect();
+                sorted.sort_by_key(|a| exposed_item_sort_key(a));
+                self.write_char('(');
+                self.write_char(' ');
+                for (i, item) in sorted.iter().enumerate() {
+                    if i > 0 {
+                        self.newline_indent();
+                        self.write(", ");
+                    }
+                    self.write_exposed_item(item);
+                }
+                self.newline_indent();
+                self.write_char(')');
+                self.dedent();
+                self.dedent();
+                return;
+            }
             self.write(" exposing ");
             if self.is_pretty() {
                 self.write_import_exposing_sorted(&exposing.value);
@@ -668,7 +875,7 @@ impl Printer {
             let mut all_items: Vec<&ExposedItem> = Vec::new();
             for imp in imports {
                 if let Some(exposing) = &imp.exposing
-                    && let Exposing::Explicit(items) = &exposing.value
+                    && let Exposing::Explicit { items, .. } = &exposing.value
                 {
                     for item in items {
                         all_items.push(&item.value);
@@ -698,7 +905,7 @@ impl Printer {
     fn write_import_exposing_sorted(&mut self, exposing: &Exposing) {
         match exposing {
             Exposing::All(_) => self.write("(..)"),
-            Exposing::Explicit(items) => {
+            Exposing::Explicit { items, .. } => {
                 let mut sorted: Vec<&ExposedItem> = items.iter().map(|i| &i.value).collect();
                 sorted.sort_by_key(|a| exposed_item_sort_key(a));
                 self.write_char('(');
@@ -730,7 +937,7 @@ impl Printer {
                 self.write(" =");
                 self.indent();
                 self.newline_indent();
-                self.write_expr(&body.value);
+                self.write_spanned_expr(body);
                 self.dedent();
             }
         }
@@ -750,8 +957,327 @@ impl Printer {
 
     fn write_signature(&mut self, sig: &Signature) {
         self.write(&sig.name.value);
-        self.write(" : ");
-        self.write_type(&sig.type_annotation.value);
+        let has_arm_comments =
+            self.is_pretty() && Self::type_ann_has_arm_comments(&sig.type_annotation);
+        if self.is_pretty()
+            && (Self::type_ann_spans_multi_lines(&sig.type_annotation) || has_arm_comments)
+        {
+            self.write(" :");
+            self.indent();
+            self.newline_indent();
+            self.write_type_multiline(&sig.type_annotation);
+            self.dedent();
+        } else {
+            self.write(" : ");
+            self.write_type(&sig.type_annotation.value);
+        }
+        if self.is_pretty()
+            && let Some(trailing) = &sig.trailing_comment
+        {
+            self.write_char(' ');
+            self.write_comment(&trailing.value);
+        }
+    }
+
+    /// True if any arm in a FunctionType (including the first) has leading
+    /// comments attached. Forces multi-line layout.
+    fn type_ann_has_arm_comments(ta: &Spanned<TypeAnnotation>) -> bool {
+        if !ta.comments.is_empty() {
+            return true;
+        }
+        match &ta.value {
+            TypeAnnotation::FunctionType { from, to } => {
+                Self::type_ann_has_arm_comments(from) || Self::type_ann_has_arm_comments(to)
+            }
+            _ => false,
+        }
+    }
+
+    /// True when the type annotation's content crosses source lines.
+    /// Uses the inner content span rather than the Spanned wrapper span,
+    /// because the wrapper may include leading whitespace/newline after `=`
+    /// or `:` (giving a misleading multi-line appearance for a single-line
+    /// annotation like `    msg -> model -> ( model, Cmd msg )`).
+    fn type_ann_spans_multi_lines(sp: &Spanned<TypeAnnotation>) -> bool {
+        let (s, e) = Self::type_ann_content_lines(sp);
+        s != 0 && e != 0 && e > s
+    }
+
+    /// Return `(start_line, end_line)` for the content of a type annotation,
+    /// peeking through the wrapper span into inner sub-spans where wrappers
+    /// may include leading whitespace.
+    fn type_ann_content_lines(sp: &Spanned<TypeAnnotation>) -> (u32, u32) {
+        match &sp.value {
+            TypeAnnotation::FunctionType { from, to } => {
+                let (fs, _fe) = Self::type_ann_content_lines(from);
+                let (_ts, te) = Self::type_ann_content_lines(to);
+                (fs, te)
+            }
+            TypeAnnotation::Typed { name, args, .. } => {
+                let s = name.span.start.line;
+                let e = args
+                    .last()
+                    .map(|a| Self::type_ann_content_lines(a).1)
+                    .unwrap_or(name.span.end.line);
+                (s, e)
+            }
+            TypeAnnotation::Tupled(elems) => {
+                let s = elems
+                    .first()
+                    .map(|e| Self::type_ann_content_lines(e).0)
+                    .unwrap_or(sp.span.start.line);
+                (s, sp.span.end.line)
+            }
+            _ => (sp.span.start.line, sp.span.end.line),
+        }
+    }
+
+    /// Write a type annotation broken across lines: function arrows on their
+    /// own lines, record arguments expanded multi-line. Matches elm-format's
+    /// layout when the source annotation spans multiple lines.
+    fn write_type_multiline(&mut self, ty: &Spanned<TypeAnnotation>) {
+        match &ty.value {
+            TypeAnnotation::FunctionType { from, to } => {
+                if self.is_pretty() && !from.comments.is_empty() {
+                    for c in &from.comments {
+                        self.write_comment(&c.value);
+                        self.newline_indent();
+                    }
+                }
+                self.write_type_arm_multiline(from);
+                let mut cur: &Spanned<TypeAnnotation> = to;
+                loop {
+                    // Emit leading comments on this arm (captured by the
+                    // parser as comments between the previous arm and the
+                    // current `->`). elm-format puts them above the `->`.
+                    if self.is_pretty() && !cur.comments.is_empty() {
+                        for c in &cur.comments {
+                            self.newline_indent();
+                            self.write_comment(&c.value);
+                        }
+                    }
+                    // If the current RHS is a function type that had outer
+                    // parens in source (e.g. `-> (a -> b)` on its own line),
+                    // elm-format keeps the whole paren group on one arm line
+                    // instead of descending into its arrows.
+                    if self.is_pretty()
+                        && matches!(cur.value, TypeAnnotation::FunctionType { .. })
+                        && Self::type_ann_has_outer_parens(cur)
+                    {
+                        self.newline_indent();
+                        self.write("-> (");
+                        self.write_type(&cur.value);
+                        self.write_char(')');
+                        break;
+                    }
+                    match &cur.value {
+                        TypeAnnotation::FunctionType { from, to } => {
+                            self.write_function_arm_arrow(from);
+                            cur = to;
+                        }
+                        _ => {
+                            self.write_function_arm_arrow(cur);
+                            break;
+                        }
+                    }
+                }
+            }
+            TypeAnnotation::Record(fields) if !fields.is_empty() => {
+                self.write_record_type_fields_multiline(fields, None);
+            }
+            TypeAnnotation::GenericRecord { base, fields } if !fields.is_empty() => {
+                self.write_record_type_fields_multiline(fields, Some(&base.value));
+            }
+            TypeAnnotation::Typed {
+                module_name,
+                name,
+                args,
+            } if !args.is_empty() => {
+                if !module_name.is_empty() {
+                    self.write(&module_name.join("."));
+                    self.write_char('.');
+                }
+                self.write(&name.value);
+                for arg in args {
+                    if Self::type_ann_spans_multi_lines(arg) {
+                        match &arg.value {
+                            TypeAnnotation::Record(rfields) if !rfields.is_empty() => {
+                                self.indent();
+                                self.newline_indent();
+                                self.write_record_type_fields_multiline(rfields, None);
+                                self.dedent();
+                                continue;
+                            }
+                            TypeAnnotation::GenericRecord {
+                                base,
+                                fields: rfields,
+                            } => {
+                                self.indent();
+                                self.newline_indent();
+                                self.write_record_type_fields_multiline(rfields, Some(&base.value));
+                                self.dedent();
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                    self.write_char(' ');
+                    self.write_type_atomic(&arg.value);
+                }
+            }
+            TypeAnnotation::Tupled(elems) if elems.len() >= 2 => {
+                self.write_tupled_multiline(elems);
+            }
+            _ => self.write_type(&ty.value),
+        }
+    }
+
+    /// Emit a multi-line tuple type:
+    /// ```text
+    /// ( A
+    /// , B
+    /// , C
+    /// )
+    /// ```
+    /// Each element starts 2 columns past the opening paren. Nested
+    /// records inside elements expand multi-line at their element column.
+    fn write_tupled_multiline(&mut self, elems: &[Spanned<TypeAnnotation>]) {
+        self.write("( ");
+        self.write_tuple_elem(&elems[0]);
+        for elem in &elems[1..] {
+            self.newline_indent();
+            self.write(", ");
+            self.write_tuple_elem(elem);
+        }
+        self.newline_indent();
+        self.write(")");
+    }
+
+    /// Write a single tuple element. If the element is a multi-line record
+    /// type, expand it aligned to its own column (2 past the tuple's `(`).
+    fn write_tuple_elem(&mut self, elem: &Spanned<TypeAnnotation>) {
+        let elem_multi = Self::type_ann_spans_multi_lines(elem);
+        match &elem.value {
+            TypeAnnotation::Record(fields) if elem_multi && fields.len() >= 2 => {
+                self.with_extra_indent(2, |p| p.write_record_type_fields_multiline(fields, None));
+            }
+            TypeAnnotation::GenericRecord { base, fields } if elem_multi => {
+                self.with_extra_indent(2, |p| {
+                    p.write_record_type_fields_multiline(fields, Some(&base.value))
+                });
+            }
+            _ => self.write_type(&elem.value),
+        }
+    }
+
+    /// Run `f` with indent_extra bumped by `delta` columns so that
+    /// newline_indent within the closure aligns to the current column.
+    fn with_extra_indent(&mut self, delta: u32, f: impl FnOnce(&mut Self)) {
+        let saved = self.indent_extra;
+        self.indent_extra = saved + delta;
+        f(self);
+        self.indent_extra = saved;
+    }
+
+    /// Emit one `-> <arm>` step of a multi-line function type. When the arm
+    /// itself will expand onto multiple lines (e.g. a 2+ field record whose
+    /// source span is multi-line), elm-format puts the arrow alone on its
+    /// own line and indents the arm below it; otherwise the arrow and arm
+    /// sit on the same line.
+    fn write_function_arm_arrow(&mut self, arm: &Spanned<TypeAnnotation>) {
+        self.newline_indent();
+        // When the arm is a parenthesized function type whose paren group
+        // spans multiple source lines, elm-format breaks `->` onto its own
+        // line and expands the paren body across lines:
+        //   ->
+        //       (state
+        //        -> ReturnType
+        //       )
+        if self.is_pretty()
+            && matches!(arm.value, TypeAnnotation::FunctionType { .. })
+            && Self::type_ann_has_outer_parens(arm)
+            && arm.span.end.line > arm.span.start.line
+            && arm.span.start.line != 0
+        {
+            self.write("->");
+            self.indent();
+            self.newline_indent();
+            self.write("(");
+            if let TypeAnnotation::FunctionType { from, to } = &arm.value {
+                self.with_extra_indent(1, |p| {
+                    p.write_type_arm_multiline(from);
+                    let mut cur: &Spanned<TypeAnnotation> = to;
+                    loop {
+                        match &cur.value {
+                            TypeAnnotation::FunctionType { from: f2, to: t2 } => {
+                                p.write_function_arm_arrow(f2);
+                                cur = t2;
+                            }
+                            _ => {
+                                p.write_function_arm_arrow(cur);
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+            self.newline_indent();
+            self.write(")");
+            self.dedent();
+            return;
+        }
+        if Self::type_arm_is_multiline(arm) {
+            self.write("->");
+            self.indent();
+            self.newline_indent();
+            self.write_type_arm_multiline(arm);
+            self.dedent();
+        } else {
+            self.write("-> ");
+            self.write_type_arm_multiline(arm);
+        }
+    }
+
+    fn type_arm_is_multiline(arm: &Spanned<TypeAnnotation>) -> bool {
+        let source_multi = arm.span.end.line > arm.span.start.line && arm.span.start.line != 0;
+        match &arm.value {
+            TypeAnnotation::Record(fields) if fields.len() >= 2 => source_multi,
+            TypeAnnotation::GenericRecord { fields, .. } if !fields.is_empty() => source_multi,
+            TypeAnnotation::Typed { args, .. } if !args.is_empty() && source_multi => {
+                // A Typed constructor applied to a multi-line record arg
+                // expands `-> Ctor { ... }` across multiple lines.
+                args.iter().any(|a| match &a.value {
+                    TypeAnnotation::Record(fs) if fs.len() >= 2 => {
+                        Self::type_ann_spans_multi_lines(a)
+                    }
+                    TypeAnnotation::GenericRecord { fields: fs, .. } if !fs.is_empty() => {
+                        Self::type_ann_spans_multi_lines(a)
+                    }
+                    _ => false,
+                })
+            }
+            _ => false,
+        }
+    }
+
+    /// Write a single arm of a multi-line function type. Records expand
+    /// multi-line; other forms stay on one line (parenthesized if needed).
+    fn write_type_arm_multiline(&mut self, arm: &Spanned<TypeAnnotation>) {
+        let source_multi = arm.span.end.line > arm.span.start.line && arm.span.start.line != 0;
+        match &arm.value {
+            TypeAnnotation::Record(fields) if fields.len() >= 2 && source_multi => {
+                self.write_record_type_fields_multiline(fields, None);
+            }
+            TypeAnnotation::GenericRecord { base, fields }
+                if !fields.is_empty() && source_multi =>
+            {
+                self.write_record_type_fields_multiline(fields, Some(&base.value));
+            }
+            TypeAnnotation::Typed { args, .. } if !args.is_empty() && source_multi => {
+                self.write_type_multiline(arm);
+            }
+            _ => self.write_type_non_arrow(&arm.value),
+        }
     }
 
     fn write_function_impl(&mut self, imp: &FunctionImplementation) {
@@ -763,6 +1289,9 @@ impl Printer {
         self.write(" =");
         self.indent();
         self.newline_indent();
+        if !imp.body.comments.is_empty() {
+            self.write_leading_comments(&imp.body.comments);
+        }
         // At the top of a value definition RHS, parens around an operator
         // application are always redundant. elm-format strips them.
         let body = if self.is_pretty() {
@@ -770,7 +1299,13 @@ impl Printer {
         } else {
             &imp.body.value
         };
+        // Push the body span so that List/Tuple/etc. children can consult
+        // `current_expr_span()` to decide multi-line layout based on the
+        // outer brackets crossing source lines (e.g. a single-element list
+        // whose `[` and `]` are on different lines).
+        self.expr_span_stack.push(imp.body.span);
         self.write_expr(body);
+        self.expr_span_stack.pop();
         self.dedent();
     }
 
@@ -789,7 +1324,11 @@ impl Printer {
         self.indent();
         self.newline_indent();
         if self.is_pretty() {
-            self.write_type_pretty_toplevel(&alias.type_annotation.value);
+            if Self::type_ann_spans_multi_lines(&alias.type_annotation) {
+                self.write_type_multiline(&alias.type_annotation);
+            } else {
+                self.write_type_pretty_toplevel(&alias.type_annotation.value);
+            }
         } else {
             self.write_type(&alias.type_annotation.value);
         }
@@ -801,31 +1340,161 @@ impl Printer {
             self.write_doc_comment_text(&doc.value);
             self.newline();
         }
-        self.write("type ");
-        self.write(&ct.name.value);
-        for g in &ct.generics {
-            self.write_char(' ');
-            self.write(&g.value);
-        }
-        self.indent();
-        for (i, ctor) in ct.constructors.iter().enumerate() {
+        let wrap_header = self.is_pretty() && !ct.pre_equals_comments.is_empty();
+        if wrap_header {
+            self.write("type");
+            self.indent();
             self.newline_indent();
-            if i == 0 {
-                self.write("= ");
-            } else {
-                self.write("| ");
+            self.write(&ct.name.value);
+            for g in &ct.generics {
+                self.write_char(' ');
+                self.write(&g.value);
             }
-            self.write_value_constructor(&ctor.value);
+            for c in &ct.pre_equals_comments {
+                self.newline_indent();
+                self.write_comment(&c.value);
+            }
+        } else {
+            self.write("type ");
+            self.write(&ct.name.value);
+            for g in &ct.generics {
+                self.write_char(' ');
+                self.write(&g.value);
+            }
+            self.indent();
+        }
+        for (i, ctor) in ct.constructors.iter().enumerate() {
+            if i == 0 {
+                self.newline_indent();
+                self.write("= ");
+                for c in &ctor.comments {
+                    self.write_comment(&c.value);
+                    self.newline();
+                    self.write_indent();
+                    self.write("  ");
+                }
+                self.write_value_constructor(&ctor.value);
+            } else {
+                // Post-pipe comments (ctor.comments) sit on their own line(s)
+                // at the constructor-name column (indent + 2), BEFORE the `|`,
+                // with no blank line above.
+                for c in &ctor.comments {
+                    self.newline();
+                    self.write_indent();
+                    self.write("  ");
+                    self.write_comment(&c.value);
+                }
+                self.newline_indent();
+                self.write("| ");
+                // Pre-pipe comments (ctor.value.pre_pipe_comments) sit INLINE
+                // with the `|`, each followed by a newline + indent + 2 so the
+                // following constructor name aligns at the `|` column + 2.
+                let pre = &ctor.value.pre_pipe_comments;
+                for c in pre {
+                    self.write_comment(&c.value);
+                    self.newline();
+                    self.write_indent();
+                    self.write("  ");
+                }
+                self.write_value_constructor(&ctor.value);
+            }
         }
         self.dedent();
     }
 
     fn write_value_constructor(&mut self, ctor: &ValueConstructor) {
         self.write(&ctor.name.value);
-        for arg in &ctor.args {
-            self.write_char(' ');
-            self.write_type_atomic(&arg.value);
+        // Only force multi-line constructor layout when an arg's printed
+        // form will genuinely span multiple lines. Tuples and applied
+        // types are always printed single-line via `write_type_atomic`,
+        // so forcing a break would be rewrapped by elm-format. The two
+        // arg kinds that reliably print multi-line are records with 2+
+        // fields, and function types that span multiple source lines
+        // (printed in the parenthesized aligned-arrow form).
+        let any_arg_has_leading =
+            self.is_pretty() && ctor.args.iter().any(|a| !a.comments.is_empty());
+        let any_multiline = self.is_pretty()
+            && (ctor.args.iter().any(Self::ctor_arg_prints_multiline) || any_arg_has_leading);
+        if any_multiline {
+            self.indent();
+            for arg in &ctor.args {
+                self.newline_indent();
+                for c in &arg.comments {
+                    self.write_comment(&c.value);
+                    self.newline_indent();
+                }
+                self.write_ctor_arg_multiline(arg);
+            }
+            self.dedent();
+        } else {
+            for arg in &ctor.args {
+                self.write_char(' ');
+                self.write_type_atomic(&arg.value);
+            }
         }
+        if let Some(tc) = &ctor.trailing_comment {
+            self.write_char(' ');
+            self.write_comment(&tc.value);
+        }
+    }
+
+    fn ctor_arg_prints_multiline(a: &Spanned<TypeAnnotation>) -> bool {
+        if !Self::type_ann_spans_multi_lines(a) {
+            return false;
+        }
+        matches!(&a.value, TypeAnnotation::Record(fs) if fs.len() >= 2)
+            || matches!(&a.value, TypeAnnotation::FunctionType { .. })
+    }
+
+    fn write_ctor_arg_multiline(&mut self, ty: &Spanned<TypeAnnotation>) {
+        match &ty.value {
+            TypeAnnotation::Record(fields) if fields.len() >= 2 => {
+                self.write_record_type_fields_multiline(fields, None);
+            }
+            TypeAnnotation::FunctionType { .. } if Self::type_ann_spans_multi_lines(ty) => {
+                self.write_parenthesized_function_type_multiline(&ty.value);
+            }
+            _ => self.write_type_atomic(&ty.value),
+        }
+    }
+
+    /// Write a multi-line function type wrapped in parens, with each arrow
+    /// aligned one column past the opening paren and the closing paren on
+    /// its own line aligned with the opening. Used for custom-type ctor
+    /// args whose source function type spanned multiple lines.
+    ///
+    /// ```text
+    /// (Location
+    ///  -> ResolvedNames
+    ///  -> Result err a
+    /// )
+    /// ```
+    fn write_parenthesized_function_type_multiline(&mut self, ty: &TypeAnnotation) {
+        self.write_char('(');
+        // Collect arms so we can emit the first inline with `(` and the
+        // rest on subsequent lines.
+        let mut arms: Vec<&TypeAnnotation> = Vec::new();
+        let mut cur = ty;
+        loop {
+            if let TypeAnnotation::FunctionType { from, to } = cur {
+                arms.push(&from.value);
+                cur = &to.value;
+            } else {
+                arms.push(cur);
+                break;
+            }
+        }
+        if let Some((first, rest)) = arms.split_first() {
+            self.write_type_atomic(first);
+            for arm in rest {
+                self.newline_indent();
+                self.write_char(' ');
+                self.write("-> ");
+                self.write_type_non_arrow(arm);
+            }
+        }
+        self.newline_indent();
+        self.write_char(')');
     }
 
     fn write_infix_decl(&mut self, infix: &InfixDef) {
@@ -860,9 +1529,42 @@ impl Printer {
             TypeAnnotation::FunctionType { from, to } => {
                 self.write_type_non_arrow(&from.value);
                 self.write(" -> ");
-                self.write_type(&to.value);
+                // elm-format preserves redundant parens around function types
+                // on the RHS of an arrow (e.g. `a -> (b -> c)`). The parser
+                // flags this by extending the inner value's span to cover
+                // the parens, so `to.span.start` precedes the inner `from`'s
+                // span start.
+                let preserve_parens = self.is_pretty()
+                    && matches!(to.value, TypeAnnotation::FunctionType { .. })
+                    && Self::type_ann_has_outer_parens(to);
+                if preserve_parens {
+                    self.write_char('(');
+                    self.write_type(&to.value);
+                    self.write_char(')');
+                } else {
+                    self.write_type(&to.value);
+                }
             }
             _ => self.write_type_non_arrow(ty),
+        }
+    }
+
+    /// Detect whether a FunctionType Spanned was originally wrapped in parens
+    /// in the source. The parser records this by setting the Spanned's span
+    /// to cover the parens, so the outer span starts before the inner `from`'s
+    /// span starts on the same line. A start on an earlier line could simply
+    /// be from whitespace/newlines preceding the RHS of an arrow; require
+    /// same-line to avoid that false positive.
+    fn type_ann_has_outer_parens(ta: &Spanned<TypeAnnotation>) -> bool {
+        if let TypeAnnotation::FunctionType { from, .. } = &ta.value {
+            let outer = ta.span.start;
+            let inner = from.span.start;
+            if outer.line == 0 || inner.line == 0 {
+                return false;
+            }
+            outer.line == inner.line && outer.column < inner.column
+        } else {
+            false
         }
     }
 
@@ -904,29 +1606,82 @@ impl Printer {
             self.write("| ");
             for (i, field) in fields.iter().enumerate() {
                 if i > 0 {
-                    self.newline_indent();
-                    self.write(", ");
+                    self.write_record_field_separator_with_comments(&field.comments);
+                } else {
+                    self.write_record_field_leading_comments_inline(&field.comments);
                 }
                 self.write(&field.value.name.value);
-                self.write(" : ");
-                self.write_type(&field.value.type_annotation.value);
+                self.write_field_type_with_possible_break(&field.value.type_annotation);
             }
             self.dedent();
         } else {
             self.write("{ ");
+            self.write_record_field_leading_comments_inline(&fields[0].comments);
             self.write(&fields[0].value.name.value);
-            self.write(" : ");
-            self.write_type(&fields[0].value.type_annotation.value);
+            self.write_field_type_with_possible_break(&fields[0].value.type_annotation);
             for field in &fields[1..] {
-                self.newline_indent();
-                self.write(", ");
+                self.write_record_field_separator_with_comments(&field.comments);
                 self.write(&field.value.name.value);
-                self.write(" : ");
-                self.write_type(&field.value.type_annotation.value);
+                self.write_field_type_with_possible_break(&field.value.type_annotation);
             }
         }
         self.newline_indent();
         self.write("}");
+    }
+
+    /// Write ` : <type>` for a record field's type annotation. When the
+    /// source spans multiple lines — either because the value itself is a
+    /// multi-line record, or simply because the source put the value on a
+    /// new line after `:` — break the value onto its own indented line:
+    /// ` :\n    <type>`.
+    fn write_field_type_with_possible_break(&mut self, ta: &Spanned<TypeAnnotation>) {
+        // Use the WRAPPER span here (not content span) because the wrapper
+        // includes leading whitespace after `:`; if that whitespace includes
+        // a newline, the source put the value on its own line.
+        let wrapper_multi = ta.span.start.line != 0
+            && ta.span.end.line != 0
+            && ta.span.end.line > ta.span.start.line;
+        if self.is_pretty() && wrapper_multi {
+            match &ta.value {
+                TypeAnnotation::Record(rfields) if !rfields.is_empty() => {
+                    self.write(" :");
+                    self.indent();
+                    self.newline_indent();
+                    self.write_record_type_fields_multiline(rfields, None);
+                    self.dedent();
+                    return;
+                }
+                TypeAnnotation::GenericRecord {
+                    base,
+                    fields: rfields,
+                } => {
+                    self.write(" :");
+                    self.indent();
+                    self.newline_indent();
+                    self.write_record_type_fields_multiline(rfields, Some(&base.value));
+                    self.dedent();
+                    return;
+                }
+                TypeAnnotation::Typed { .. } => {
+                    self.write(" :");
+                    self.indent();
+                    self.newline_indent();
+                    self.write_type_multiline(ta);
+                    self.dedent();
+                    return;
+                }
+                _ => {
+                    self.write(" :");
+                    self.indent();
+                    self.newline_indent();
+                    self.write_type(&ta.value);
+                    self.dedent();
+                    return;
+                }
+            }
+        }
+        self.write(" : ");
+        self.write_type(&ta.value);
     }
 
     fn write_type_non_arrow(&mut self, ty: &TypeAnnotation) {
@@ -1162,12 +1917,119 @@ impl Printer {
         self.write_expr_inner(expr);
     }
 
+    /// Write a spanned expression, pushing its source span onto the span
+    /// stack so children (List, Tuple, etc.) can consult it for multi-line
+    /// detection based on the outer brackets' lines, not just element spans.
+    pub fn write_spanned_expr(&mut self, spanned: &Spanned<Expr>) {
+        self.expr_span_stack.push(spanned.span);
+        self.write_expr_inner(&spanned.value);
+        self.expr_span_stack.pop();
+    }
+
+    fn current_expr_span(&self) -> Option<Span> {
+        self.expr_span_stack.last().copied()
+    }
+
     /// Emit leading comments attached to a node.
     fn write_leading_comments(&mut self, comments: &[Spanned<Comment>]) {
         for c in comments {
             self.write_comment(&c.value);
             self.newline();
             self.write_indent();
+        }
+    }
+
+    /// Emit trailing comments that sit between a Parenthesized expression's
+    /// inner value and its closing `)`. elm-format aligns them one column
+    /// past the opening `(`, e.g.
+    ///
+    /// ```elm
+    /// (   inner
+    ///  -- trailing
+    /// )
+    /// ```
+    ///
+    /// `paren_after_col` is the value of `current_column()` right after
+    /// writing `(` (i.e. chars since the last newline). `)` aligns at
+    /// `paren_after_col - 1` leading spaces; the trailing comment sits one
+    /// column further in, so `paren_after_col` leading spaces.
+    fn write_paren_trailing_comments(
+        &mut self,
+        comments: &[Spanned<Comment>],
+        paren_after_col: usize,
+    ) {
+        for c in comments {
+            self.newline();
+            for _ in 0..paren_after_col {
+                self.buf.push(' ');
+            }
+            self.write_comment(&c.value);
+        }
+    }
+
+    /// Returns true if `spanned` has any leading line comments.
+    fn has_leading_line_comment(spanned: &Spanned<Expr>) -> bool {
+        spanned
+            .comments
+            .iter()
+            .any(|c| matches!(c.value, Comment::Line(_)))
+    }
+
+    /// Emit leading line comments for an operand sitting inside a vertical
+    /// operator chain. Each line comment goes on its own line at the current
+    /// chain indent. Block comments are left for the operand's own writer.
+    fn write_chain_operand_leading_line_comments(&mut self, spanned: &Spanned<Expr>) {
+        for c in &spanned.comments {
+            if matches!(c.value, Comment::Line(_)) {
+                self.newline_indent();
+                self.write_comment(&c.value);
+            }
+        }
+    }
+
+    /// Emit inline leading comments for the FIRST record-type field (after
+    /// `{ ` or `| `). Block comments stay inline; line comments get promoted
+    /// to their own line at base indent + 2 so the field name aligns with the
+    /// column after `{ `.
+    fn write_record_field_leading_comments_inline(&mut self, comments: &[Spanned<Comment>]) {
+        for c in comments {
+            self.write_comment(&c.value);
+            self.newline();
+            self.write_indent();
+            self.write("  ");
+        }
+    }
+
+    /// Emit the separator between two record-type fields, placing any leading
+    /// comments appropriately. elm-format handles block vs. line comments
+    /// differently:
+    ///   - Block comment: `, {- .. -}\n<indent>  field` (+2 col for field)
+    ///   - Line comment: blank line, then `<indent>-- line\n<indent>, field`
+    fn write_record_field_separator_with_comments(&mut self, comments: &[Spanned<Comment>]) {
+        let has_line_comment = comments.iter().any(|c| matches!(c.value, Comment::Line(_)));
+
+        if has_line_comment {
+            for (i, c) in comments.iter().enumerate() {
+                if i == 0 {
+                    self.newline();
+                    self.newline();
+                } else {
+                    self.newline();
+                }
+                self.write_indent();
+                self.write_comment(&c.value);
+            }
+            self.newline_indent();
+            self.write(", ");
+        } else {
+            self.newline_indent();
+            self.write(", ");
+            for c in comments {
+                self.write_comment(&c.value);
+                self.newline();
+                self.write_indent();
+                self.write("  ");
+            }
         }
     }
 
@@ -1186,10 +2048,23 @@ impl Printer {
                 ..
             } => {
                 // elm-format strips redundant Parenthesized wrappers on the
-                // right side of `<|` since `<|` has the lowest precedence and
-                // is right-associative, so parens are never required there.
+                // right side of `<|` since `<|` is right-associative at the
+                // lowest precedence. The only exception is `|>` (same
+                // precedence, opposite associativity), which cannot be mixed
+                // with `<|` without parens — stripping would produce invalid
+                // Elm.
                 let right_expr = if self.is_pretty() && operator == "<|" {
-                    unwrap_parens(&right.value)
+                    let inner = unwrap_parens(&right.value);
+                    let inner_needs_parens = matches!(
+                        inner,
+                        Expr::OperatorApplication { operator: inner_op, .. }
+                            if matches!(inner_op.as_str(), "|>" | "|." | "|=")
+                    );
+                    if inner_needs_parens {
+                        &right.value
+                    } else {
+                        inner
+                    }
                 } else {
                     &right.value
                 };
@@ -1204,19 +2079,58 @@ impl Printer {
                     && matches!(operator.as_str(), "|>" | "|." | "|=")
                     && let Some((head, rest)) = flatten_mixed_pipe_chain(expr)
                 {
-                    let any_ml =
-                        self.is_multiline(head) || rest.iter().any(|(_, op)| self.is_multiline(op));
+                    let any_ml = self.is_multiline(&head.value)
+                        || rest.iter().any(|(_, op)| self.is_multiline(&op.value))
+                        || Self::spans_cross_lines(left.span, right.span);
                     if any_ml {
-                        // Break ALL operators to vertical.
-                        self.write_expr_operand(head, operator, true);
-                        self.indent();
-                        for (op, operand) in &rest {
+                        // When the pipe chain goes vertical and its head is
+                        // itself a binop chain (e.g. `a ++ b |> f`), elm-
+                        // format flattens the head's operators into the same
+                        // vertical layout at the same indent column.
+                        let (real_head, head_rest) = match flatten_as_chain(&head.value) {
+                            Some(x) => x,
+                            None => (head, Vec::new()),
+                        };
+                        let first_op = head_rest
+                            .first()
+                            .map(|(op, _)| *op)
+                            .unwrap_or(operator.as_str());
+                        let outer_chain = self.in_vertical_chain;
+                        // Capture the column where the head begins so
+                        // continuations align at head_col + indent_width,
+                        // even when writing inside a list/tuple element
+                        // where the ambient indent counter lags the cursor.
+                        let head_col = self.current_column();
+                        self.write_expr_operand(real_head, first_op, true);
+                        let saved_indent = self.indent;
+                        let saved_extra = self.indent_extra;
+                        let saved_stack = self.indent_extra_stack.clone();
+                        if !outer_chain {
+                            let w = self.config.indent_width;
+                            self.indent = head_col / w;
+                            self.indent_extra = (head_col % w) as u32;
+                            self.indent_extra_stack.clear();
+                            self.indent();
+                        }
+                        self.in_vertical_chain = true;
+                        for (op, operand) in head_rest.iter().chain(rest.iter()) {
+                            for c in &operand.comments {
+                                if matches!(c.value, Comment::Line(_) | Comment::Block(_)) {
+                                    self.newline_indent();
+                                    self.write_comment(&c.value);
+                                }
+                            }
                             self.newline_indent();
                             self.write(op);
                             self.write_char(' ');
                             self.write_expr_operand(operand, op, false);
                         }
-                        self.dedent();
+                        self.in_vertical_chain = outer_chain;
+                        if !outer_chain {
+                            self.indent = saved_indent;
+                            self.indent_extra = saved_extra;
+                            self.indent_extra_stack = saved_stack;
+                        }
                         return;
                     }
                     // All operands are single-line; fall through to
@@ -1232,101 +2146,321 @@ impl Printer {
                 // `::` and `++` share precedence 5 right-assoc, and elm-format
                 // unifies mixed chains (e.g. `a :: b :: xs ++ ys`) into a single
                 // vertical layout. Use the mixed flattener for those operators.
-                if self.is_pretty()
-                    && matches!(operator.as_str(), "::" | "++")
+                if matches!(operator.as_str(), "::" | "++")
                     && let Some((head, rest)) = flatten_mixed_cons_append_chain(expr)
                 {
-                    let any_ml =
-                        self.is_multiline(head) || rest.iter().any(|(_, e)| self.is_multiline(e));
+                    let any_line_comment =
+                        rest.iter().any(|(_, e)| Self::has_leading_line_comment(e));
+                    // A chain is "visually inline" when every inter-operand
+                    // transition happens on a single source line (e.g.
+                    // `} """ ++ rules`, or `""" ++ classes.any ++ """`).
+                    // Triple-quoted strings may span lines internally, but
+                    // elm-format keeps the chain on one line when the
+                    // operators and operand boundaries all share the same
+                    // line. Exempt such chains from multi-line detection.
+                    let chain_visually_inline = {
+                        let head_end = head.span.end.line;
+                        if head_end == 0 || rest.is_empty() {
+                            false
+                        } else {
+                            let mut prev_end = head_end;
+                            rest.iter().all(|(_, e)| {
+                                let ok = e.span.start.line != 0 && e.span.start.line == prev_end;
+                                prev_end = e.span.end.line;
+                                ok
+                            })
+                        }
+                    };
+                    let any_ml = self.is_pretty()
+                        && !chain_visually_inline
+                        && (self.is_multiline(&head.value)
+                            || rest.iter().any(|(_, e)| self.is_multiline(&e.value))
+                            || Self::spans_cross_lines(left.span, right.span));
+                    let any_ml = any_ml || any_line_comment;
                     if any_ml {
+                        let outer_chain = self.in_vertical_chain;
                         self.write_expr_operand(head, operator, true);
-                        self.indent();
+                        if !outer_chain {
+                            self.indent();
+                        }
+                        self.in_vertical_chain = true;
                         for (op, operand) in &rest {
+                            self.write_chain_operand_leading_line_comments(operand);
+                            self.newline_indent();
+                            self.write(op);
+                            self.write_char(' ');
+                            self.write_expr_operand(operand, op, false);
+                        }
+                        self.in_vertical_chain = outer_chain;
+                        if !outer_chain {
+                            self.dedent();
+                        }
+                        return;
+                    }
+                }
+
+                if matches!(operator.as_str(), ">>" | "<<")
+                    && let Some(chain) = flatten_right_assoc_chain(expr, operator)
+                {
+                    let any_line_comment =
+                        chain[1..].iter().any(|e| Self::has_leading_line_comment(e));
+                    let any_ml = self.is_pretty()
+                        && (chain.iter().any(|op| self.is_multiline(&op.value))
+                            || Self::spans_cross_lines(left.span, right.span));
+                    let any_ml = any_ml || any_line_comment;
+                    if any_ml {
+                        let outer_chain = self.in_vertical_chain;
+                        self.write_expr_operand(chain[0], operator, true);
+                        if !outer_chain {
+                            self.indent();
+                        }
+                        self.in_vertical_chain = true;
+                        for operand in &chain[1..] {
+                            self.write_chain_operand_leading_line_comments(operand);
+                            self.newline_indent();
+                            self.write(operator);
+                            self.write_char(' ');
+                            self.write_expr_operand(operand, operator, false);
+                        }
+                        self.in_vertical_chain = outer_chain;
+                        if !outer_chain {
+                            self.dedent();
+                        }
+                        return;
+                    }
+                }
+
+                // Mixed comparison+arithmetic chains (e.g. doc-comment
+                // assertion reparses `14 / 4 == 3.5 - 1 / 4`). elm-format
+                // lays every operator at the same indent column regardless
+                // of precedence. Must run before the arithmetic-only
+                // flattener since the top operator here is `==`.
+                if matches!(
+                    operator.as_str(),
+                    "==" | "/=" | "<" | ">" | "<=" | ">=" | "+" | "-" | "*" | "/" | "//"
+                ) && let Some((head, rest)) = flatten_mixed_comparison_arithmetic_chain(expr)
+                {
+                    let any_line_comment =
+                        rest.iter().any(|(_, e)| Self::has_leading_line_comment(e));
+                    let any_ml = self.is_pretty()
+                        && (self.is_multiline(&head.value)
+                            || rest.iter().any(|(_, e)| self.is_multiline(&e.value))
+                            || Self::spans_cross_lines(left.span, right.span));
+                    let any_ml = any_ml || any_line_comment;
+                    if any_ml {
+                        let outer_chain = self.in_vertical_chain;
+                        self.write_expr_operand(head, operator, true);
+                        if !outer_chain {
+                            self.indent();
+                        }
+                        self.in_vertical_chain = true;
+                        for (op, operand) in &rest {
+                            self.write_chain_operand_leading_line_comments(operand);
+                            self.newline_indent();
+                            self.write(op);
+                            self.write_char(' ');
+                            self.write_expr_operand(operand, op, false);
+                        }
+                        self.in_vertical_chain = outer_chain;
+                        if !outer_chain {
+                            self.dedent();
+                        }
+                        return;
+                    }
+                }
+
+                // Arithmetic operators `+` `-` `*` `/` `//` sit at two
+                // precedences (6 and 7). Mixed chains (`a - k * p`) parse
+                // with the higher-precedence op nested inside, but
+                // elm-format lays the whole thing out as a single vertical
+                // sequence with every operator at the same indent column.
+                if matches!(operator.as_str(), "+" | "-" | "*" | "/" | "//")
+                    && let Some((head, rest)) = flatten_mixed_arithmetic_chain(expr)
+                {
+                    let any_line_comment =
+                        rest.iter().any(|(_, e)| Self::has_leading_line_comment(e));
+                    let any_ml = self.is_pretty()
+                        && (self.is_multiline(&head.value)
+                            || rest.iter().any(|(_, op)| self.is_multiline(&op.value))
+                            || Self::spans_cross_lines(left.span, right.span));
+                    let any_ml = any_ml || any_line_comment;
+                    if any_ml {
+                        let outer_chain = self.in_vertical_chain;
+                        self.write_expr_operand(head, operator, true);
+                        if !outer_chain {
+                            self.indent();
+                        }
+                        self.in_vertical_chain = true;
+                        for (op, operand) in &rest {
+                            self.write_chain_operand_leading_line_comments(operand);
+                            self.newline_indent();
+                            self.write(op);
+                            self.write_char(' ');
+                            self.write_expr_operand(operand, op, false);
+                        }
+                        self.in_vertical_chain = outer_chain;
+                        if !outer_chain {
+                            self.dedent();
+                        }
+                        return;
+                    }
+                }
+
+                // `&&` and `||` are right-associative in Elm but mix across
+                // precedences 2 and 3. elm-format lays out such mixed chains
+                // as a single vertical sequence with all operators aligned at
+                // the same indent column, regardless of parse-tree grouping.
+                if matches!(operator.as_str(), "&&" | "||")
+                    && let Some((head, rest)) = flatten_mixed_logical_chain(expr)
+                {
+                    let any_line_comment =
+                        rest.iter().any(|(_, e)| Self::has_leading_line_comment(e));
+                    let any_ml = self.is_pretty()
+                        && (self.is_multiline(&head.value)
+                            || rest.iter().any(|(_, e)| self.is_multiline(&e.value))
+                            || Self::spans_cross_lines(left.span, right.span));
+                    let any_ml = any_ml || any_line_comment;
+                    if any_ml {
+                        let outer_chain = self.in_vertical_chain;
+                        self.write_expr_operand(head, operator, true);
+                        if !outer_chain {
+                            self.indent();
+                        }
+                        self.in_vertical_chain = true;
+                        for (op, operand) in &rest {
+                            self.write_chain_operand_leading_line_comments(operand);
+                            self.newline_indent();
+                            self.write(op);
+                            self.write_char(' ');
+                            self.write_expr_operand(operand, op, false);
+                        }
+                        self.in_vertical_chain = outer_chain;
+                        if !outer_chain {
+                            self.dedent();
+                        }
+                        return;
+                    }
+                }
+
+                let is_pipe = matches!(operator.as_str(), "|>" | "|." | "|=");
+                let right_has_line_leading = is_pipe
+                    && right
+                        .comments
+                        .iter()
+                        .any(|c| matches!(c.value, Comment::Line(_)));
+                // Check whether the full `::`/`++` chain rooted here is
+                // "visually inline": every inter-operand transition sits on
+                // a single source line (triple-quoted operands may span lines
+                // internally). elm-format keeps such chains on one line even
+                // when an operand is a multi-line triple-string.
+                let chain_visually_inline = self.is_pretty()
+                    && matches!(operator.as_str(), "::" | "++")
+                    && match flatten_mixed_cons_append_chain(expr) {
+                        Some((head, rest)) if !rest.is_empty() => {
+                            let head_end = head.span.end.line;
+                            if head_end == 0 {
+                                false
+                            } else {
+                                let mut prev_end = head_end;
+                                rest.iter().all(|(_, e)| {
+                                    let ok =
+                                        e.span.start.line != 0 && e.span.start.line == prev_end;
+                                    prev_end = e.span.end.line;
+                                    ok
+                                })
+                            }
+                        }
+                        _ => false,
+                    };
+                let use_vertical = if self.is_pretty() {
+                    (!chain_visually_inline
+                        && (self.is_multiline(&left.value)
+                            || self.is_multiline(right_expr)
+                            || Self::spans_cross_lines(left.span, right.span)))
+                        || right_has_line_leading
+                } else {
+                    self.is_multiline(right_expr) || right_has_line_leading
+                };
+                self.write_leading_comments(&left.comments);
+                let left_multiline = self.is_pretty() && self.is_multiline(&left.value);
+                self.write_expr_operand(left.as_ref(), operator, true);
+                if use_vertical && operator == "<|" {
+                    // Left-pipe: operator stays on same line as left operand,
+                    // right operand goes on a new indented line. `<|` does
+                    // NOT flatten into an outer chain's indent column;
+                    // cascading `<|` always adds one indent per level.
+                    //
+                    // When the LHS is itself multi-line, elm-format breaks
+                    // `<|` to its own line at the ambient indent column
+                    // rather than trailing the LHS's last line.
+                    //
+                    // When the RHS is itself a binop chain (`::`/`++`/`&&`/
+                    // arithmetic/compose), elm-format forces that chain
+                    // vertical too, aligned at the new indent column. This
+                    // matches the behavior where the `<|` break cascades
+                    // into any chain on the right.
+                    if left_multiline {
+                        self.newline_indent();
+                        self.write("<|");
+                    } else {
+                        self.write(" <|");
+                    }
+                    let saved_chain = std::mem::replace(&mut self.in_vertical_chain, false);
+                    self.indent();
+                    self.newline_indent();
+                    self.write_leading_comments(&right.comments);
+                    if let Some((rhead, rrest)) = flatten_as_chain(right_expr)
+                        && !rrest.is_empty()
+                    {
+                        let first_op = rrest[0].0;
+                        self.write_expr_operand(rhead, first_op, true);
+                        self.indent();
+                        self.in_vertical_chain = true;
+                        for (op, operand) in &rrest {
                             self.newline_indent();
                             self.write(op);
                             self.write_char(' ');
                             self.write_expr_operand(operand, op, false);
                         }
                         self.dedent();
-                        return;
+                    } else {
+                        self.write_expr_inner(right_expr);
                     }
-                }
-
-                if self.is_pretty()
-                    && matches!(operator.as_str(), ">>" | "<<")
-                    && let Some(chain) = flatten_right_assoc_chain(expr, operator)
-                {
-                    let any_ml = chain.iter().any(|op| self.is_multiline(op));
-                    if any_ml {
-                        self.write_expr_operand(chain[0], operator, true);
-                        self.indent();
-                        for operand in &chain[1..] {
-                            self.newline_indent();
-                            self.write(operator);
-                            self.write_char(' ');
-                            self.write_expr_operand(operand, operator, false);
-                        }
-                        self.dedent();
-                        return;
-                    }
-                }
-
-                // Same rule for left-associative arithmetic chains (+, -).
-                // elm-format: if any operand in the chain is multiline,
-                // break at every operator.
-                if self.is_pretty() && matches!(operator.as_str(), "+" | "-") {
-                    let op_owned = operator.clone();
-                    if let Some((head, rest)) =
-                        flatten_left_assoc_pred(expr, &|o: &str| o == op_owned)
-                    {
-                        let any_ml = self.is_multiline(head)
-                            || rest.iter().any(|(_, op)| self.is_multiline(op));
-                        if any_ml {
-                            self.write_expr_operand(head, operator, true);
-                            self.indent();
-                            for (op, operand) in &rest {
-                                self.newline_indent();
-                                self.write(op);
-                                self.write_char(' ');
-                                self.write_expr_operand(operand, op, false);
-                            }
-                            self.dedent();
-                            return;
-                        }
-                    }
-                }
-
-                let use_vertical = if self.is_pretty() {
-                    // elm-format: if either operand is multiline, break.
-                    self.is_multiline(&left.value) || self.is_multiline(right_expr)
-                } else {
-                    self.is_multiline(right_expr)
-                };
-                self.write_leading_comments(&left.comments);
-                self.write_expr_operand(&left.value, operator, true);
-                if use_vertical && operator == "<|" {
-                    // Left-pipe: operator stays on same line as left operand,
-                    // right operand goes on a new indented line.
-                    // This matches elm-format's behavior for `<|`.
-                    self.write(" <|");
-                    self.indent();
-                    self.newline_indent();
-                    self.write_leading_comments(&right.comments);
-                    // Use write_expr_inner so block expressions (Lambda,
-                    // IfElse, etc.) aren't re-wrapped in parens.
-                    self.write_expr_inner(right_expr);
                     self.dedent();
+                    self.in_vertical_chain = saved_chain;
                 } else if use_vertical {
-                    // Vertical layout: operator and right operand on a new
-                    // indented line so that the right side starts at a
-                    // predictable column (satisfying the parser's indent rules).
-                    self.indent();
-                    self.newline_indent();
-                    self.write(operator);
-                    self.write_char(' ');
-                    self.write_leading_comments(&right.comments);
-                    self.write_expr_operand(right_expr, operator, false);
-                    self.dedent();
+                    // Non-chain vertical binop (`==`, `<`, etc.). If the
+                    // enclosing chain already bumped indent, align at that
+                    // same column; otherwise bump one level.
+                    let outer_chain = self.in_vertical_chain;
+                    if !outer_chain {
+                        self.indent();
+                    }
+                    // For pipe steps with leading line comments, emit them
+                    // on their own indented line BEFORE the operator so that
+                    // the output re-parses with the comments attached back
+                    // to the same operand.
+                    if right_has_line_leading {
+                        for c in &right.comments {
+                            if matches!(c.value, Comment::Line(_)) {
+                                self.newline_indent();
+                                self.write_comment(&c.value);
+                            }
+                        }
+                        self.newline_indent();
+                        self.write(operator);
+                        self.write_char(' ');
+                        self.write_expr_operand(right.as_ref(), operator, false);
+                    } else {
+                        self.newline_indent();
+                        self.write(operator);
+                        self.write_char(' ');
+                        self.write_leading_comments(&right.comments);
+                        self.write_expr_operand(right.as_ref(), operator, false);
+                    }
+                    if !outer_chain {
+                        self.dedent();
+                    }
                 } else {
                     self.write_char(' ');
                     self.write(operator);
@@ -1337,7 +2471,7 @@ impl Printer {
                     if operator == "<|" {
                         self.write_expr_inner(right_expr);
                     } else {
-                        self.write_expr_operand(right_expr, operator, false);
+                        self.write_expr_operand(right.as_ref(), operator, false);
                     }
                 }
             }
@@ -1345,7 +2479,7 @@ impl Printer {
                 branches,
                 else_branch,
             } => {
-                self.write_if_expr(branches, &else_branch.value);
+                self.write_if_expr(branches, else_branch);
             }
             Expr::CaseOf {
                 expr: subject,
@@ -1353,11 +2487,15 @@ impl Printer {
             } => {
                 self.write_case_expr(&subject.value, branches);
             }
-            Expr::LetIn { declarations, body } => {
-                self.write_let_expr(declarations, &body.value);
+            Expr::LetIn {
+                declarations,
+                body,
+                trailing_comments,
+            } => {
+                self.write_let_expr(declarations, body, trailing_comments);
             }
             Expr::Lambda { args, body } => {
-                self.write_lambda(args, &body.value);
+                self.write_lambda(args, body);
             }
             Expr::BinOps {
                 operands_and_operators,
@@ -1408,11 +2546,12 @@ impl Printer {
     }
 
     /// Write an operator operand, adding parens for precedence.
-    fn write_expr_operand(&mut self, expr: &Expr, parent_op: &str, is_left: bool) {
+    fn write_expr_operand(&mut self, spanned: &Spanned<Expr>, parent_op: &str, is_left: bool) {
+        self.expr_span_stack.push(spanned.span);
         let expr = if self.is_pretty() {
-            unwrap_parens_non_block(expr)
+            unwrap_parens_non_block(&spanned.value)
         } else {
-            expr
+            &spanned.value
         };
         match expr {
             Expr::OperatorApplication { operator, .. } => {
@@ -1423,41 +2562,83 @@ impl Printer {
                         && ((is_left && is_right_assoc(parent_op))
                             || (!is_left && !is_right_assoc(parent_op))));
                 if needs_parens {
+                    let saved = std::mem::replace(&mut self.in_vertical_chain, false);
                     self.write_char('(');
                     self.write_expr_inner(expr);
                     self.write_char(')');
+                    self.in_vertical_chain = saved;
                 } else {
                     self.write_expr_inner(expr);
                 }
             }
             _ => self.write_expr_app(expr),
         }
+        self.expr_span_stack.pop();
     }
 
     /// Write a function application or negation.
     fn write_expr_app(&mut self, expr: &Expr) {
+        // Crossing into an application/negation/atomic body means we're no
+        // longer a direct operand of the outer chain. Reset the flag so
+        // nested binop chains inside args establish their own indent.
+        let saved = std::mem::replace(&mut self.in_vertical_chain, false);
+        self.write_expr_app_inner(expr);
+        self.in_vertical_chain = saved;
+    }
+
+    fn write_expr_app_inner(&mut self, expr: &Expr) {
         match expr {
             Expr::Application(args) => {
-                // When any argument (beyond the function) is multiline,
-                // use vertical layout so each arg starts on a new indented
-                // line — this ensures args are always at a column greater
-                // than the function name, satisfying the parser's indent rules.
-                let any_arg_ml =
-                    args.len() > 1 && args.iter().skip(1).any(|a| self.is_multiline(&a.value));
-                if any_arg_ml {
-                    self.write_expr_atomic(&args[0].value);
-                    self.indent();
-                    for arg in &args[1..] {
-                        self.newline_indent();
-                        self.write_expr_atomic(&arg.value);
-                    }
-                    self.dedent();
+                // Two reasons to go vertical: (1) any individual argument is
+                // itself multi-line, or (2) the source had consecutive args
+                // split across different lines (the author chose vertical
+                // layout even though each arg is individually simple).
+                let pretty = self.is_pretty();
+                // A trailing multi-line string argument (or a list/container
+                // whose content ends with one) is not enough to force
+                // vertical layout: elm-format keeps these on one line with
+                // the closing `"""` on its own line.
+                let last_is_multiline_string = args
+                    .last()
+                    .map(|a| Self::expr_ends_with_triple_string(&a.value))
+                    .unwrap_or(false);
+                let skip_last_for_ml = last_is_multiline_string && pretty;
+                let any_arg_ml = if skip_last_for_ml {
+                    args.len() > 2
+                        && args
+                            .iter()
+                            .skip(1)
+                            .take(args.len().saturating_sub(2))
+                            .any(|a| self.is_multiline(&a.value))
+                } else {
+                    args.len() > 1 && args.iter().skip(1).any(|a| self.is_multiline(&a.value))
+                };
+                let source_vertical = pretty
+                    && args.windows(2).any(|w| {
+                        let end = w[0].span.end.line;
+                        let start = w[1].span.start.line;
+                        end != 0 && start != 0 && start > end
+                    });
+                // A leading line comment on any arg forces vertical layout
+                // regardless of print style — inline horizontal layout with
+                // `f -- comment arg` would commented out the rest of the call.
+                let any_arg_has_leading_line_comment = args.iter().any(|a| {
+                    a.comments.iter().any(|c| {
+                        matches!(c.value, Comment::Line(_)) || c.span.start.line != c.span.end.line
+                    })
+                });
+                if any_arg_ml || source_vertical || any_arg_has_leading_line_comment {
+                    self.write_application_vertical(args);
                 } else {
                     for (i, arg) in args.iter().enumerate() {
                         if i > 0 {
                             self.write_char(' ');
+                            self.write_app_arg_spanned(arg);
+                        } else {
+                            self.expr_span_stack.push(arg.span);
+                            self.write_expr_atomic(&arg.value);
+                            self.expr_span_stack.pop();
                         }
-                        self.write_expr_atomic(&arg.value);
                     }
                 }
             }
@@ -1469,9 +2650,104 @@ impl Printer {
         }
     }
 
+    /// Write an application argument in non-first position. Negation is
+    /// emitted as `-inner` (no parens) to match elm-format's `f -x` style,
+    /// which relies on the space-before / no-space-after rule to parse as
+    /// unary negation rather than binary subtraction.
+    fn write_app_arg(&mut self, expr: &Expr) {
+        if matches!(expr, Expr::Negation(_)) {
+            self.write_expr_app(expr);
+        } else {
+            self.write_expr_atomic(expr);
+        }
+    }
+
+    fn write_app_arg_spanned(&mut self, spanned: &Spanned<Expr>) {
+        // Emit leading comments attached to the arg. Three cases:
+        //  - Inline single-line block on same line: `f 0x30 {- 0 -} x`.
+        //    Emit inline: `{- 0 -} arg`.
+        //  - Line comment or multi-line block: emit on its own line before
+        //    the arg at the current indent.
+        for c in &spanned.comments {
+            let is_inline_block =
+                matches!(c.value, Comment::Block(_)) && c.span.start.line == c.span.end.line;
+            if is_inline_block {
+                self.write_comment(&c.value);
+                self.write_char(' ');
+            } else {
+                self.write_comment(&c.value);
+                self.newline_indent();
+            }
+        }
+        self.expr_span_stack.push(spanned.span);
+        self.write_app_arg(&spanned.value);
+        self.expr_span_stack.pop();
+    }
+
+    fn write_application_vertical(&mut self, args: &[Spanned<Expr>]) {
+        // elm-format's vertical layout: the first argument stays inline
+        // with the function head only when the source already had an
+        // argument on that line AND the argument is itself single-line.
+        // All remaining arguments break onto their own indented line.
+        // When the source has no argument on the function's line (the
+        // author broke immediately after the function name), we respect
+        // that by breaking every argument too.
+        //
+        // Subsequent arguments align `function_column + indent_width`.
+        // When the function is at the ambient indent column this is the
+        // same as ambient_indent + 1 level. When the function sits past
+        // the ambient indent (e.g. inside `[ fn arg1 arg2 ...`), aligning
+        // to the function's column matches elm-format.
+        // Always capture fn_col so that args indent properly past the
+        // function even in compact mode — needed when a leading line
+        // comment forces vertical layout in compact output.
+        let fn_col = Some(self.current_column());
+        self.write_expr_atomic(&args[0].value);
+        let saved_indent = self.indent;
+        let saved_extra = self.indent_extra;
+        let saved_stack = self.indent_extra_stack.clone();
+        if let Some(col) = fn_col {
+            let w = self.config.indent_width;
+            self.indent = col / w;
+            self.indent_extra = (col % w) as u32;
+            self.indent_extra_stack.clear();
+        }
+        self.indent();
+        if args.len() >= 2 {
+            let first = &args[1];
+            let func_end_line = args[0].span.end.line;
+            let first_start_line = first.span.start.line;
+            let dummy = func_end_line == 0 || first_start_line == 0;
+            let first_inline_in_source = !dummy && first_start_line == func_end_line;
+            if first_inline_in_source && !self.is_multiline(&first.value) {
+                self.write_char(' ');
+            } else {
+                self.newline_indent();
+            }
+            self.write_app_arg_spanned(first);
+            for arg in &args[2..] {
+                self.newline_indent();
+                self.write_app_arg_spanned(arg);
+            }
+        }
+        self.dedent();
+        self.indent = saved_indent;
+        self.indent_extra = saved_extra;
+        self.indent_extra_stack = saved_stack;
+    }
+
     /// Write an expression in atomic (highest-precedence) position.
     /// Complex and block expressions get parenthesized.
     fn write_expr_atomic(&mut self, expr: &Expr) {
+        // Atomic position is always a boundary: we are either a naturally
+        // atomic value or about to introduce our own parens/block indent,
+        // so any outer chain's indent inheritance stops here.
+        let saved = std::mem::replace(&mut self.in_vertical_chain, false);
+        self.write_expr_atomic_inner(expr);
+        self.in_vertical_chain = saved;
+    }
+
+    fn write_expr_atomic_inner(&mut self, expr: &Expr) {
         match expr {
             Expr::Unit => self.write("()"),
             Expr::Literal(lit) => self.write_literal(lit),
@@ -1490,16 +2766,28 @@ impl Printer {
                 self.write_char(')');
             }
 
-            Expr::Parenthesized(inner) => {
+            Expr::Parenthesized {
+                expr: inner,
+                trailing_comments,
+            } => {
                 // elm-format strips redundant Parenthesized wrappers.
                 // In atomic position, strip parens when the inner expression
                 // is itself atomic or is Negation/Application (which are
-                // handled directly by write_expr_app).
-                if self.is_pretty() && is_naturally_atomic(&inner.value) {
+                // handled directly by write_expr_app). Only strip when there
+                // are no trailing comments to preserve.
+                if self.is_pretty()
+                    && trailing_comments.is_empty()
+                    && is_naturally_atomic(&inner.value)
+                {
                     self.write_expr_atomic(&inner.value);
-                } else if self.is_pretty() && matches!(inner.value, Expr::Negation(_)) {
+                } else if self.is_pretty()
+                    && trailing_comments.is_empty()
+                    && matches!(inner.value, Expr::Negation(_))
+                {
                     self.write_expr_app(&inner.value);
-                } else if self.is_pretty() && self.is_multiline(&inner.value) {
+                } else if self.is_pretty()
+                    && (self.is_multiline(&inner.value) || !trailing_comments.is_empty())
+                {
                     let is_block = matches!(
                         inner.value,
                         Expr::IfElse { .. }
@@ -1521,16 +2809,21 @@ impl Printer {
                         self.indent = col / w;
                         self.indent_extra = (col % w) as u32;
 
-                        self.write_expr(&inner.value);
+                        let start_len = self.buf.len();
+                        self.write_spanned_expr(inner);
+                        let wrote_newline = self.buf[start_len..].contains('\n');
 
                         // Restore indent state and write `)` at `(` column.
                         self.indent = saved_indent;
                         self.indent_extra = saved_extra;
                         self.indent_extra_stack = saved_stack;
-                        self.newline();
-                        // `(` was at col - 1, write spaces to align `)` there.
-                        for _ in 0..(col - 1) {
-                            self.buf.push(' ');
+                        self.write_paren_trailing_comments(trailing_comments, col);
+                        if wrote_newline || !trailing_comments.is_empty() {
+                            self.newline();
+                            // `(` was at col - 1, write spaces to align `)` there.
+                            for _ in 0..(col - 1) {
+                                self.buf.push(' ');
+                            }
                         }
                         self.write_char(')');
                     } else {
@@ -1546,11 +2839,12 @@ impl Printer {
                         self.indent = col / w;
                         self.indent_extra = (col % w) as u32;
 
-                        self.write_expr(&inner.value);
+                        self.write_spanned_expr(inner);
 
                         self.indent = saved_indent;
                         self.indent_extra = saved_extra;
                         self.indent_extra_stack = saved_stack;
+                        self.write_paren_trailing_comments(trailing_comments, col);
                         self.newline();
                         for _ in 0..(col - 1) {
                             self.buf.push(' ');
@@ -1559,7 +2853,7 @@ impl Printer {
                     }
                 } else {
                     self.write_char('(');
-                    self.write_expr(&inner.value);
+                    self.write_spanned_expr(inner);
                     self.write_char(')');
                 }
             }
@@ -1568,11 +2862,21 @@ impl Printer {
                 self.write_comma_sep("( ", " )", elems);
             }
 
-            Expr::List(elems) => {
-                if elems.is_empty() {
+            Expr::List {
+                elements,
+                element_inline_comments,
+                trailing_comments,
+            } => {
+                if elements.is_empty() {
                     self.write("[]");
                 } else {
-                    self.write_comma_sep("[ ", " ]", elems);
+                    self.write_comma_sep_force_multi_list(
+                        "[ ",
+                        " ]",
+                        elements,
+                        element_inline_comments,
+                        trailing_comments,
+                    );
                 }
             }
 
@@ -1582,16 +2886,83 @@ impl Printer {
                 } else {
                     let any_ml = fields
                         .iter()
-                        .any(|f| self.is_multiline(&f.value.value.value));
+                        .any(|f| self.is_multiline(&f.value.value.value))
+                        || (self.is_pretty()
+                            && fields.iter().any(|f| f.value.trailing_comment.is_some()))
+                        || (self.is_pretty()
+                            && fields.iter().skip(1).any(|f| !f.comments.is_empty()))
+                        || (self.is_pretty()
+                            && fields.iter().any(|f| !f.value.value.comments.is_empty()))
+                        || (self.is_pretty() && Self::spans_multi_lines(fields));
                     if any_ml {
+                        // Align commas and closing brace with the column of `{`.
+                        // elm-format uses `open_col`-based alignment so that
+                        // records laid out after a binary operator or on a
+                        // non-indent column (e.g. `x == { a = 1\n   , b = 2 }`)
+                        // keep commas visually flush with the opening brace.
+                        let open_col = if self.is_pretty() {
+                            Some(self.current_column())
+                        } else {
+                            None
+                        };
                         self.write("{ ");
                         self.write_record_setter(&fields[0].value);
+                        let mut prev_end_line = fields[0].span.end.line;
                         for field in &fields[1..] {
-                            self.newline_indent();
+                            let has_leading_line = self.is_pretty()
+                                && field
+                                    .comments
+                                    .iter()
+                                    .any(|c| matches!(c.value, Comment::Line(_)));
+                            if has_leading_line {
+                                let first_comment_line = field
+                                    .comments
+                                    .first()
+                                    .map(|c| c.span.start.line)
+                                    .unwrap_or(prev_end_line);
+                                let had_blank = first_comment_line > prev_end_line + 1;
+                                self.newline();
+                                if had_blank {
+                                    self.newline();
+                                }
+                                if let Some(col) = open_col {
+                                    for _ in 0..col {
+                                        self.buf.push(' ');
+                                    }
+                                } else {
+                                    self.write_indent();
+                                }
+                                for c in &field.comments {
+                                    self.write_comment(&c.value);
+                                    self.newline();
+                                    if let Some(col) = open_col {
+                                        for _ in 0..col {
+                                            self.buf.push(' ');
+                                        }
+                                    } else {
+                                        self.write_indent();
+                                    }
+                                }
+                            } else if let Some(col) = open_col {
+                                self.newline();
+                                for _ in 0..col {
+                                    self.buf.push(' ');
+                                }
+                            } else {
+                                self.newline_indent();
+                            }
                             self.write(", ");
                             self.write_record_setter(&field.value);
+                            prev_end_line = field.span.end.line;
                         }
-                        self.newline_indent();
+                        if let Some(col) = open_col {
+                            self.newline();
+                            for _ in 0..col {
+                                self.buf.push(' ');
+                            }
+                        } else {
+                            self.newline_indent();
+                        }
                         self.write("}");
                     } else {
                         self.write("{ ");
@@ -1607,9 +2978,18 @@ impl Printer {
             }
 
             Expr::RecordUpdate { base, updates } => {
+                let base_updates_split = self.is_pretty()
+                    && updates
+                        .first()
+                        .map(|u| base.span.end.line < u.span.start.line)
+                        .unwrap_or(false);
                 let any_ml = updates
                     .iter()
-                    .any(|f| self.is_multiline(&f.value.value.value));
+                    .any(|f| self.is_multiline(&f.value.value.value))
+                    || (self.is_pretty()
+                        && updates.iter().any(|f| f.value.trailing_comment.is_some()))
+                    || (self.is_pretty() && Self::spans_multi_lines(updates))
+                    || base_updates_split;
                 if any_ml {
                     self.write("{ ");
                     self.write(&base.value);
@@ -1683,14 +3063,18 @@ impl Printer {
                     self.indent = col / w;
                     self.indent_extra = (col % w) as u32;
 
+                    let start_len = self.buf.len();
                     self.write_expr_inner(expr);
+                    let wrote_newline = self.buf[start_len..].contains('\n');
 
                     self.indent = saved_indent;
                     self.indent_extra = saved_extra;
                     self.indent_extra_stack = saved_stack;
-                    self.newline();
-                    for _ in 0..(col - 1) {
-                        self.buf.push(' ');
+                    if wrote_newline {
+                        self.newline();
+                        for _ in 0..(col - 1) {
+                            self.buf.push(' ');
+                        }
                     }
                     self.write_char(')');
                 } else {
@@ -1705,7 +3089,73 @@ impl Printer {
     /// Write a comma-separated list of expressions with adaptive layout.
     /// Uses single-line when all elements are single-line, multi-line otherwise.
     fn write_comma_sep(&mut self, open: &str, close: &str, elems: &[Spanned<Expr>]) {
-        let any_multiline = elems.iter().any(|e| self.is_multiline(&e.value));
+        self.write_comma_sep_inner(open, close, elems, false, &[], &[]);
+    }
+
+    /// Variant used by list printing that threads in per-element inline
+    /// trailing comments (same-line `-- foo` after each element) and any
+    /// block trailing comments sitting between the last element and the
+    /// closing `]`.
+    fn write_comma_sep_force_multi_list(
+        &mut self,
+        open: &str,
+        close: &str,
+        elems: &[Spanned<Expr>],
+        element_inline_comments: &[Option<Spanned<Comment>>],
+        trailing_comments: &[Spanned<Comment>],
+    ) {
+        self.write_comma_sep_inner(
+            open,
+            close,
+            elems,
+            true,
+            element_inline_comments,
+            trailing_comments,
+        );
+    }
+
+    fn write_comma_sep_inner(
+        &mut self,
+        open: &str,
+        close: &str,
+        elems: &[Spanned<Expr>],
+        respect_outer_multi_line: bool,
+        element_inline_comments: &[Option<Spanned<Comment>>],
+        trailing_comments: &[Spanned<Comment>],
+    ) {
+        let open_col = self.current_column();
+        let standard_indent = self.indent * self.config.indent_width + self.indent_extra as usize;
+        let at_standard_indent = open_col == standard_indent;
+        let outer_multi_line = respect_outer_multi_line
+            && self.is_pretty()
+            && at_standard_indent
+            && self
+                .current_expr_span()
+                .map(|s| s.end.line > s.start.line && s.start.line != 0)
+                .unwrap_or(false);
+        let any_elem_line_comment = self.is_pretty()
+            && elems.iter().any(|e| {
+                e.comments
+                    .iter()
+                    .any(|c| matches!(c.value, Comment::Line(_)))
+            });
+        // A single-element container whose element ends with a triple-quoted
+        // string stays inline (`[ text """..."""]`). elm-format keeps the
+        // open/close brackets compact around the string even though its
+        // content spans lines.
+        let single_trailing_triple = self.is_pretty()
+            && elems.len() == 1
+            && elems
+                .last()
+                .map(|e| Self::expr_ends_with_triple_string(&e.value))
+                .unwrap_or(false);
+        let any_multiline = !single_trailing_triple
+            && (elems.iter().any(|e| self.is_multiline(&e.value))
+                || (self.is_pretty() && Self::spans_multi_lines(elems))
+                || outer_multi_line
+                || any_elem_line_comment
+                || !trailing_comments.is_empty()
+                || element_inline_comments.iter().any(|c| c.is_some()));
         if any_multiline && self.is_pretty() {
             // elm-format style: first element on same line as open bracket,
             // subsequent elements aligned with ", " prefix at same indent.
@@ -1731,26 +3181,125 @@ impl Printer {
                 self.indent();
             }
             self.indent_extra = saved_extra + 2;
-            self.write_expr(&elems[0].value);
+            // First element: if it has leading comments, write them inline
+            // after `[ ` (first on same line), then newline to element
+            // column (open_col + 2) for subsequent comments and the body.
+            if !elems[0].comments.is_empty() {
+                for (i, c) in elems[0].comments.iter().enumerate() {
+                    if i > 0 {
+                        self.newline();
+                        for _ in 0..(open_col + 2) {
+                            self.buf.push(' ');
+                        }
+                    }
+                    self.write_comment(&c.value);
+                }
+                self.newline();
+                for _ in 0..(open_col + 2) {
+                    self.buf.push(' ');
+                }
+            }
+            self.write_spanned_expr(&elems[0]);
             self.indent_extra = saved_extra;
             if bump_indent {
                 self.dedent();
             }
-            for elem in &elems[1..] {
-                self.newline();
-                for _ in 0..open_col {
-                    self.buf.push(' ');
+            // Inline same-line trailing comment after the first element.
+            if let Some(Some(c)) = element_inline_comments.first() {
+                self.write(" ");
+                self.write_comment(&c.value);
+            }
+            for (i, elem) in elems[1..].iter().enumerate() {
+                // `prev_end_line` for blank-line detection below. When the
+                // leading comment on this element is separated from the
+                // previous element by a blank line in source, elm-format
+                // keeps the blank and places the comment on its own line
+                // above the `, element` line. When there's no blank, the
+                // comment sits on the same line as the comma:
+                //     , -- leading
+                //       element
+                let prev = &elems[i];
+                let prev_end_line = prev.span.end.line;
+                let has_comments = !elem.comments.is_empty();
+                let tight_comment = has_comments
+                    && self.is_pretty()
+                    && elem
+                        .comments
+                        .first()
+                        .map(|c| c.span.start.line == prev_end_line + 1)
+                        .unwrap_or(false);
+                if has_comments && !tight_comment {
+                    self.newline();
+                    self.newline();
+                    for c in &elem.comments {
+                        for _ in 0..open_col {
+                            self.buf.push(' ');
+                        }
+                        self.write_comment(&c.value);
+                        self.newline();
+                    }
+                    for _ in 0..open_col {
+                        self.buf.push(' ');
+                    }
+                } else {
+                    self.newline();
+                    for _ in 0..open_col {
+                        self.buf.push(' ');
+                    }
                 }
                 self.write(", ");
+                if tight_comment {
+                    // `, -- c1\n  -- c2\n  element`
+                    for (ci, c) in elem.comments.iter().enumerate() {
+                        if ci > 0 {
+                            self.newline();
+                            for _ in 0..(open_col + 2) {
+                                self.buf.push(' ');
+                            }
+                        }
+                        self.write_comment(&c.value);
+                    }
+                    self.newline();
+                    for _ in 0..(open_col + 2) {
+                        self.buf.push(' ');
+                    }
+                }
                 if bump_indent {
                     self.indent();
                 }
                 self.indent_extra = saved_extra + 2;
-                self.write_expr(&elem.value);
+                self.write_spanned_expr(elem);
                 self.indent_extra = saved_extra;
                 if bump_indent {
                     self.dedent();
                 }
+                // Inline same-line trailing comment after this element.
+                // `i+1` because we skipped the first element above.
+                if let Some(Some(c)) = element_inline_comments.get(i + 1) {
+                    self.write(" ");
+                    self.write_comment(&c.value);
+                }
+            }
+            // Trailing comments between the last element and the close
+            // bracket. elm-format lays them out at the open-bracket column,
+            // preserving any source-level blank line between the last
+            // element and the comment:
+            //     [ a
+            //     , b
+            //
+            //     -- trailing
+            //     ]
+            let mut prev_end_line = elems.last().map(|e| e.span.end.line).unwrap_or(0);
+            for c in trailing_comments {
+                if self.is_pretty() && c.span.start.line > prev_end_line + 1 {
+                    self.newline();
+                }
+                self.newline();
+                for _ in 0..open_col {
+                    self.buf.push(' ');
+                }
+                self.write_comment(&c.value);
+                prev_end_line = c.span.end.line;
             }
             self.newline();
             for _ in 0..open_col {
@@ -1768,7 +3317,15 @@ impl Printer {
                 } else {
                     self.write(", ");
                 }
-                self.write_expr(&elem.value);
+                self.write_spanned_expr(elem);
+                if let Some(Some(c)) = element_inline_comments.get(i) {
+                    self.write(" ");
+                    self.write_comment(&c.value);
+                }
+            }
+            for c in trailing_comments {
+                self.newline_indent();
+                self.write_comment(&c.value);
             }
             self.newline_indent();
             self.write(close.trim_start());
@@ -1780,7 +3337,7 @@ impl Printer {
                 if i > 0 {
                     self.write(", ");
                 }
-                self.write_expr(&elem.value);
+                self.write_spanned_expr(elem);
             }
             self.write(close);
         }
@@ -1788,36 +3345,144 @@ impl Printer {
 
     fn write_record_setter(&mut self, setter: &RecordSetter) {
         self.write(&setter.field.value);
-        if self.is_multiline(&setter.value.value) {
+        // In pretty mode, preserve source layout: if the value started on a
+        // line after the field name, keep the break. elm-format respects this.
+        let source_was_multiline =
+            self.is_pretty() && setter.field.span.end.line < setter.value.span.start.line;
+        let has_value_leading = self.is_pretty() && !setter.value.comments.is_empty();
+        if self.is_multiline(&setter.value.value) || source_was_multiline || has_value_leading {
             self.write(" =");
             self.indent();
             self.newline_indent();
-            self.write_expr(&setter.value.value);
+            if has_value_leading {
+                self.write_leading_comments(&setter.value.comments);
+            }
+            self.write_spanned_expr(&setter.value);
             self.dedent();
         } else {
             self.write(" = ");
-            self.write_expr(&setter.value.value);
+            self.write_spanned_expr(&setter.value);
+        }
+        if let Some(trailing) = &setter.trailing_comment
+            && self.is_pretty()
+        {
+            self.write_char(' ');
+            self.write_comment(&trailing.value);
         }
     }
 
-    fn write_if_expr(&mut self, branches: &[(Spanned<Expr>, Spanned<Expr>)], else_branch: &Expr) {
+    /// Write `<keyword> <cond> then`, breaking to a multi-line layout when
+    /// the condition itself spans multiple lines. elm-format's convention
+    /// when the cond is multi-line:
+    ///     if
+    ///         <cond>
+    ///     then
+    fn write_if_condition(&mut self, keyword: &str, cond: &Spanned<Expr>) {
+        let has_leading = !cond.comments.is_empty();
+        let multiline_cond = self.is_pretty() && (self.is_multiline(&cond.value) || has_leading);
+        if multiline_cond {
+            self.write(keyword);
+            self.indent();
+            self.newline_indent();
+            self.write_leading_comments(&cond.comments);
+            self.write_spanned_expr(cond);
+            self.dedent();
+            self.newline_indent();
+            self.write("then");
+        } else {
+            self.write(keyword);
+            self.write_char(' ');
+            self.write_leading_comments(&cond.comments);
+            self.write_spanned_expr(cond);
+            self.write(" then");
+        }
+    }
+
+    /// When an if-branch body is a pipeline and some of the branch's
+    /// `trailing_comments` are block comments positioned between the
+    /// pipeline's LHS and RHS in source, route those comments onto the
+    /// RHS operand so the chain printer emits them at the continuation
+    /// indent (between operands) rather than below the whole branch.
+    #[allow(clippy::type_complexity)]
+    fn route_ifbranch_pipeline_block_comments<'a>(
+        then_branch: &'a Spanned<Expr>,
+        trailing: &'a [Spanned<Comment>],
+    ) -> (
+        std::borrow::Cow<'a, Spanned<Expr>>,
+        std::borrow::Cow<'a, [Spanned<Comment>]>,
+    ) {
+        use std::borrow::Cow;
+        if trailing.is_empty() {
+            return (Cow::Borrowed(then_branch), Cow::Borrowed(trailing));
+        }
+        let Expr::OperatorApplication {
+            operator,
+            direction,
+            left,
+            right,
+        } = &then_branch.value
+        else {
+            return (Cow::Borrowed(then_branch), Cow::Borrowed(trailing));
+        };
+        if !matches!(operator.as_str(), "|>" | "|." | "|=") {
+            return (Cow::Borrowed(then_branch), Cow::Borrowed(trailing));
+        }
+        let left_end_off = left.span.end.offset;
+        let right_start_off = right.span.start.offset;
+        let mut between: Vec<Spanned<Comment>> = Vec::new();
+        let mut remaining: Vec<Spanned<Comment>> = Vec::new();
+        for c in trailing {
+            let is_block = matches!(c.value, Comment::Block(_));
+            let in_range =
+                c.span.start.offset >= left_end_off && c.span.end.offset <= right_start_off;
+            if is_block && in_range {
+                between.push(c.clone());
+            } else {
+                remaining.push(c.clone());
+            }
+        }
+        if between.is_empty() {
+            return (Cow::Borrowed(then_branch), Cow::Borrowed(trailing));
+        }
+        let mut new_right = right.as_ref().clone();
+        let mut new_right_comments = between;
+        new_right_comments.append(&mut new_right.comments);
+        new_right.comments = new_right_comments;
+        let new_body = Spanned {
+            span: then_branch.span,
+            value: Expr::OperatorApplication {
+                operator: operator.clone(),
+                direction: *direction,
+                left: left.clone(),
+                right: Box::new(new_right),
+            },
+            comments: then_branch.comments.clone(),
+        };
+        (Cow::Owned(new_body), Cow::Owned(remaining))
+    }
+
+    fn write_if_expr(&mut self, branches: &[IfBranch], else_branch: &Spanned<Expr>) {
         // Single-line when all branches are simple non-block expressions.
         // elm-format always uses multiline, so skip single-line in pretty mode.
         let all_simple = !self.is_pretty()
             && branches.len() == 1
+            && branches.iter().all(|b| {
+                !self.is_multiline(&b.condition.value) && !self.is_multiline(&b.then_branch.value)
+            })
+            && !self.is_multiline(&else_branch.value)
             && branches
                 .iter()
-                .all(|(c, b)| !self.is_multiline(&c.value) && !self.is_multiline(&b.value))
-            && !self.is_multiline(else_branch);
+                .all(|b| b.then_branch.comments.is_empty() && b.trailing_comments.is_empty())
+            && else_branch.comments.is_empty();
 
         if all_simple {
-            let (cond, body) = &branches[0];
+            let branch = &branches[0];
             self.write("if ");
-            self.write_expr(&cond.value);
+            self.write_spanned_expr(&branch.condition);
             self.write(" then ");
-            self.write_expr(&body.value);
+            self.write_spanned_expr(&branch.then_branch);
             self.write(" else ");
-            self.write_expr(else_branch);
+            self.write_spanned_expr(else_branch);
         } else if self.is_pretty() {
             // In pretty mode, use column-based indentation so that
             // branches are always indented relative to the `if` keyword,
@@ -1831,17 +3496,21 @@ impl Printer {
             self.indent = if_col / w;
             self.indent_extra = (if_col % w) as u32;
 
-            for (i, (cond, body)) in branches.iter().enumerate() {
-                if i == 0 {
-                    self.write("if ");
-                } else {
-                    self.write("else if ");
-                }
-                self.write_expr(&cond.value);
-                self.write(" then");
+            for (i, branch) in branches.iter().enumerate() {
+                let keyword = if i == 0 { "if" } else { "else if" };
+                self.write_if_condition(keyword, &branch.condition);
                 self.indent();
                 self.newline_indent();
-                self.write_expr(&body.value);
+                self.write_leading_comments(&branch.then_branch.comments);
+                let (body, trailing) = Self::route_ifbranch_pipeline_block_comments(
+                    &branch.then_branch,
+                    &branch.trailing_comments,
+                );
+                self.write_spanned_expr(&body);
+                for c in trailing.iter() {
+                    self.newline_indent();
+                    self.write_comment(&c.value);
+                }
                 self.dedent();
                 self.newline();
                 self.newline_indent();
@@ -1850,25 +3519,33 @@ impl Printer {
             if let Expr::IfElse {
                 branches: nested_branches,
                 else_branch: nested_else,
-            } = else_branch
+            } = &else_branch.value
             {
-                for (cond, body) in nested_branches {
-                    self.write("else if ");
-                    self.write_expr(&cond.value);
-                    self.write(" then");
+                for branch in nested_branches {
+                    self.write_if_condition("else if", &branch.condition);
                     self.indent();
                     self.newline_indent();
-                    self.write_expr(&body.value);
+                    self.write_leading_comments(&branch.then_branch.comments);
+                    let (body, trailing) = Self::route_ifbranch_pipeline_block_comments(
+                        &branch.then_branch,
+                        &branch.trailing_comments,
+                    );
+                    self.write_spanned_expr(&body);
+                    for c in trailing.iter() {
+                        self.newline_indent();
+                        self.write_comment(&c.value);
+                    }
                     self.dedent();
                     self.newline();
                     self.newline_indent();
                 }
-                self.write_if_else_tail(&nested_else.value);
+                self.write_if_else_tail(nested_else);
             } else {
                 self.write("else");
                 self.indent();
                 self.newline_indent();
-                self.write_expr(else_branch);
+                self.write_leading_comments(&else_branch.comments);
+                self.write_spanned_expr(else_branch);
                 self.dedent();
             }
 
@@ -1877,17 +3554,26 @@ impl Printer {
             self.indent_extra = saved_extra;
             self.indent_extra_stack = saved_stack;
         } else {
-            for (i, (cond, body)) in branches.iter().enumerate() {
+            for (i, branch) in branches.iter().enumerate() {
                 if i == 0 {
                     self.write("if ");
                 } else {
                     self.write("else if ");
                 }
-                self.write_expr(&cond.value);
+                self.write_spanned_expr(&branch.condition);
                 self.write(" then");
                 self.indent();
                 self.newline_indent();
-                self.write_expr(&body.value);
+                self.write_leading_comments(&branch.then_branch.comments);
+                let (body, trailing) = Self::route_ifbranch_pipeline_block_comments(
+                    &branch.then_branch,
+                    &branch.trailing_comments,
+                );
+                self.write_spanned_expr(&body);
+                for c in trailing.iter() {
+                    self.newline_indent();
+                    self.write_comment(&c.value);
+                }
                 self.dedent();
                 self.newline();
                 self.newline_indent();
@@ -1895,35 +3581,46 @@ impl Printer {
             self.write("else");
             self.indent();
             self.newline_indent();
-            self.write_expr(else_branch);
+            self.write_leading_comments(&else_branch.comments);
+            self.write_spanned_expr(else_branch);
             self.dedent();
         }
     }
 
     /// Helper for flattening nested if-else in ElmFormat mode.
-    fn write_if_else_tail(&mut self, else_branch: &Expr) {
+    fn write_if_else_tail(&mut self, else_branch: &Spanned<Expr>) {
         if let Expr::IfElse {
             branches: nested_branches,
             else_branch: nested_else,
-        } = else_branch
+        } = &else_branch.value
         {
-            for (cond, body) in nested_branches {
+            for branch in nested_branches {
                 self.write("else if ");
-                self.write_expr(&cond.value);
+                self.write_spanned_expr(&branch.condition);
                 self.write(" then");
                 self.indent();
                 self.newline_indent();
-                self.write_expr(&body.value);
+                self.write_leading_comments(&branch.then_branch.comments);
+                let (body, trailing) = Self::route_ifbranch_pipeline_block_comments(
+                    &branch.then_branch,
+                    &branch.trailing_comments,
+                );
+                self.write_spanned_expr(&body);
+                for c in trailing.iter() {
+                    self.newline_indent();
+                    self.write_comment(&c.value);
+                }
                 self.dedent();
                 self.newline();
                 self.newline_indent();
             }
-            self.write_if_else_tail(&nested_else.value);
+            self.write_if_else_tail(nested_else);
         } else {
             self.write("else");
             self.indent();
             self.newline_indent();
-            self.write_expr(else_branch);
+            self.write_leading_comments(&else_branch.comments);
+            self.write_spanned_expr(else_branch);
             self.dedent();
         }
     }
@@ -1937,13 +3634,15 @@ impl Printer {
             let w = self.config.indent_width;
             self.indent = case_col / w;
             self.indent_extra = (case_col % w) as u32;
-            // When the scrutinee is a control-flow compound expression that
-            // forces multi-line output (if/let/case), elm-format uses the
-            // "hanging" form: bare "case", indented subject, and bare "of".
+            // When the scrutinee forces multi-line output, elm-format uses
+            // the "hanging" form: bare "case", indented subject, and bare
+            // "of". This covers control-flow compounds (if/let/case) and
+            // any other expression whose rendered form spans multiple
+            // lines (e.g. a multi-arg application with nested args).
             let hanging = matches!(
                 subject,
                 Expr::IfElse { .. } | Expr::LetIn { .. } | Expr::CaseOf { .. }
-            );
+            ) || self.is_multiline(subject);
             if hanging {
                 self.write("case");
                 self.indent();
@@ -1969,7 +3668,7 @@ impl Printer {
                 self.indent();
                 self.newline_indent();
                 self.write_leading_comments(&branch.body.comments);
-                self.write_expr(&branch.body.value);
+                self.write_spanned_expr(&branch.body);
                 self.dedent();
             }
             self.dedent();
@@ -1996,13 +3695,18 @@ impl Printer {
             self.newline_indent();
             // Emit leading comments on the branch body.
             self.write_leading_comments(&branch.body.comments);
-            self.write_expr(&branch.body.value);
+            self.write_spanned_expr(&branch.body);
             self.dedent();
         }
         self.dedent();
     }
 
-    fn write_let_expr(&mut self, declarations: &[Spanned<LetDeclaration>], body: &Expr) {
+    fn write_let_expr(
+        &mut self,
+        declarations: &[Spanned<LetDeclaration>],
+        body: &Spanned<Expr>,
+        trailing_comments: &[Spanned<Comment>],
+    ) {
         if self.is_pretty() {
             let let_col = self.current_column();
             let saved_indent = self.indent;
@@ -2022,11 +3726,19 @@ impl Printer {
                 self.write_leading_comments(&decl.comments);
                 self.write_let_declaration(&decl.value);
             }
+            if !trailing_comments.is_empty() {
+                self.newline();
+                for c in trailing_comments {
+                    self.newline_indent();
+                    self.write_comment(&c.value);
+                }
+            }
             self.dedent();
             self.newline_indent();
             self.write("in");
             self.newline_indent();
-            self.write_expr(body);
+            self.write_leading_comments(&body.comments);
+            self.write_spanned_expr(body);
 
             self.indent = saved_indent;
             self.indent_extra = saved_extra;
@@ -2040,11 +3752,18 @@ impl Printer {
             self.write_leading_comments(&decl.comments);
             self.write_let_declaration(&decl.value);
         }
+        if !trailing_comments.is_empty() {
+            for c in trailing_comments {
+                self.newline_indent();
+                self.write_comment(&c.value);
+            }
+        }
         self.dedent();
         self.newline_indent();
         self.write("in");
         self.newline_indent();
-        self.write_expr(body);
+        self.write_leading_comments(&body.comments);
+        self.write_spanned_expr(body);
     }
 
     fn write_let_declaration(&mut self, decl: &LetDeclaration) {
@@ -2061,13 +3780,14 @@ impl Printer {
                 self.write(" =");
                 self.indent();
                 self.newline_indent();
-                self.write_expr(&body.value);
+                self.write_leading_comments(&body.comments);
+                self.write_spanned_expr(body);
                 self.dedent();
             }
         }
     }
 
-    fn write_lambda(&mut self, args: &[Spanned<Pattern>], body: &Expr) {
+    fn write_lambda(&mut self, args: &[Spanned<Pattern>], body: &Spanned<Expr>) {
         self.write("\\");
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {
@@ -2075,15 +3795,26 @@ impl Printer {
             }
             self.write_pattern_atomic(&arg.value);
         }
-        if self.is_multiline(body) {
+        let body_broken_in_source = self.is_pretty()
+            && match args.last() {
+                Some(last) => {
+                    last.span.end.line != 0
+                        && body.span.start.line != 0
+                        && body.span.start.line > last.span.end.line
+                }
+                None => false,
+            };
+        let has_leading = !body.comments.is_empty();
+        if self.is_multiline(&body.value) || body_broken_in_source || has_leading {
             self.write(" ->");
             self.indent();
             self.newline_indent();
-            self.write_expr(body);
+            self.write_leading_comments(&body.comments);
+            self.write_spanned_expr(body);
             self.dedent();
         } else {
             self.write(" -> ");
-            self.write_expr(body);
+            self.write_spanned_expr(body);
         }
     }
 
@@ -2131,8 +3862,58 @@ impl Printer {
                     self.write(&format!("{n:02X}"));
                 }
             }
-            Literal::Float(f) => {
-                let s = f.to_string();
+            Literal::Float(f, lexeme) => {
+                // In ElmFormat mode, prefer the original source lexeme when it
+                // carried scientific notation. Rust's `f64::to_string` always
+                // normalizes to shortest round-trip decimal, losing forms like
+                // `3.969683028665376e1`. elm-format preserves the source form,
+                // so we do too. Compact mode ignores the lexeme and uses the
+                // normalized numeric form.
+                if self.is_pretty()
+                    && let Some(lex) = lexeme
+                    && lex.contains(['e', 'E'])
+                {
+                    let lower = lex.replace('E', "e");
+                    let e_pos = lower.find('e').expect("just checked for 'e'/'E'");
+                    let mantissa = &lower[..e_pos];
+                    let exp = &lower[e_pos..];
+                    if mantissa.contains('.') {
+                        self.write(&lower);
+                    } else {
+                        self.write(mantissa);
+                        self.write(".0");
+                        self.write(exp);
+                    }
+                    return;
+                }
+                let decimal = f.to_string();
+                // Rust's Display impl picks between decimal and scientific.
+                // For very small / very large magnitudes it can produce a long
+                // stream of zeros (`0.000...01`, `6022...000`); elm-format
+                // keeps the literal in scientific form in those cases. Fall
+                // back to `{:e}` when the decimal form has a long run of
+                // zeros.
+                let has_long_zero_run = {
+                    let bytes = decimal.as_bytes();
+                    let mut run = 0usize;
+                    let mut max = 0usize;
+                    for &b in bytes {
+                        if b == b'0' {
+                            run += 1;
+                            if run > max {
+                                max = run;
+                            }
+                        } else {
+                            run = 0;
+                        }
+                    }
+                    max >= 18
+                };
+                let s = if has_long_zero_run {
+                    format!("{:e}", f)
+                } else {
+                    decimal
+                };
                 if s.contains('.') {
                     self.write(&s);
                 } else if let Some(e_pos) = s.find(['e', 'E']) {
@@ -2272,9 +4053,9 @@ fn is_naturally_atomic(expr: &Expr) -> bool {
             | Expr::Literal(_)
             | Expr::FunctionOrValue { .. }
             | Expr::PrefixOperator(_)
-            | Expr::Parenthesized(_)
+            | Expr::Parenthesized { .. }
             | Expr::Tuple(_)
-            | Expr::List(_)
+            | Expr::List { .. }
             | Expr::Record(_)
             | Expr::RecordUpdate { .. }
             | Expr::RecordAccess { .. }
@@ -2287,7 +4068,7 @@ fn is_naturally_atomic(expr: &Expr) -> bool {
 /// Returns the inner expression if it is parenthesized, or the original expression otherwise.
 fn unwrap_parens(expr: &Expr) -> &Expr {
     match expr {
-        Expr::Parenthesized(inner) => &inner.value,
+        Expr::Parenthesized { expr: inner, .. } => &inner.value,
         other => other,
     }
 }
@@ -2297,8 +4078,11 @@ fn unwrap_parens(expr: &Expr) -> &Expr {
 /// parens around non-block, non-operator expressions in these positions.
 fn unwrap_parens_non_block(expr: &Expr) -> &Expr {
     match expr {
-        Expr::Parenthesized(inner)
-            if !matches!(
+        Expr::Parenthesized {
+            expr: inner,
+            trailing_comments,
+        } if trailing_comments.is_empty()
+            && !matches!(
                 inner.value,
                 Expr::OperatorApplication { .. }
                     | Expr::BinOps { .. }
@@ -2326,10 +4110,26 @@ pub fn print(module: &ElmModule) -> String {
 /// Pretty-print an `ElmModule` using elm-format-style line breaking.
 ///
 /// Pipelines (`|>`), records, and lists with multiple entries are always
-/// multiline. Ideal for code generation where readability matters.
+/// multiline. Output matches `elm-format(source)` byte-for-byte.
 pub fn pretty_print(module: &ElmModule) -> String {
     Printer::new(PrintConfig {
         style: PrintStyle::ElmFormat,
+        ..PrintConfig::default()
+    })
+    .print_module(module)
+}
+
+/// Pretty-print an `ElmModule` in the elm-format style, pre-converged to
+/// elm-format's second-pass fixed point.
+///
+/// Produces output that round-trips through elm-format without change
+/// (`pp == elm-format(pp)`). Differs from [`pretty_print`] only on inputs
+/// that hit elm-format's own non-idempotency (e.g. `-- comment`→`import`
+/// inside doc-comment code blocks); for all other files the output is
+/// identical. Use this when downstream tooling re-runs elm-format.
+pub fn pretty_print_converged(module: &ElmModule) -> String {
+    Printer::new(PrintConfig {
+        style: PrintStyle::ElmFormatConverged,
         ..PrintConfig::default()
     })
     .print_module(module)
