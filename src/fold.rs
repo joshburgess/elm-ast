@@ -220,6 +220,7 @@ pub fn fold_custom_type<F: Fold + ?Sized>(f: &mut F, ct: CustomType) -> CustomTy
         documentation: ct.documentation,
         name: ct.name,
         generics: ct.generics,
+        pre_equals_comments: ct.pre_equals_comments,
         constructors: ct
             .constructors
             .into_iter()

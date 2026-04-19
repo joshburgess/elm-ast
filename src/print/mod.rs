@@ -1177,13 +1177,29 @@ impl Printer {
             self.write_doc_comment_text(&doc.value);
             self.newline();
         }
-        self.write("type ");
-        self.write(&ct.name.value);
-        for g in &ct.generics {
-            self.write_char(' ');
-            self.write(&g.value);
+        let wrap_header = self.is_pretty() && !ct.pre_equals_comments.is_empty();
+        if wrap_header {
+            self.write("type");
+            self.indent();
+            self.newline_indent();
+            self.write(&ct.name.value);
+            for g in &ct.generics {
+                self.write_char(' ');
+                self.write(&g.value);
+            }
+            for c in &ct.pre_equals_comments {
+                self.newline_indent();
+                self.write_comment(&c.value);
+            }
+        } else {
+            self.write("type ");
+            self.write(&ct.name.value);
+            for g in &ct.generics {
+                self.write_char(' ');
+                self.write(&g.value);
+            }
+            self.indent();
         }
-        self.indent();
         for (i, ctor) in ct.constructors.iter().enumerate() {
             if i == 0 {
                 self.newline_indent();

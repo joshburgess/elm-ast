@@ -93,6 +93,19 @@ pub struct CustomType {
     /// Type parameters: `a` in `type Maybe a = ...`
     pub generics: Vec<Spanned<Ident>>,
 
+    /// Comments that appear between the type name/generics and the `=`.
+    /// elm-format preserves these by wrapping the `type` header over two
+    /// lines:
+    ///     type
+    ///         Sequence value
+    ///         -- repeat, delay, duration
+    ///         = Sequence ...
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub pre_equals_comments: Vec<Spanned<Comment>>,
+
     /// The constructors: `Just a | Nothing`
     pub constructors: Vec<Spanned<ValueConstructor>>,
 }

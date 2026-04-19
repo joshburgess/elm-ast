@@ -215,6 +215,40 @@ fn parse_custom_type(p: &mut Parser, doc: Option<Spanned<String>>) -> ParseResul
         }
     }
 
+    // Before consuming `=`, capture any pending Line comments that
+    // appeared between the last name/generic and the `=` on a separate
+    // line. elm-format wraps the type header onto two lines when this
+    // happens:
+    //     type
+    //         Sequence value
+    //         -- comment
+    //         = Sequence ...
+    // Block comments (`{- ... -}`) on the same line as the name stay
+    // inline via a different mechanism and are not captured here.
+    let equals_offset = p.peek_span().start.offset;
+    let header_end_offset = generics
+        .last()
+        .map(|g| g.span.end.offset)
+        .unwrap_or(name.span.end.offset);
+    let header_end_line = generics
+        .last()
+        .map(|g| g.span.end.line)
+        .unwrap_or(name.span.end.line);
+    let mut pre_equals_comments: Vec<Spanned<Comment>> = Vec::new();
+    let mut i = 0;
+    while i < p.collected_comments.len() {
+        let c = &p.collected_comments[i];
+        let in_header_gap = c.span.start.offset >= header_end_offset
+            && c.span.end.offset <= equals_offset
+            && c.span.start.line > header_end_line
+            && matches!(c.value, Comment::Line(_));
+        if in_header_gap {
+            pre_equals_comments.push(p.collected_comments.remove(i));
+        } else {
+            i += 1;
+        }
+    }
+
     p.expect(&Token::Equals)?;
 
     // Parse constructors separated by `|`. Capture comments between
@@ -292,6 +326,7 @@ fn parse_custom_type(p: &mut Parser, doc: Option<Spanned<String>>) -> ParseResul
         documentation: doc,
         name,
         generics,
+        pre_equals_comments,
         constructors,
     })
 }

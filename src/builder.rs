@@ -263,6 +263,7 @@ pub fn custom_type(
         documentation: None,
         name: spanned(name.into()),
         generics: generics.into_iter().map(|g| spanned(g.into())).collect(),
+        pre_equals_comments: Vec::new(),
         constructors: constructors
             .into_iter()
             .map(|(name, args)| {
