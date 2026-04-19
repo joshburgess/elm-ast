@@ -3172,11 +3172,25 @@ impl Printer {
                 self.write_comment(&c.value);
             }
             for (i, elem) in elems[1..].iter().enumerate() {
-                // Subsequent elements with leading line comments follow
-                // elm-format's layout: blank line, then the comment(s) at
-                // the open-bracket column, then the `, element` line.
+                // `prev_end_line` for blank-line detection below. When the
+                // leading comment on this element is separated from the
+                // previous element by a blank line in source, elm-format
+                // keeps the blank and places the comment on its own line
+                // above the `, element` line. When there's no blank, the
+                // comment sits on the same line as the comma:
+                //     , -- leading
+                //       element
+                let prev = &elems[i];
+                let prev_end_line = prev.span.end.line;
                 let has_comments = !elem.comments.is_empty();
-                if has_comments {
+                let tight_comment = has_comments
+                    && self.is_pretty()
+                    && elem
+                        .comments
+                        .first()
+                        .map(|c| c.span.start.line == prev_end_line + 1)
+                        .unwrap_or(false);
+                if has_comments && !tight_comment {
                     self.newline();
                     self.newline();
                     for c in &elem.comments {
@@ -3196,6 +3210,22 @@ impl Printer {
                     }
                 }
                 self.write(", ");
+                if tight_comment {
+                    // `, -- c1\n  -- c2\n  element`
+                    for (ci, c) in elem.comments.iter().enumerate() {
+                        if ci > 0 {
+                            self.newline();
+                            for _ in 0..(open_col + 2) {
+                                self.buf.push(' ');
+                            }
+                        }
+                        self.write_comment(&c.value);
+                    }
+                    self.newline();
+                    for _ in 0..(open_col + 2) {
+                        self.buf.push(' ');
+                    }
+                }
                 if bump_indent {
                     self.indent();
                 }
