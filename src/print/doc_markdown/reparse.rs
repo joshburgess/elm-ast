@@ -59,8 +59,8 @@ pub(in crate::print) fn try_parse_and_format_module(wrapped: &str) -> Option<Str
             // second-pass mutation: `-- comment\n<blank>\nimport` becomes
             // `-- comment\n<blank>\n<blank>\nimport` (2 blank lines).
             // elm-format is not idempotent on this pattern; emitting the
-            // converged form here makes the output a fixed point of
-            // elm-format (B-weak: `pp == elm-format(pp)`).
+            // converged form here makes our output survive an elm-format
+            // round-trip unchanged (`pp == elm-format(pp)`).
             attached.push("");
             i += 1;
         } else {

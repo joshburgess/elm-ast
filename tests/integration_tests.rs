@@ -678,9 +678,10 @@ fn printer_idempotency() {
 
 // ── pretty_print vs elm-format ──────────────────────────────────────
 //
-// Verify that `pretty_print()` (ElmFormat mode) produces output identical
-// to `elm-format --stdin`. This is the gold-standard test: parse a file,
-// pretty-print it, feed the result to elm-format, and check nothing changes.
+// Round-trip through elm-format: pretty-print a file, feed the result back
+// through elm-format, and check nothing changes. Confirms our output is a
+// form elm-format accepts as canonical, so downstream tooling that runs
+// elm-format won't mutate our output.
 //
 // The test is skipped when elm-format is not found on the system.
 // Set ELM_FORMAT to a custom path if it's not in PATH.
@@ -765,10 +766,11 @@ fn pretty_print_matches_elm_format() {
                 Err(_) => continue,
             };
 
-            // B-weak uses the converged style so the output is a fixed
-            // point of elm-format even on inputs where elm-format itself
-            // is non-idempotent (e.g. Task.elm's `-- comment → import`
-            // pattern inside doc code blocks).
+            // This test checks the round-trip property: does our output
+            // survive an elm-format pass unchanged? Use the converged
+            // variant so we stay stable even on inputs where elm-format
+            // itself is non-idempotent (e.g. Task.elm's
+            // `-- comment → import` pattern inside doc code blocks).
             let pretty = pretty_print_converged(&ast);
 
             // Feed pretty-printed output to elm-format.
@@ -838,12 +840,12 @@ fn pretty_print_matches_elm_format() {
     );
 }
 
-/// Direct parity test: our `pretty_print` output on parsed source should be
-/// byte-identical to what `elm-format` produces from the same original source.
+/// Direct parity test: our `pretty_print` output on parsed source is
+/// byte-identical to what `elm-format` produces from the same source.
 ///
-/// This is the stronger of the two elm-format parity tests. It checks that we
-/// match elm-format's layout decisions exactly, not merely that elm-format
-/// accepts our output as canonical (that weaker property is what
+/// This is the strictest elm-format parity check — it asserts that we
+/// match elm-format's exact layout decisions, not just that elm-format
+/// would accept our output unchanged (that's what
 /// `pretty_print_matches_elm_format` checks).
 #[test]
 #[ignore] // Run explicitly: cargo test pretty_print_equals_elm_format_on_source -- --ignored --nocapture

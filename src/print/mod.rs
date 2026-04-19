@@ -86,17 +86,18 @@ pub(crate) mod converged_mode {
 /// - `ElmFormat`: break lines in the same places elm-format does — pipelines
 ///   always vertical, records and lists with 2+ entries always multiline.
 ///   Output matches `elm-format(source)` byte-for-byte on real-world
-///   packages (B-strong).
+///   packages.
 ///
 /// - `ElmFormatConverged`: identical to `ElmFormat`, plus it pre-applies
 ///   the mutations elm-format makes on a second pass. elm-format is not
 ///   idempotent on `-- comment\n<blank>\nimport` inside doc-comment code
 ///   blocks: one pass keeps 1 blank, a second pass adds another. This
-///   variant emits the 2-blank form up front, so the output is a fixed
-///   point of elm-format (B-weak: `pp(source) == elm-format(pp(source))`).
-///   Diverges from `elm-format(source)` on source that has the 1-blank
-///   form. Use when downstream tooling re-runs elm-format and you need
-///   round-trip stability.
+///   variant emits the 2-blank form up front, so feeding the output
+///   through elm-format a second time produces no changes
+///   (`pp(source) == elm-format(pp(source))`). Diverges from
+///   `elm-format(source)` on source that has the 1-blank form. Use when
+///   downstream tooling re-runs elm-format and you need round-trip
+///   stability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PrintStyle {
     /// Round-trip-safe minimal line breaking.
