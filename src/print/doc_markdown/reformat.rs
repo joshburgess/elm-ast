@@ -298,15 +298,15 @@ pub(in crate::print) fn block_mixes_decls_and_bare_exprs(block_lines: &[&str]) -
     // don't trigger the predicate.
     let mut in_triple = false;
     for &line in block_lines {
-        if line.contains("\"\"\"") {
-            let count = line.matches("\"\"\"").count();
-            if count % 2 == 1 {
-                in_triple = !in_triple;
-            }
-            // Skip classifying this line either way.
-            continue;
+        let was_in_triple = in_triple;
+        let triple_count = line.matches("\"\"\"").count();
+        if triple_count % 2 == 1 {
+            in_triple = !in_triple;
         }
-        if in_triple {
+        // A line that is interior content of a multi-line triple-string is
+        // skipped. A line that opens/closes one on the same position still
+        // gets classified by its leading code (e.g. `name = """..."""`).
+        if was_in_triple {
             continue;
         }
         let trimmed = line.trim();
@@ -348,14 +348,12 @@ pub(in crate::print) fn block_looks_decl_only(block_lines: &[&str]) -> bool {
     let mut has_bare = false;
     let mut in_triple = false;
     for &line in block_lines {
-        if line.contains("\"\"\"") {
-            let count = line.matches("\"\"\"").count();
-            if count % 2 == 1 {
-                in_triple = !in_triple;
-            }
-            continue;
+        let was_in_triple = in_triple;
+        let triple_count = line.matches("\"\"\"").count();
+        if triple_count % 2 == 1 {
+            in_triple = !in_triple;
         }
-        if in_triple {
+        if was_in_triple {
             continue;
         }
         let trimmed = line.trim();
@@ -388,14 +386,12 @@ pub(in crate::print) fn block_looks_bare_only(block_lines: &[&str]) -> bool {
     let mut has_bare = false;
     let mut in_triple = false;
     for &line in block_lines {
-        if line.contains("\"\"\"") {
-            let count = line.matches("\"\"\"").count();
-            if count % 2 == 1 {
-                in_triple = !in_triple;
-            }
-            continue;
+        let was_in_triple = in_triple;
+        let triple_count = line.matches("\"\"\"").count();
+        if triple_count % 2 == 1 {
+            in_triple = !in_triple;
         }
-        if in_triple {
+        if was_in_triple {
             continue;
         }
         let trimmed = line.trim();
@@ -466,6 +462,30 @@ fn line_looks_like_bare_expression(trimmed: &str) -> bool {
     true
 }
 
+/// Returns true if the trimmed line matches `ident = """..."""` with both
+/// triple-quote delimiters on this same line. elm-format preserves such lines
+/// verbatim inside doc comments, so we treat them as non-reformat signals.
+fn has_same_line_triple_string_rhs(trimmed: &str) -> bool {
+    if trimmed.matches("\"\"\"").count() < 2 {
+        return false;
+    }
+    // The RHS must open with `"""` right after `= `. Anything else (e.g.
+    // `"""`-triples embedded deep in an expression) is treated conservatively
+    // as "not this pattern" so normal reformat rules apply.
+    let Some(eq) = trimmed.find("= \"\"\"") else {
+        return false;
+    };
+    // Make sure the `=` isn't part of `==`, `/=`, etc.
+    if eq == 0 {
+        return false;
+    }
+    let prev = trimmed.as_bytes()[eq - 1];
+    if prev != b' ' {
+        return false;
+    }
+    true
+}
+
 pub(in crate::print) fn code_block_needs_reformat(block_lines: &[&str]) -> bool {
     // When a block mixes declarations with bare expressions, elm-format
     // preserves the block verbatim. Mirror that to keep compact tuples and
@@ -524,8 +544,13 @@ pub(in crate::print) fn code_block_needs_reformat(block_lines: &[&str]) -> bool 
         }
         // Single-line value declaration at the block base-indent (4 spaces):
         // `name = expr` fits on one line. elm-format always expands these
-        // to two lines (`name =\n    expr`), so flag for reformat.
-        if leading == 4 && is_single_line_value_decl(trimmed) {
+        // to two lines (`name =\n    expr`), so flag for reformat. Exception:
+        // `name = """..."""` with the triple-string fully on the same line is
+        // left alone by elm-format inside doc comments.
+        if leading == 4
+            && is_single_line_value_decl(trimmed)
+            && !has_same_line_triple_string_rhs(trimmed)
+        {
             has_single_line_decl = true;
         }
         // Single-line type / type-alias declaration at base indent. elm-format
@@ -571,20 +596,18 @@ pub(in crate::print) fn code_block_needs_reformat(block_lines: &[&str]) -> bool 
     let has_unseparated_assertions = block_has_unseparated_assertions(block_lines);
     let has_single_line_if = block_has_single_line_if(block_lines);
     // Column-aligned assertion tables (e.g. `foo "a"  == 1` / `foo "bb" == 2`)
-    // are preserved verbatim by elm-format when they're the only reason to
-    // reformat. If the block also has compact syntax or other reformat
-    // signals, those take precedence and the alignment gets collapsed.
+    // are preserved verbatim by elm-format when the alignment has a clear
+    // "intent" signal (incomplete marker or compact+padding). The predicate
+    // already rejects blocks that only have op-alignment without intent, so
+    // if it fires we can skip reformat even with sibling reformat signals.
+    if has_unseparated_assertions && block_has_column_aligned_assertions(block_lines) {
+        return false;
+    }
     let other_reformat_signal = has_indent_issues
         || has_compact_syntax
         || has_single_line_decl
         || has_unsorted_import
         || has_single_line_if;
-    if !other_reformat_signal
-        && has_unseparated_assertions
-        && block_has_column_aligned_assertions(block_lines)
-    {
-        return false;
-    }
     other_reformat_signal || has_unseparated_assertions
 }
 
@@ -666,7 +689,10 @@ pub(in crate::print) fn code_block_has_structural_reformat_signal(
         {
             return true;
         }
-        if leading == 4 && is_single_line_value_decl(trimmed) {
+        if leading == 4
+            && is_single_line_value_decl(trimmed)
+            && !has_same_line_triple_string_rhs(trimmed)
+        {
             return true;
         }
         if leading == 4

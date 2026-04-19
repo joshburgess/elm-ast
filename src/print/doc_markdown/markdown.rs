@@ -447,10 +447,11 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
 
     // Pre-pass: elm-format preserves ALL code blocks in a doc comment
-    // verbatim when any one of them mixes declarations with bare expressions.
-    // A later "example usage" block full of bare exprs + `-->` assertions is
-    // enough to disqualify sibling decl-only blocks from reformatting.
-    let doc_has_mixed_block = doc_comment_has_mixed_block(&lines);
+    // verbatim when the doc has sibling decl-only and bare-only blocks, or
+    // when any block uses `-->` result-comment output markers. An individual
+    // block that mixes decls with bare exprs is preserved on its own but
+    // doesn't force sibling blocks to be preserved.
+    let doc_preserve_all = doc_comment_forces_preserve_all(&lines);
 
     let mut i = 0;
     while i < lines.len() {
@@ -489,11 +490,18 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
             }
         }
 
+        // This specific block mixes declarations with bare expressions — it
+        // gets preserved verbatim even if sibling blocks get reformatted.
+        let block_mixes = super::reformat::block_mixes_decls_and_bare_exprs(
+            &lines[block_start..=block_end],
+        );
+        let preserve_this_block = doc_preserve_all || block_mixes;
+
         // Only try to reformat if the code block appears to use non-elm-format
         // indentation (e.g. 2-space indent). Code blocks already using 4-space
         // indentation are left unchanged to avoid regressions from imperfect
         // pretty printing.
-        let needs_reformat = !doc_has_mixed_block
+        let needs_reformat = !preserve_this_block
             && code_block_needs_reformat(&lines[block_start..=block_end]);
 
         let reformatted = if needs_reformat {
@@ -521,12 +529,12 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
             // elm-format's behavior.
             //
             // When the doc comment is an "example" (any block shows expected
-            // output via `-->` or mixes decls with bare exprs), preserve every
+            // output via `-->` or has sibling decl/bare blocks), preserve every
             // block exactly as written. The assertion transform would
             // otherwise rewrite compact tuples and trim alignment spaces that
             // elm-format leaves alone.
             let block = &lines[block_start..=block_end];
-            let transformed = if doc_has_mixed_block {
+            let transformed = if preserve_this_block {
                 block.join("\n")
             } else {
                 transform_assertion_paragraphs(block)
@@ -568,7 +576,7 @@ pub(in crate::print) fn normalize_code_block_indent(text: &str) -> String {
 ///    annotation plus a `foo 42` usage line).
 /// 2. Any block contains one or more `-->` result-comment lines used to show
 ///    expected output of the preceding expression.
-fn doc_comment_has_mixed_block(lines: &[&str]) -> bool {
+fn doc_comment_forces_preserve_all(lines: &[&str]) -> bool {
     let mut any_decl_block = false;
     let mut any_bare_block = false;
     let mut i = 0;
@@ -596,9 +604,7 @@ fn doc_comment_has_mixed_block(lines: &[&str]) -> bool {
             }
         }
         let block = &lines[block_start..=block_end];
-        if super::reformat::block_mixes_decls_and_bare_exprs(block)
-            || block_has_result_arrow_comment(block)
-        {
+        if block_has_result_arrow_comment(block) {
             return true;
         }
         // Track whether sibling blocks mix decl-flavored content with

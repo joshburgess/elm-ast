@@ -812,6 +812,10 @@ pub(in crate::print) fn block_has_column_aligned_assertions(block_lines: &[&str]
     let mut any_padded = false;
     let mut any_incomplete_marker = false;
     let mut last_line_incomplete = false;
+    let mut any_internal_padding = false;
+    let mut any_compact_syntax = false;
+    let mut all_canonical_before_op = true;
+    let mut any_internal_ellipsis = false;
     for &line in block_lines {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -844,13 +848,28 @@ pub(in crate::print) fn block_has_column_aligned_assertions(block_lines: &[&str]
         let c2 = space_tight_binary_ops(&c1);
         let c3 = space_tight_tuples_lists(&c2);
         if c3 != canonical {
-            return false;
+            all_canonical_before_op = false;
+        }
+        // Detect multi-space runs (outside strings) inside the expression
+        // to the left of the operator, excluding the op-alignment padding.
+        // This signals intentional internal alignment.
+        if has_multi_space_outside_strings(before.trim_end()) {
+            any_internal_padding = true;
+        }
+        // Detect compact list / tuple syntax (e.g. `["x"]`, `(0,1)`) anywhere
+        // on the line. elm-format preserves column-aligned assertion tables
+        // intact when the alignment involves compact collection literals.
+        if line_has_compact_list_or_tuple(line) {
+            any_compact_syntax = true;
         }
         let ends_incomplete = trimmed.ends_with(" ...") || trimmed.ends_with(" ..");
         if ends_incomplete {
             any_incomplete_marker = true;
         }
         last_line_incomplete = ends_incomplete;
+        if has_internal_ellipsis(trimmed) {
+            any_internal_ellipsis = true;
+        }
         cols.push(col);
         if padded {
             any_padded = true;
@@ -866,14 +885,236 @@ pub(in crate::print) fn block_has_column_aligned_assertions(block_lines: &[&str]
     if !any_padded {
         return false;
     }
-    // elm-format only preserves column-aligned assertion tables when they
-    // contain an incomplete/unparseable marker (` ...` or ` ..`) AND the
-    // block's last assertion line also ends with that marker. Otherwise the
-    // chain terminates and elm-format reformats into multi-line chain form.
-    if !any_incomplete_marker || !last_line_incomplete {
+    // elm-format preserves column-aligned assertion tables in two cases:
+    //   (a) the block contains an incomplete/unparseable marker (` ...`
+    //       or ` ..`) AND the last line ends with one — the chain never
+    //       terminates, and
+    //   (b) the lines have internal alignment padding (multi-space runs
+    //       outside strings to the left of the operator). This covers
+    //       tables with compact lists + padded closing brackets.
+    // In case (a) the expression is otherwise canonical; in case (b) the
+    // canonical check can fail because of compact tuples/lists that the
+    // author padded for visual alignment.
+    let case_a = all_canonical_before_op && any_incomplete_marker && last_line_incomplete;
+    let case_b = any_internal_padding && any_compact_syntax;
+    // Case (c): a line contains an in-line `...` followed by more content on
+    // the same line (e.g. `Err ... -- comment` or `Err ... (Ctor x) ...`).
+    // Such lines are unparseable as normal Elm, so elm-format preserves the
+    // surrounding column-aligned block.
+    let case_c = any_internal_ellipsis;
+    if !(case_a || case_b || case_c) {
         return false;
     }
     true
+}
+
+/// Returns true if the line contains a ` ...` ellipsis token with any
+/// non-dot content after it on the same line (e.g. ` ... -- comment` or
+/// ` ... (expr)`). A trailing terminal ` ...` (with nothing after it) does
+/// not qualify.
+fn has_internal_ellipsis(trimmed: &str) -> bool {
+    let bytes = trimmed.as_bytes();
+    if bytes.len() < 4 {
+        return false;
+    }
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        if bytes[i] == b' '
+            && bytes[i + 1] == b'.'
+            && bytes[i + 2] == b'.'
+            && bytes[i + 3] == b'.'
+        {
+            // The `...` token is only considered "internal" when followed by
+            // a non-dot, non-end character. `...` at end-of-string, or `....`
+            // (extra dots) is not treated as an internal ellipsis.
+            if i + 4 < bytes.len() && bytes[i + 4] != b'.' {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Detects compact list/tuple literals: `[x,...]` or `(x,y)` with no leading
+/// space after the open bracket/paren. String/char-literal aware. We reuse
+/// this as a hint that the block has non-canonical collection formatting.
+fn line_has_compact_list_or_tuple(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'\'' {
+                in_char = false;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' {
+            in_char = true;
+            i += 1;
+            continue;
+        }
+        if b == b'[' {
+            // Compact list: `[` followed immediately by `"`, `'`, `(`, `[`,
+            // `{`, digit, or identifier start.
+            if let Some(&next) = bytes.get(i + 1) {
+                if next == b'"'
+                    || next == b'\''
+                    || next == b'('
+                    || next == b'['
+                    || next == b'{'
+                    || next.is_ascii_digit()
+                    || next.is_ascii_alphabetic()
+                    || next == b'_'
+                {
+                    return true;
+                }
+            }
+        }
+        if b == b'(' {
+            // Compact tuple: `(` followed by a literal/identifier and later
+            // a comma before the matching `)`. Cheap heuristic: same as
+            // `[` case — compact tuples almost always start with a digit or
+            // identifier start.
+            if let Some(&next) = bytes.get(i + 1) {
+                if next == b'"' || next == b'\'' || next.is_ascii_digit() {
+                    // Scan forward for a comma before `)`, staying at depth 1.
+                    let mut depth = 1i32;
+                    let mut j = i + 1;
+                    let mut found_comma = false;
+                    let mut inner_str = false;
+                    let mut inner_char = false;
+                    let mut inner_esc = false;
+                    while j < bytes.len() {
+                        let c = bytes[j];
+                        if inner_esc {
+                            inner_esc = false;
+                            j += 1;
+                            continue;
+                        }
+                        if inner_str {
+                            if c == b'\\' {
+                                inner_esc = true;
+                            } else if c == b'"' {
+                                inner_str = false;
+                            }
+                            j += 1;
+                            continue;
+                        }
+                        if inner_char {
+                            if c == b'\\' {
+                                inner_esc = true;
+                            } else if c == b'\'' {
+                                inner_char = false;
+                            }
+                            j += 1;
+                            continue;
+                        }
+                        match c {
+                            b'"' => inner_str = true,
+                            b'\'' => inner_char = true,
+                            b'(' | b'[' | b'{' => depth += 1,
+                            b')' | b']' | b'}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            b',' if depth == 1 => {
+                                found_comma = true;
+                                break;
+                            }
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                    if found_comma {
+                        return true;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Returns true if `s` contains a run of 2+ consecutive spaces outside any
+/// single- or triple-quoted string or char literal. Used to detect intentional
+/// internal alignment padding inside a source line.
+fn has_multi_space_outside_strings(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'\'' {
+                in_char = false;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' {
+            in_char = true;
+            i += 1;
+            continue;
+        }
+        if b == b' ' && i + 1 < bytes.len() && bytes[i + 1] == b' ' {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Scan a line for its top-level assertion operator (` == ` or ` -- `) outside
