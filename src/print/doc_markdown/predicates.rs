@@ -798,6 +798,142 @@ pub(in crate::print) fn block_has_unseparated_assertions(block_lines: &[&str]) -
     run_assert_count >= 2
 }
 
+/// Detect a block where 2+ assertion lines at the base (4-space) indent share
+/// the same column for their assertion operator (` == ` or ` -- `), with at
+/// least one line using alignment padding (2+ spaces before the operator),
+/// AND each line is otherwise already in canonical form (no internal
+/// double-spacing, no tight operators, no compact list/tuple syntax). Only
+/// such "pure alignment padding" blocks are preserved verbatim by elm-format.
+pub(in crate::print) fn block_has_column_aligned_assertions(block_lines: &[&str]) -> bool {
+    use super::spacing::{
+        collapse_spaces_outside_strings, space_tight_binary_ops, space_tight_tuples_lists,
+    };
+    let mut cols: Vec<usize> = Vec::new();
+    let mut any_padded = false;
+    let mut any_incomplete_marker = false;
+    let mut last_line_incomplete = false;
+    for &line in block_lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let leading = line.len() - line.trim_start().len();
+        if leading != 4 {
+            return false;
+        }
+        if trimmed.starts_with("--") {
+            // elm-format reformats blocks that mix line comments with
+            // aligned assertions: the comment stays but surrounding
+            // assertions get normalized. Don't preserve in that case.
+            return false;
+        }
+        if !looks_like_assertion(trimmed) {
+            return false;
+        }
+        let Some((col, padded)) = find_top_level_assertion_op(line) else {
+            return false;
+        };
+        // The line must be in canonical form except for alignment padding
+        // before the assertion operator. Use the content starting at the
+        // 4-space base indent so the leading spaces aren't treated as a
+        // collapsible run.
+        let before = &line[leading..col];
+        let op_and_after = &line[col..];
+        let canonical = format!("{} {}", before.trim_end(), op_and_after.trim_start());
+        let c1 = collapse_spaces_outside_strings(&canonical);
+        let c2 = space_tight_binary_ops(&c1);
+        let c3 = space_tight_tuples_lists(&c2);
+        if c3 != canonical {
+            return false;
+        }
+        let ends_incomplete = trimmed.ends_with(" ...") || trimmed.ends_with(" ..");
+        if ends_incomplete {
+            any_incomplete_marker = true;
+        }
+        last_line_incomplete = ends_incomplete;
+        cols.push(col);
+        if padded {
+            any_padded = true;
+        }
+    }
+    if cols.len() < 2 {
+        return false;
+    }
+    let first_col = cols[0];
+    if !cols.iter().all(|&c| c == first_col) {
+        return false;
+    }
+    if !any_padded {
+        return false;
+    }
+    // elm-format only preserves column-aligned assertion tables when they
+    // contain an incomplete/unparseable marker (` ...` or ` ..`) AND the
+    // block's last assertion line also ends with that marker. Otherwise the
+    // chain terminates and elm-format reformats into multi-line chain form.
+    if !any_incomplete_marker || !last_line_incomplete {
+        return false;
+    }
+    true
+}
+
+/// Scan a line for its top-level assertion operator (` == ` or ` -- `) outside
+/// strings/chars. Returns the column of the operator's first space plus a flag
+/// indicating whether the line has 2+ spaces before the operator (alignment
+/// padding).
+fn find_top_level_assertion_op(line: &str) -> Option<(usize, bool)> {
+    let bytes = line.as_bytes();
+    let mut in_str = false;
+    let mut in_char = false;
+    let mut esc = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if esc {
+            esc = false;
+            i += 1;
+            continue;
+        }
+        if in_str {
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if b == b'\\' {
+                esc = true;
+            } else if b == b'\'' {
+                in_char = false;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' {
+            in_char = true;
+            i += 1;
+            continue;
+        }
+        if b == b' ' && i + 3 < bytes.len() && &bytes[i + 1..i + 4] == b"== " {
+            let padded = i >= 1 && bytes[i.saturating_sub(1)] == b' ';
+            return Some((i + 1, padded));
+        }
+        if b == b' ' && i + 3 < bytes.len() && &bytes[i + 1..i + 4] == b"-- " {
+            let padded = i >= 1 && bytes[i.saturating_sub(1)] == b' ';
+            return Some((i + 1, padded));
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Detect a line that is a single parenthesized operator expression like
 /// `(true || false)` or `(a + b)` — where the outer parens are redundant
 /// at top level. Conservative: requires a `(` at the very start of the

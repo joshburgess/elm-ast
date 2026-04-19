@@ -79,6 +79,10 @@ pub(in crate::print) fn transform_assertion_paragraphs(block_lines: &[&str]) -> 
     if block_has_non_assertion_content(block_lines) {
         return block_lines.join("\n");
     }
+    // Column-aligned assertion tables are preserved verbatim by elm-format.
+    if block_has_column_aligned_assertions(block_lines) {
+        return block_lines.join("\n");
+    }
     let mut out = String::new();
     let mut i = 0;
     while i < block_lines.len() {
@@ -566,12 +570,22 @@ pub(in crate::print) fn code_block_needs_reformat(block_lines: &[&str]) -> bool 
     let has_indent_issues = count_non_4_aligned > 0;
     let has_unseparated_assertions = block_has_unseparated_assertions(block_lines);
     let has_single_line_if = block_has_single_line_if(block_lines);
-    has_indent_issues
+    // Column-aligned assertion tables (e.g. `foo "a"  == 1` / `foo "bb" == 2`)
+    // are preserved verbatim by elm-format when they're the only reason to
+    // reformat. If the block also has compact syntax or other reformat
+    // signals, those take precedence and the alignment gets collapsed.
+    let other_reformat_signal = has_indent_issues
         || has_compact_syntax
         || has_single_line_decl
         || has_unsorted_import
-        || has_unseparated_assertions
-        || has_single_line_if
+        || has_single_line_if;
+    if !other_reformat_signal
+        && has_unseparated_assertions
+        && block_has_column_aligned_assertions(block_lines)
+    {
+        return false;
+    }
+    other_reformat_signal || has_unseparated_assertions
 }
 
 /// Narrower variant of `code_block_needs_reformat` for use by the
