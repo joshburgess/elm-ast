@@ -145,6 +145,18 @@ impl Parser {
         matches!(self.peek(), Token::Eof)
     }
 
+    /// End-offset of the most recently consumed token (or 0 if nothing has
+    /// been consumed). Useful as a lower boundary for claiming pending
+    /// comments that sit between a just-consumed separator (like `|` or
+    /// `{`) and the next token.
+    pub fn prev_token_end_offset(&self) -> usize {
+        if self.pos == 0 {
+            0
+        } else {
+            self.tokens[self.pos - 1].span.end.offset
+        }
+    }
+
     /// Peek at the raw token immediately after the current position,
     /// without skipping whitespace. Returns `Token::Eof` if past the end.
     pub fn peek_raw_next(&self) -> &Spanned<Token> {

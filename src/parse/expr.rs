@@ -1355,7 +1355,16 @@ fn parse_record_expr_cps(p: &mut Parser) -> ParseResult<Step> {
             p.skip_whitespace();
             if matches!(p.peek(), Token::Pipe) {
                 p.advance(); // consume `|`
-                return record_parse_setter(p, start, Vec::new(), RecordContext::Update(base_name));
+                // Boundary just past `|` so comments between `|` and the
+                // first field can be claimed as leading on that setter.
+                let first_boundary = p.prev_token_end_offset();
+                return record_parse_setter(
+                    p,
+                    start,
+                    Vec::new(),
+                    RecordContext::Update(base_name),
+                    first_boundary,
+                );
             }
             // Not a record update — backtrack.
             p.pos = save_pos;
@@ -1364,8 +1373,11 @@ fn parse_record_expr_cps(p: &mut Parser) -> ParseResult<Step> {
         }
     }
 
-    // Regular record expression.
-    record_parse_setter(p, start, Vec::new(), RecordContext::Plain)
+    // Regular record expression. The initial boundary sits just past the
+    // opening `{` so that a comment between `{` and the first field can be
+    // claimed as leading on that setter.
+    let first_boundary = start.offset + 1;
+    record_parse_setter(p, start, Vec::new(), RecordContext::Plain, first_boundary)
 }
 
 fn record_parse_setter(
@@ -1373,6 +1385,7 @@ fn record_parse_setter(
     rec_start: Position,
     setters: Vec<Spanned<RecordSetter>>,
     context: RecordContext,
+    prev_boundary_offset: usize,
 ) -> ParseResult<Step> {
     let setter_start = p.current_pos();
     let field = p.expect_lower_name()?;
@@ -1384,7 +1397,16 @@ fn record_parse_setter(
 
     // Need field value
     Ok(Step::NeedExpr(Box::new(move |p, value| {
-        record_after_value(p, rec_start, setters, setter_start, field, value, context)
+        record_after_value(
+            p,
+            rec_start,
+            setters,
+            setter_start,
+            field,
+            value,
+            context,
+            prev_boundary_offset,
+        )
     })))
 }
 
@@ -1396,13 +1418,14 @@ fn record_after_value(
     field: Spanned<String>,
     value: Spanned<Expr>,
     context: RecordContext,
+    prev_boundary_offset: usize,
 ) -> ParseResult<Step> {
+    let value_end_offset = value.span.end.offset;
     // Claim a trailing inline comment on the same source line as the value end,
     // e.g. `field = expr -- comment`. `binary_loop`'s post-value `skip_whitespace`
     // will already have collected it into `collected_comments`.
     let trailing_comment = {
         let value_end_line = value.span.end.line;
-        let value_end_offset = value.span.end.offset;
         let pending = &p.collected_comments;
         if let Some(last) = pending.last()
             && last.span.start.line == value_end_line
@@ -1413,15 +1436,39 @@ fn record_after_value(
             None
         }
     };
+    // Claim any pending comments positioned between the previous record
+    // boundary (the `{`, `|`, or the prior value's end) and this setter's
+    // field start as leading comments on this setter.
+    let field_start_offset = setter_start.offset;
+    let mut leading: Vec<Spanned<Comment>> = Vec::new();
+    let mut i = 0;
+    while i < p.collected_comments.len() {
+        let c = &p.collected_comments[i];
+        if c.span.start.offset >= prev_boundary_offset
+            && c.span.end.offset <= field_start_offset
+        {
+            leading.push(p.collected_comments.remove(i));
+        } else {
+            i += 1;
+        }
+    }
     let setter = RecordSetter {
         field,
         value,
         trailing_comment,
     };
-    setters.push(p.spanned_from(setter_start, setter));
+    let mut spanned = p.spanned_from(setter_start, setter);
+    if !leading.is_empty() {
+        spanned.comments = leading;
+    }
+    setters.push(spanned);
 
+    // Track the boundary offset (end of this value) so the next setter can
+    // claim any comments that appear between this value and its own field
+    // name as leading comments.
+    let next_boundary_offset = value_end_offset;
     if p.eat(&Token::Comma) {
-        record_parse_setter(p, rec_start, setters, context)
+        record_parse_setter(p, rec_start, setters, context, next_boundary_offset)
     } else {
         p.expect(&Token::RightBrace)?;
         match context {

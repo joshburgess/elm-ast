@@ -2612,6 +2612,8 @@ impl Printer {
                         .any(|f| self.is_multiline(&f.value.value.value))
                         || (self.is_pretty()
                             && fields.iter().any(|f| f.value.trailing_comment.is_some()))
+                        || (self.is_pretty()
+                            && fields.iter().skip(1).any(|f| !f.comments.is_empty()))
                         || (self.is_pretty() && Self::spans_multi_lines(fields));
                     if any_ml {
                         // Align commas and closing brace with the column of `{`.
@@ -2626,8 +2628,43 @@ impl Printer {
                         };
                         self.write("{ ");
                         self.write_record_setter(&fields[0].value);
+                        let mut prev_end_line = fields[0].span.end.line;
                         for field in &fields[1..] {
-                            if let Some(col) = open_col {
+                            let has_leading_line = self.is_pretty()
+                                && field
+                                    .comments
+                                    .iter()
+                                    .any(|c| matches!(c.value, Comment::Line(_)));
+                            if has_leading_line {
+                                let first_comment_line = field
+                                    .comments
+                                    .first()
+                                    .map(|c| c.span.start.line)
+                                    .unwrap_or(prev_end_line);
+                                let had_blank = first_comment_line > prev_end_line + 1;
+                                self.newline();
+                                if had_blank {
+                                    self.newline();
+                                }
+                                if let Some(col) = open_col {
+                                    for _ in 0..col {
+                                        self.buf.push(' ');
+                                    }
+                                } else {
+                                    self.write_indent();
+                                }
+                                for c in &field.comments {
+                                    self.write_comment(&c.value);
+                                    self.newline();
+                                    if let Some(col) = open_col {
+                                        for _ in 0..col {
+                                            self.buf.push(' ');
+                                        }
+                                    } else {
+                                        self.write_indent();
+                                    }
+                                }
+                            } else if let Some(col) = open_col {
                                 self.newline();
                                 for _ in 0..col {
                                     self.buf.push(' ');
@@ -2637,6 +2674,7 @@ impl Printer {
                             }
                             self.write(", ");
                             self.write_record_setter(&field.value);
+                            prev_end_line = field.span.end.line;
                         }
                         if let Some(col) = open_col {
                             self.newline();
