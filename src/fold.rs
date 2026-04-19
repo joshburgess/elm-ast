@@ -314,7 +314,13 @@ pub fn fold_expr<F: Fold + ?Sized>(f: &mut F, expr: Spanned<Expr>) -> Spanned<Ex
 
         Expr::Tuple(elems) => Expr::Tuple(elems.into_iter().map(|e| f.fold_expr(e)).collect()),
 
-        Expr::List(elems) => Expr::List(elems.into_iter().map(|e| f.fold_expr(e)).collect()),
+        Expr::List {
+            elements,
+            trailing_comments,
+        } => Expr::List {
+            elements: elements.into_iter().map(|e| f.fold_expr(e)).collect(),
+            trailing_comments,
+        },
 
         Expr::Parenthesized {
             expr,

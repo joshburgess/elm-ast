@@ -577,7 +577,7 @@ x = [ 1, 2, 3 ]
     let m = parse_ok(src);
     match v(&m.declarations[0]) {
         Declaration::FunctionDeclaration(func) => match &func.declaration.value.body.value {
-            Expr::List(elements) => {
+            Expr::List { elements, .. } => {
                 assert_eq!(elements.len(), 3);
             }
             other => panic!("expected List, got {other:?}"),
@@ -1464,7 +1464,7 @@ x = f (a + b) [1, 2] { name = \"hi\" }
             Expr::Application(args) => {
                 assert_eq!(args.len(), 4);
                 assert!(matches!(&args[1].value, Expr::Parenthesized { .. }));
-                assert!(matches!(&args[2].value, Expr::List(_)));
+                assert!(matches!(&args[2].value, Expr::List { .. }));
                 assert!(matches!(&args[3].value, Expr::Record(_)));
             }
             other => panic!("expected Application, got {other:?}"),

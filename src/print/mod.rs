@@ -167,9 +167,9 @@ impl Printer {
                 .last()
                 .map(|a| Self::expr_ends_with_triple_string(&a.value))
                 .unwrap_or(false),
-            Expr::List(elems) => {
-                elems.len() == 1
-                    && elems
+            Expr::List { elements, .. } => {
+                elements.len() == 1
+                    && elements
                         .last()
                         .map(|e| Self::expr_ends_with_triple_string(&e.value))
                         .unwrap_or(false)
@@ -241,9 +241,13 @@ impl Printer {
                             })
                         }))
             }
-            Expr::List(elems) => {
-                elems.iter().any(|e| self.is_multiline(&e.value))
-                    || (self.is_pretty() && Self::spans_multi_lines(elems))
+            Expr::List {
+                elements,
+                trailing_comments,
+            } => {
+                elements.iter().any(|e| self.is_multiline(&e.value))
+                    || (self.is_pretty() && Self::spans_multi_lines(elements))
+                    || !trailing_comments.is_empty()
             }
             Expr::Tuple(elems) => {
                 elems.iter().any(|e| self.is_multiline(&e.value))
@@ -2807,11 +2811,19 @@ impl Printer {
                 self.write_comma_sep("( ", " )", elems);
             }
 
-            Expr::List(elems) => {
-                if elems.is_empty() {
+            Expr::List {
+                elements,
+                trailing_comments,
+            } => {
+                if elements.is_empty() {
                     self.write("[]");
                 } else {
-                    self.write_comma_sep_force_multi("[ ", " ]", elems);
+                    self.write_comma_sep_force_multi_list(
+                        "[ ",
+                        " ]",
+                        elements,
+                        trailing_comments,
+                    );
                 }
             }
 
@@ -3024,7 +3036,7 @@ impl Printer {
     /// Write a comma-separated list of expressions with adaptive layout.
     /// Uses single-line when all elements are single-line, multi-line otherwise.
     fn write_comma_sep(&mut self, open: &str, close: &str, elems: &[Spanned<Expr>]) {
-        self.write_comma_sep_inner(open, close, elems, false);
+        self.write_comma_sep_inner(open, close, elems, false, &[]);
     }
 
     /// Like `write_comma_sep` but force multi-line when the enclosing span
@@ -3036,7 +3048,19 @@ impl Printer {
         close: &str,
         elems: &[Spanned<Expr>],
     ) {
-        self.write_comma_sep_inner(open, close, elems, true);
+        self.write_comma_sep_inner(open, close, elems, true, &[]);
+    }
+
+    /// Variant used by list printing that threads in trailing comments
+    /// sitting between the last element and the closing `]`.
+    fn write_comma_sep_force_multi_list(
+        &mut self,
+        open: &str,
+        close: &str,
+        elems: &[Spanned<Expr>],
+        trailing_comments: &[Spanned<Comment>],
+    ) {
+        self.write_comma_sep_inner(open, close, elems, true, trailing_comments);
     }
 
     fn write_comma_sep_inner(
@@ -3045,6 +3069,7 @@ impl Printer {
         close: &str,
         elems: &[Spanned<Expr>],
         respect_outer_multi_line: bool,
+        trailing_comments: &[Spanned<Comment>],
     ) {
         let open_col = self.current_column();
         let standard_indent =
@@ -3075,7 +3100,8 @@ impl Printer {
             && (elems.iter().any(|e| self.is_multiline(&e.value))
                 || (self.is_pretty() && Self::spans_multi_lines(elems))
                 || outer_multi_line
-                || any_elem_line_comment);
+                || any_elem_line_comment
+                || !trailing_comments.is_empty());
         if any_multiline && self.is_pretty() {
             // elm-format style: first element on same line as open bracket,
             // subsequent elements aligned with ", " prefix at same indent.
@@ -3159,6 +3185,27 @@ impl Printer {
                     self.dedent();
                 }
             }
+            // Trailing comments between the last element and the close
+            // bracket. elm-format lays them out at the open-bracket column,
+            // preserving any source-level blank line between the last
+            // element and the comment:
+            //     [ a
+            //     , b
+            //
+            //     -- trailing
+            //     ]
+            let mut prev_end_line = elems.last().map(|e| e.span.end.line).unwrap_or(0);
+            for c in trailing_comments {
+                if self.is_pretty() && c.span.start.line > prev_end_line + 1 {
+                    self.newline();
+                }
+                self.newline();
+                for _ in 0..open_col {
+                    self.buf.push(' ');
+                }
+                self.write_comment(&c.value);
+                prev_end_line = c.span.end.line;
+            }
             self.newline();
             for _ in 0..open_col {
                 self.buf.push(' ');
@@ -3176,6 +3223,10 @@ impl Printer {
                     self.write(", ");
                 }
                 self.write_spanned_expr(&elem);
+            }
+            for c in trailing_comments {
+                self.newline_indent();
+                self.write_comment(&c.value);
             }
             self.newline_indent();
             self.write(close.trim_start());
@@ -3828,7 +3879,7 @@ fn is_naturally_atomic(expr: &Expr) -> bool {
             | Expr::PrefixOperator(_)
             | Expr::Parenthesized { .. }
             | Expr::Tuple(_)
-            | Expr::List(_)
+            | Expr::List { .. }
             | Expr::Record(_)
             | Expr::RecordUpdate { .. }
             | Expr::RecordAccess { .. }

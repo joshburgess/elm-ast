@@ -400,7 +400,17 @@ fn expr_eq(a: &Expr, b: &Expr) -> bool {
                 && expr_eq(&ea.value, &eb.value)
         }
         (Expr::Negation(a), Expr::Negation(b)) => expr_eq(&a.value, &b.value),
-        (Expr::Tuple(aa), Expr::Tuple(ab)) | (Expr::List(aa), Expr::List(ab)) => {
+        (Expr::Tuple(aa), Expr::Tuple(ab)) => {
+            aa.len() == ab.len()
+                && aa
+                    .iter()
+                    .zip(ab.iter())
+                    .all(|(a, b)| expr_eq(&a.value, &b.value))
+        }
+        (
+            Expr::List { elements: aa, .. },
+            Expr::List { elements: ab, .. },
+        ) => {
             aa.len() == ab.len()
                 && aa
                     .iter()

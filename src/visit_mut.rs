@@ -250,8 +250,17 @@ pub fn walk_expr_mut<V: VisitMut + ?Sized>(v: &mut V, expr: &mut Spanned<Expr>) 
 
         Expr::Negation(inner) => v.visit_expr_mut(inner),
 
-        Expr::Tuple(elems) | Expr::List(elems) => {
+        Expr::Tuple(elems) => {
             for elem in elems {
+                v.visit_expr_mut(elem);
+            }
+        }
+
+        Expr::List {
+            elements,
+            trailing_comments: _,
+        } => {
+            for elem in elements {
                 v.visit_expr_mut(elem);
             }
         }

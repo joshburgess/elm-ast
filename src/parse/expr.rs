@@ -1324,7 +1324,13 @@ fn parse_list_cps(p: &mut Parser, start: Position) -> ParseResult<Step> {
 
     if matches!(p.peek(), Token::RightBracket) {
         p.advance();
-        return Ok(Step::Done(p.spanned_from(start, Expr::List(Vec::new()))));
+        return Ok(Step::Done(p.spanned_from(
+            start,
+            Expr::List {
+                elements: Vec::new(),
+                trailing_comments: Vec::new(),
+            },
+        )));
     }
 
     // Set the application context column to the bracket's column so that
@@ -1360,8 +1366,29 @@ fn list_after_element(
             list_after_element(p, start, bracket_col, elements, next, next_snapshot)
         })))
     } else {
+        // Capture comments between the last element's end and the closing `]`
+        // as trailing comments on the List. Only comments strictly on a later
+        // line than the last element qualify — inline same-line comments
+        // belong to the element itself, not the list:
+        //     [ a
+        //     , b
+        //     -- trailing     <- captured here
+        //     ]
+        let last_line = elements.last().map(|e| e.span.end.line).unwrap_or(0);
+        let rbracket_line = p.peek_span().start.line;
+        let all = p.take_pending_comments_since(0);
+        let (trailing, keep): (Vec<_>, Vec<_>) = all.into_iter().partition(|c| {
+            c.span.start.line > last_line && c.span.end.line < rbracket_line
+        });
+        p.restore_pending_comments(keep);
         p.expect(&Token::RightBracket)?;
-        Ok(Step::Done(p.spanned_from(start, Expr::List(elements))))
+        Ok(Step::Done(p.spanned_from(
+            start,
+            Expr::List {
+                elements,
+                trailing_comments: trailing,
+            },
+        )))
     }
 }
 

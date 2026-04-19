@@ -265,8 +265,17 @@ pub fn walk_expr<V: Visit + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
 
         Expr::Negation(inner) => v.visit_expr(inner),
 
-        Expr::Tuple(elems) | Expr::List(elems) => {
+        Expr::Tuple(elems) => {
             for elem in elems {
+                v.visit_expr(elem);
+            }
+        }
+
+        Expr::List {
+            elements,
+            trailing_comments: _,
+        } => {
+            for elem in elements {
                 v.visit_expr(elem);
             }
         }

@@ -150,8 +150,25 @@ pub enum Expr {
     /// Record access function: `.name`
     RecordAccessFunction(Ident),
 
-    /// List expression: `[ 1, 2, 3 ]`
-    List(Vec<Spanned<Expr>>),
+    /// List expression: `[ 1, 2, 3 ]`.
+    ///
+    /// `trailing_comments` captures any comments that appear between the
+    /// last element and the closing `]`, e.g.
+    ///
+    /// ```elm
+    /// [ a
+    /// , b
+    /// -- dangling
+    /// ]
+    /// ```
+    List {
+        elements: Vec<Spanned<Expr>>,
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Vec::is_empty")
+        )]
+        trailing_comments: Vec<Spanned<Comment>>,
+    },
 
     /// GLSL shader block: `[glsl| ... |]`
     GLSLExpression(String),

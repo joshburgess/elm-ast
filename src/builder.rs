@@ -77,7 +77,10 @@ pub fn binop(op: impl Into<String>, left: Spanned<Expr>, right: Spanned<Expr>) -
 
 /// Create a list expression: `[ a, b, c ]`
 pub fn list(elements: Vec<Spanned<Expr>>) -> Spanned<Expr> {
-    spanned(Expr::List(elements))
+    spanned(Expr::List {
+        elements,
+        trailing_comments: Vec::new(),
+    })
 }
 
 /// Create a tuple expression: `( a, b )`
