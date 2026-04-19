@@ -433,26 +433,6 @@ fn application_loop(
         if !can_start_atomic_expr(p.peek()) && !is_unary_neg_arg {
             break;
         }
-        // Take only INLINE BLOCK comments collected between the previous arg
-        // and this one (e.g. `f 0x30 {- 0 -} x`). Other comments remain in
-        // the pending buffer so module-level or enclosing-node collection
-        // sees them intact.
-        let mut inter_arg_comments: Vec<Spanned<Comment>> = Vec::new();
-        if let Some(prev) = args.last() {
-            let prev_end_line = prev.span.end.line;
-            let mut i = pre_ws_snapshot;
-            while i < p.collected_comments.len() {
-                let c = &p.collected_comments[i];
-                let is_inline_block = matches!(c.value, Comment::Block(_))
-                    && c.span.start.line == prev_end_line
-                    && c.span.end.line == prev_end_line;
-                if is_inline_block {
-                    inter_arg_comments.push(p.collected_comments.remove(i));
-                } else {
-                    i += 1;
-                }
-            }
-        }
         let arg_col = p.current_column();
         let arg_line = p.current_pos().line;
         // When ctx_col is set (inside list/record), use the bracket's
@@ -462,6 +442,31 @@ fn application_loop(
         let ref_col = ctx_col.unwrap_or(start.column);
         if arg_line != first_line && arg_col <= ref_col {
             break;
+        }
+        // Claim inter-arg comments collected between the previous arg and
+        // this one. Two cases:
+        //  1. INLINE BLOCK comments on the same line as prev's end
+        //     (e.g. `f 0x30 {- 0 -} x`).
+        //  2. LINE or BLOCK comments on dedicated lines between prev and
+        //     the current arg — these are leading comments on the new arg.
+        // Comments on the same line as prev's end that aren't inline block
+        // comments (i.e., line comments trailing prev) remain in pending.
+        let mut inter_arg_comments: Vec<Spanned<Comment>> = Vec::new();
+        if let Some(prev) = args.last() {
+            let prev_end_line = prev.span.end.line;
+            let mut i = pre_ws_snapshot;
+            while i < p.collected_comments.len() {
+                let c = &p.collected_comments[i];
+                let is_inline_block = matches!(c.value, Comment::Block(_))
+                    && c.span.start.line == prev_end_line
+                    && c.span.end.line == prev_end_line;
+                let is_on_own_line = c.span.start.line > prev_end_line;
+                if is_inline_block || is_on_own_line {
+                    inter_arg_comments.push(p.collected_comments.remove(i));
+                } else {
+                    i += 1;
+                }
+            }
         }
         let step = if is_unary_neg_arg {
             // Consume `-`, then parse atomic arg, wrap in Negation.

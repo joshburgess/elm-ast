@@ -211,6 +211,13 @@ impl Printer {
             Expr::Application(args) => {
                 args.iter().any(|a| self.is_multiline(&a.value))
                     || (self.is_pretty() && Self::spans_multi_lines(args))
+                    || (self.is_pretty()
+                        && args.iter().any(|a| {
+                            a.comments.iter().any(|c| {
+                                matches!(c.value, Comment::Line(_))
+                                    || c.span.start.line != c.span.end.line
+                            })
+                        }))
             }
             Expr::List(elems) => {
                 elems.iter().any(|e| self.is_multiline(&e.value))
@@ -2307,7 +2314,16 @@ impl Printer {
                         let start = w[1].span.start.line;
                         end != 0 && start != 0 && start > end
                     });
-                if any_arg_ml || source_vertical {
+                // A leading line comment on any arg forces vertical layout
+                // regardless of print style — inline horizontal layout with
+                // `f -- comment arg` would commented out the rest of the call.
+                let any_arg_has_leading_line_comment = args.iter().any(|a| {
+                    a.comments.iter().any(|c| {
+                        matches!(c.value, Comment::Line(_))
+                            || c.span.start.line != c.span.end.line
+                    })
+                });
+                if any_arg_ml || source_vertical || any_arg_has_leading_line_comment {
                     self.write_application_vertical(args);
                 } else {
                     for (i, arg) in args.iter().enumerate() {
@@ -2343,14 +2359,20 @@ impl Printer {
     }
 
     fn write_app_arg_spanned(&mut self, spanned: &Spanned<Expr>) {
-        // Emit inline block comments (captured by the parser as leading
-        // comments on application args) before the arg itself. These are
-        // things like `f 0x30 {- 0 -} x`. Line/multi-line block comments
-        // aren't attached here so we only need to handle single-line blocks.
+        // Emit leading comments attached to the arg. Three cases:
+        //  - Inline single-line block on same line: `f 0x30 {- 0 -} x`.
+        //    Emit inline: `{- 0 -} arg`.
+        //  - Line comment or multi-line block: emit on its own line before
+        //    the arg at the current indent.
         for c in &spanned.comments {
-            if let Comment::Block(_) = c.value {
+            let is_inline_block = matches!(c.value, Comment::Block(_))
+                && c.span.start.line == c.span.end.line;
+            if is_inline_block {
                 self.write_comment(&c.value);
                 self.write_char(' ');
+            } else {
+                self.write_comment(&c.value);
+                self.newline_indent();
             }
         }
         self.expr_span_stack.push(spanned.span);
@@ -2372,11 +2394,10 @@ impl Printer {
         // same as ambient_indent + 1 level. When the function sits past
         // the ambient indent (e.g. inside `[ fn arg1 arg2 ...`), aligning
         // to the function's column matches elm-format.
-        let fn_col = if self.is_pretty() {
-            Some(self.current_column())
-        } else {
-            None
-        };
+        // Always capture fn_col so that args indent properly past the
+        // function even in compact mode — needed when a leading line
+        // comment forces vertical layout in compact output.
+        let fn_col = Some(self.current_column());
         self.write_expr_atomic(&args[0].value);
         let saved_indent = self.indent;
         let saved_extra = self.indent_extra;
