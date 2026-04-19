@@ -47,6 +47,35 @@ use crate::pattern::Pattern;
 use crate::span::Span;
 use crate::type_annotation::{RecordField, TypeAnnotation};
 
+/// Thread-local flag read by doc-comment reparse helpers to opt into the
+/// `ElmFormatConverged` mutations without threading a parameter through
+/// every caller. Set automatically by `Printer::print_module` based on the
+/// printer's `PrintStyle`; cleared when the returned guard is dropped.
+pub(crate) mod converged_mode {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FLAG: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(crate) struct Guard(bool);
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            FLAG.with(|f| f.set(self.0));
+        }
+    }
+
+    pub(crate) fn set(on: bool) -> Guard {
+        let prev = FLAG.with(|f| f.replace(on));
+        Guard(prev)
+    }
+
+    pub(crate) fn is_on() -> bool {
+        FLAG.with(|f| f.get())
+    }
+}
+
 /// Controls how aggressively the printer breaks lines.
 ///
 /// - `Compact` (default): only break lines for structurally multi-line
@@ -56,15 +85,28 @@ use crate::type_annotation::{RecordField, TypeAnnotation};
 ///
 /// - `ElmFormat`: break lines in the same places elm-format does — pipelines
 ///   always vertical, records and lists with 2+ entries always multiline.
-///   Designed for **code generation** where the AST is built from scratch and
-///   readability matters more than exact round-tripping.
+///   Output matches `elm-format(source)` byte-for-byte on real-world
+///   packages (B-strong).
+///
+/// - `ElmFormatConverged`: identical to `ElmFormat`, plus it pre-applies
+///   the mutations elm-format makes on a second pass. elm-format is not
+///   idempotent on `-- comment\n<blank>\nimport` inside doc-comment code
+///   blocks: one pass keeps 1 blank, a second pass adds another. This
+///   variant emits the 2-blank form up front, so the output is a fixed
+///   point of elm-format (B-weak: `pp(source) == elm-format(pp(source))`).
+///   Diverges from `elm-format(source)` on source that has the 1-blank
+///   form. Use when downstream tooling re-runs elm-format and you need
+///   round-trip stability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PrintStyle {
     /// Round-trip-safe minimal line breaking.
     #[default]
     Compact,
-    /// elm-format-style pretty printing.
+    /// elm-format-style pretty printing; matches `elm-format(source)`.
     ElmFormat,
+    /// elm-format-style pretty printing pre-converged to elm-format's
+    /// second-pass fixed point.
+    ElmFormatConverged,
 }
 
 /// Configuration for the Elm printer.
@@ -130,6 +172,7 @@ impl Printer {
 
     /// Print a complete Elm module to a string.
     pub fn print_module(mut self, module: &ElmModule) -> String {
+        let _guard = converged_mode::set(self.is_converged());
         self.write_module(module);
         self.buf
     }
@@ -140,7 +183,14 @@ impl Printer {
     }
 
     fn is_pretty(&self) -> bool {
-        self.config.style == PrintStyle::ElmFormat
+        matches!(
+            self.config.style,
+            PrintStyle::ElmFormat | PrintStyle::ElmFormatConverged
+        )
+    }
+
+    fn is_converged(&self) -> bool {
+        self.config.style == PrintStyle::ElmFormatConverged
     }
 
     /// True when the two spans sit on different source lines (both non-dummy).
@@ -4074,10 +4124,26 @@ pub fn print(module: &ElmModule) -> String {
 /// Pretty-print an `ElmModule` using elm-format-style line breaking.
 ///
 /// Pipelines (`|>`), records, and lists with multiple entries are always
-/// multiline. Ideal for code generation where readability matters.
+/// multiline. Output matches `elm-format(source)` byte-for-byte.
 pub fn pretty_print(module: &ElmModule) -> String {
     Printer::new(PrintConfig {
         style: PrintStyle::ElmFormat,
+        ..PrintConfig::default()
+    })
+    .print_module(module)
+}
+
+/// Pretty-print an `ElmModule` in the elm-format style, pre-converged to
+/// elm-format's second-pass fixed point.
+///
+/// Produces output that round-trips through elm-format without change
+/// (`pp == elm-format(pp)`). Differs from [`pretty_print`] only on inputs
+/// that hit elm-format's own non-idempotency (e.g. `-- comment`→`import`
+/// inside doc-comment code blocks); for all other files the output is
+/// identical. Use this when downstream tooling re-runs elm-format.
+pub fn pretty_print_converged(module: &ElmModule) -> String {
+    Printer::new(PrintConfig {
+        style: PrintStyle::ElmFormatConverged,
         ..PrintConfig::default()
     })
     .print_module(module)

@@ -49,6 +49,20 @@ pub(in crate::print) fn try_parse_and_format_module(wrapped: &str) -> Option<Str
             && !next_is_import
         {
             i += 2;
+        } else if crate::print::converged_mode::is_on()
+            && trim.starts_with("--")
+            && next_is_import
+            && i + 2 < collapsed.len()
+            && collapsed[i + 1].is_empty()
+        {
+            // In `ElmFormatConverged` mode, pre-apply elm-format's
+            // second-pass mutation: `-- comment\n<blank>\nimport` becomes
+            // `-- comment\n<blank>\n<blank>\nimport` (2 blank lines).
+            // elm-format is not idempotent on this pattern; emitting the
+            // converged form here makes the output a fixed point of
+            // elm-format (B-weak: `pp == elm-format(pp)`).
+            attached.push("");
+            i += 1;
         } else {
             i += 1;
         }

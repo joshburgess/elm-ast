@@ -9,7 +9,7 @@ use elm_ast::expr::Expr;
 use elm_ast::file::ElmModule;
 use elm_ast::pattern::Pattern;
 use elm_ast::type_annotation::TypeAnnotation;
-use elm_ast::{parse, pretty_print, print};
+use elm_ast::{parse, pretty_print, pretty_print_converged, print};
 
 // ── Regression watchlist ─────────────────────────────────────────────
 //
@@ -765,7 +765,11 @@ fn pretty_print_matches_elm_format() {
                 Err(_) => continue,
             };
 
-            let pretty = pretty_print(&ast);
+            // B-weak uses the converged style so the output is a fixed
+            // point of elm-format even on inputs where elm-format itself
+            // is non-idempotent (e.g. Task.elm's `-- comment → import`
+            // pattern inside doc code blocks).
+            let pretty = pretty_print_converged(&ast);
 
             // Feed pretty-printed output to elm-format.
             let formatted = match run_elm_format(&elm_format, &pretty) {
