@@ -1090,11 +1090,24 @@ fn parse_signature(p: &mut Parser) -> ParseResult<Spanned<Signature>> {
     let name = p.expect_lower_name()?;
     p.expect(&Token::Colon)?;
     let type_annotation = parse_type(p)?;
+    let trailing_comment = {
+        let end_line = type_annotation.span.end.line;
+        let end_offset = type_annotation.span.end.offset;
+        if let Some(last) = p.collected_comments.last()
+            && last.span.start.line == end_line
+            && last.span.start.offset >= end_offset
+        {
+            p.collected_comments.pop()
+        } else {
+            None
+        }
+    };
     Ok(p.spanned_from(
         start,
         Signature {
             name,
             type_annotation,
+            trailing_comment,
         },
     ))
 }

@@ -917,6 +917,12 @@ impl Printer {
             self.write(" : ");
             self.write_type(&sig.type_annotation.value);
         }
+        if self.is_pretty()
+            && let Some(trailing) = &sig.trailing_comment
+        {
+            self.write_char(' ');
+            self.write_comment(&trailing.value);
+        }
     }
 
     /// True if any arm in a FunctionType (including the first) has leading

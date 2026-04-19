@@ -184,6 +184,7 @@ pub fn fold_signature<F: Fold + ?Sized>(f: &mut F, sig: Spanned<Signature>) -> S
     let value = Signature {
         name: sig.value.name.map(|n| f.fold_ident(n)),
         type_annotation: f.fold_type_annotation(sig.value.type_annotation),
+        trailing_comment: sig.value.trailing_comment,
     };
     Spanned::new(span, value)
 }

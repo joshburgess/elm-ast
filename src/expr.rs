@@ -248,12 +248,26 @@ pub struct Function {
     pub declaration: Spanned<FunctionImplementation>,
 }
 
-/// A type signature: `name : type`
+/// A type signature: `name : type`.
+///
+/// `trailing_comment` captures a short inline comment that appears on the
+/// same line as the signature's final token, e.g.
+///
+/// ```elm
+/// completeBlocks :
+///     State
+///     -> Parser State --Result Parser.Problem (List Block)
+/// ```
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Signature {
     pub name: Spanned<Ident>,
     pub type_annotation: Spanned<TypeAnnotation>,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub trailing_comment: Option<Spanned<Comment>>,
 }
 
 /// The implementation part of a function definition: `name args = body`

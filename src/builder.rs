@@ -230,6 +230,7 @@ pub fn func_with_sig(
         signature: Some(spanned(Signature {
             name: spanned(name_str.clone()),
             type_annotation: type_ann,
+            trailing_comment: None,
         })),
         declaration: spanned(FunctionImplementation {
             name: spanned(name_str),
