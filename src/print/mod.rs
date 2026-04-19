@@ -157,6 +157,27 @@ impl Printer {
         s.start.line != 0 && s.end.line > s.start.line
     }
 
+    /// True if `expr` is a multi-line triple-quoted string, or a container
+    /// (Application, List, Parenthesized) whose content bottoms out in one.
+    /// Used to exempt trailing triple-strings from forcing vertical layout.
+    fn expr_ends_with_triple_string(expr: &Expr) -> bool {
+        match unwrap_parens_non_block(expr) {
+            Expr::Literal(Literal::MultilineString(s)) => s.contains('\n'),
+            Expr::Application(args) => args
+                .last()
+                .map(|a| Self::expr_ends_with_triple_string(&a.value))
+                .unwrap_or(false),
+            Expr::List(elems) => {
+                elems.len() == 1
+                    && elems
+                        .last()
+                        .map(|e| Self::expr_ends_with_triple_string(&e.value))
+                        .unwrap_or(false)
+            }
+            _ => false,
+        }
+    }
+
     /// True when a sequence of spanned nodes spans multiple source lines.
     fn spans_multi_lines<T>(items: &[Spanned<T>]) -> bool {
         match (items.first(), items.last()) {
@@ -2387,15 +2408,13 @@ impl Printer {
                 // split across different lines (the author chose vertical
                 // layout even though each arg is individually simple).
                 let pretty = self.is_pretty();
-                // A trailing multi-line string argument is not enough to
-                // force vertical layout: elm-format keeps `f a "\"\"\"..."\"\"\""`
-                // on one line with the closing `"""` on its own line.
+                // A trailing multi-line string argument (or a list/container
+                // whose content ends with one) is not enough to force
+                // vertical layout: elm-format keeps these on one line with
+                // the closing `"""` on its own line.
                 let last_is_multiline_string = args
                     .last()
-                    .map(|a| matches!(
-                        unwrap_parens_non_block(&a.value),
-                        Expr::Literal(Literal::MultilineString(s)) if s.contains('\n')
-                    ))
+                    .map(|a| Self::expr_ends_with_triple_string(&a.value))
                     .unwrap_or(false);
                 let skip_last_for_ml = last_is_multiline_string && pretty;
                 let any_arg_ml = if skip_last_for_ml {
@@ -2898,10 +2917,21 @@ impl Printer {
             && elems
                 .iter()
                 .any(|e| e.comments.iter().any(|c| matches!(c.value, Comment::Line(_))));
-        let any_multiline = elems.iter().any(|e| self.is_multiline(&e.value))
-            || (self.is_pretty() && Self::spans_multi_lines(elems))
-            || outer_multi_line
-            || any_elem_line_comment;
+        // A single-element container whose element ends with a triple-quoted
+        // string stays inline (`[ text """..."""]`). elm-format keeps the
+        // open/close brackets compact around the string even though its
+        // content spans lines.
+        let single_trailing_triple = self.is_pretty()
+            && elems.len() == 1
+            && elems
+                .last()
+                .map(|e| Self::expr_ends_with_triple_string(&e.value))
+                .unwrap_or(false);
+        let any_multiline = !single_trailing_triple
+            && (elems.iter().any(|e| self.is_multiline(&e.value))
+                || (self.is_pretty() && Self::spans_multi_lines(elems))
+                || outer_multi_line
+                || any_elem_line_comment);
         if any_multiline && self.is_pretty() {
             // elm-format style: first element on same line as open bracket,
             // subsequent elements aligned with ", " prefix at same indent.
