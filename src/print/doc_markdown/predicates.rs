@@ -644,12 +644,10 @@ fn contains_sentence_period(s: &str) -> bool {
         match c {
             '"' => in_str = true,
             '\'' => in_char = true,
-            '.' => {
-                if i + 1 < bytes.len() && bytes[i + 1] == b' ' && i > 0 {
-                    let prev = bytes[i - 1] as char;
-                    if prev.is_ascii_lowercase() {
-                        return true;
-                    }
+            '.' if i + 1 < bytes.len() && bytes[i + 1] == b' ' && i > 0 => {
+                let prev = bytes[i - 1] as char;
+                if prev.is_ascii_lowercase() {
+                    return true;
                 }
             }
             _ => {}
