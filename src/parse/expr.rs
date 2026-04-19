@@ -122,18 +122,19 @@ fn binary_loop(
             None => break,
         };
 
-        // For pipe operators (`|>`, `|.`, `|=`), claim any LINE comments
-        // positioned between `left` and the operator whose start line is
-        // strictly after `left`'s end line. These are the "step-preceding"
-        // comments elm-format shows on their own line above the `|>`. We
-        // attach them as leading comments on the right operand so they
-        // live with the pipe step through fold/unfold. Comments may have
-        // been collected by an earlier `skip_whitespace` (e.g. the trailing
-        // one in `application_loop`) before we reached here, so we scan by
+        // Claim any LINE comments positioned between `left` and the
+        // operator whose start line is strictly after `left`'s end line.
+        // For pipes these are the "step-preceding" comments elm-format
+        // shows on their own line above the `|>`. The same pattern applies
+        // to other binary operators when a line comment sits on its own
+        // line between the operand and the next operator. Attach them as
+        // leading comments on the right operand so they live with the
+        // operator step through fold/unfold. Comments may have been
+        // collected by an earlier `skip_whitespace` (e.g. the trailing one
+        // in `application_loop`) before we reached here, so we scan by
         // source offset instead of a snapshot index.
-        let claim_pipe_leading = matches!(op.as_str(), "|>" | "|." | "|=");
         let mut step_leading: Vec<Spanned<Comment>> = Vec::new();
-        if claim_pipe_leading {
+        {
             let mut i = 0;
             while i < p.collected_comments.len() {
                 let c = &p.collected_comments[i];
@@ -694,8 +695,13 @@ fn parse_record_access_chain(
 fn parse_if_expr_cps(p: &mut Parser) -> ParseResult<Step> {
     let start = p.current_pos();
     p.expect(&Token::If)?;
-    // Need condition
-    Ok(Step::NeedExpr(Box::new(move |p, condition| {
+    // Snapshot before parsing the condition so that any comments appearing
+    // between `if` and the condition expression get attached as leading
+    // comments on the condition. elm-format places them on their own line
+    // above the condition inside the `if ... then` block.
+    let cond_snapshot = p.pending_comments_snapshot();
+    Ok(Step::NeedExpr(Box::new(move |p, mut condition| {
+        attach_pre_body_comments(p, &mut condition, cond_snapshot);
         if_after_condition(p, start, Vec::new(), condition)
     })))
 }

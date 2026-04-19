@@ -1740,6 +1740,26 @@ impl Printer {
         }
     }
 
+    /// Returns true if `spanned` has any leading line comments.
+    fn has_leading_line_comment(spanned: &Spanned<Expr>) -> bool {
+        spanned
+            .comments
+            .iter()
+            .any(|c| matches!(c.value, Comment::Line(_)))
+    }
+
+    /// Emit leading line comments for an operand sitting inside a vertical
+    /// operator chain. Each line comment goes on its own line at the current
+    /// chain indent. Block comments are left for the operand's own writer.
+    fn write_chain_operand_leading_line_comments(&mut self, spanned: &Spanned<Expr>) {
+        for c in &spanned.comments {
+            if matches!(c.value, Comment::Line(_)) {
+                self.newline_indent();
+                self.write_comment(&c.value);
+            }
+        }
+    }
+
     /// Emit inline leading comments for the FIRST record-type field (after
     /// `{ ` or `| `). Block comments stay inline; line comments get promoted
     /// to their own line at base indent + 2 so the field name aligns with the
@@ -1901,13 +1921,16 @@ impl Printer {
                 // `::` and `++` share precedence 5 right-assoc, and elm-format
                 // unifies mixed chains (e.g. `a :: b :: xs ++ ys`) into a single
                 // vertical layout. Use the mixed flattener for those operators.
-                if self.is_pretty()
-                    && matches!(operator.as_str(), "::" | "++")
+                if matches!(operator.as_str(), "::" | "++")
                     && let Some((head, rest)) = flatten_mixed_cons_append_chain(expr)
                 {
-                    let any_ml = self.is_multiline(&head.value)
-                        || rest.iter().any(|(_, e)| self.is_multiline(&e.value))
-                        || Self::spans_cross_lines(left.span, right.span);
+                    let any_line_comment =
+                        rest.iter().any(|(_, e)| Self::has_leading_line_comment(e));
+                    let any_ml = self.is_pretty()
+                        && (self.is_multiline(&head.value)
+                            || rest.iter().any(|(_, e)| self.is_multiline(&e.value))
+                            || Self::spans_cross_lines(left.span, right.span));
+                    let any_ml = any_ml || any_line_comment;
                     if any_ml {
                         let outer_chain = self.in_vertical_chain;
                         self.write_expr_operand(head, operator, true);
@@ -1916,6 +1939,7 @@ impl Printer {
                         }
                         self.in_vertical_chain = true;
                         for (op, operand) in &rest {
+                            self.write_chain_operand_leading_line_comments(operand);
                             self.newline_indent();
                             self.write(op);
                             self.write_char(' ');
@@ -1929,12 +1953,16 @@ impl Printer {
                     }
                 }
 
-                if self.is_pretty()
-                    && matches!(operator.as_str(), ">>" | "<<")
+                if matches!(operator.as_str(), ">>" | "<<")
                     && let Some(chain) = flatten_right_assoc_chain(expr, operator)
                 {
-                    let any_ml = chain.iter().any(|op| self.is_multiline(&op.value))
-                        || Self::spans_cross_lines(left.span, right.span);
+                    let any_line_comment = chain[1..]
+                        .iter()
+                        .any(|e| Self::has_leading_line_comment(e));
+                    let any_ml = self.is_pretty()
+                        && (chain.iter().any(|op| self.is_multiline(&op.value))
+                            || Self::spans_cross_lines(left.span, right.span));
+                    let any_ml = any_ml || any_line_comment;
                     if any_ml {
                         let outer_chain = self.in_vertical_chain;
                         self.write_expr_operand(chain[0], operator, true);
@@ -1943,6 +1971,7 @@ impl Printer {
                         }
                         self.in_vertical_chain = true;
                         for operand in &chain[1..] {
+                            self.write_chain_operand_leading_line_comments(operand);
                             self.newline_indent();
                             self.write(operator);
                             self.write_char(' ');
@@ -1961,16 +1990,18 @@ impl Printer {
                 // lays every operator at the same indent column regardless
                 // of precedence. Must run before the arithmetic-only
                 // flattener since the top operator here is `==`.
-                if self.is_pretty()
-                    && matches!(
-                        operator.as_str(),
-                        "==" | "/=" | "<" | ">" | "<=" | ">=" | "+" | "-" | "*" | "/" | "//"
-                    )
-                    && let Some((head, rest)) = flatten_mixed_comparison_arithmetic_chain(expr)
+                if matches!(
+                    operator.as_str(),
+                    "==" | "/=" | "<" | ">" | "<=" | ">=" | "+" | "-" | "*" | "/" | "//"
+                ) && let Some((head, rest)) = flatten_mixed_comparison_arithmetic_chain(expr)
                 {
-                    let any_ml = self.is_multiline(&head.value)
-                        || rest.iter().any(|(_, e)| self.is_multiline(&e.value))
-                        || Self::spans_cross_lines(left.span, right.span);
+                    let any_line_comment =
+                        rest.iter().any(|(_, e)| Self::has_leading_line_comment(e));
+                    let any_ml = self.is_pretty()
+                        && (self.is_multiline(&head.value)
+                            || rest.iter().any(|(_, e)| self.is_multiline(&e.value))
+                            || Self::spans_cross_lines(left.span, right.span));
+                    let any_ml = any_ml || any_line_comment;
                     if any_ml {
                         let outer_chain = self.in_vertical_chain;
                         self.write_expr_operand(head, operator, true);
@@ -1979,6 +2010,7 @@ impl Printer {
                         }
                         self.in_vertical_chain = true;
                         for (op, operand) in &rest {
+                            self.write_chain_operand_leading_line_comments(operand);
                             self.newline_indent();
                             self.write(op);
                             self.write_char(' ');
@@ -1997,13 +2029,16 @@ impl Printer {
                 // with the higher-precedence op nested inside, but
                 // elm-format lays the whole thing out as a single vertical
                 // sequence with every operator at the same indent column.
-                if self.is_pretty()
-                    && matches!(operator.as_str(), "+" | "-" | "*" | "/" | "//")
+                if matches!(operator.as_str(), "+" | "-" | "*" | "/" | "//")
                     && let Some((head, rest)) = flatten_mixed_arithmetic_chain(expr)
                 {
-                    let any_ml = self.is_multiline(&head.value)
-                        || rest.iter().any(|(_, op)| self.is_multiline(&op.value))
-                        || Self::spans_cross_lines(left.span, right.span);
+                    let any_line_comment =
+                        rest.iter().any(|(_, e)| Self::has_leading_line_comment(e));
+                    let any_ml = self.is_pretty()
+                        && (self.is_multiline(&head.value)
+                            || rest.iter().any(|(_, op)| self.is_multiline(&op.value))
+                            || Self::spans_cross_lines(left.span, right.span));
+                    let any_ml = any_ml || any_line_comment;
                     if any_ml {
                         let outer_chain = self.in_vertical_chain;
                         self.write_expr_operand(head, operator, true);
@@ -2012,6 +2047,7 @@ impl Printer {
                         }
                         self.in_vertical_chain = true;
                         for (op, operand) in &rest {
+                            self.write_chain_operand_leading_line_comments(operand);
                             self.newline_indent();
                             self.write(op);
                             self.write_char(' ');
@@ -2029,13 +2065,16 @@ impl Printer {
                 // precedences 2 and 3. elm-format lays out such mixed chains
                 // as a single vertical sequence with all operators aligned at
                 // the same indent column, regardless of parse-tree grouping.
-                if self.is_pretty()
-                    && matches!(operator.as_str(), "&&" | "||")
+                if matches!(operator.as_str(), "&&" | "||")
                     && let Some((head, rest)) = flatten_mixed_logical_chain(expr)
                 {
-                    let any_ml = self.is_multiline(&head.value)
-                        || rest.iter().any(|(_, e)| self.is_multiline(&e.value))
-                        || Self::spans_cross_lines(left.span, right.span);
+                    let any_line_comment =
+                        rest.iter().any(|(_, e)| Self::has_leading_line_comment(e));
+                    let any_ml = self.is_pretty()
+                        && (self.is_multiline(&head.value)
+                            || rest.iter().any(|(_, e)| self.is_multiline(&e.value))
+                            || Self::spans_cross_lines(left.span, right.span));
+                    let any_ml = any_ml || any_line_comment;
                     if any_ml {
                         let outer_chain = self.in_vertical_chain;
                         self.write_expr_operand(head, operator, true);
@@ -2044,6 +2083,7 @@ impl Printer {
                         }
                         self.in_vertical_chain = true;
                         for (op, operand) in &rest {
+                            self.write_chain_operand_leading_line_comments(operand);
                             self.newline_indent();
                             self.write(op);
                             self.write_char(' ');
@@ -2904,11 +2944,14 @@ impl Printer {
     ///         <cond>
     ///     then
     fn write_if_condition(&mut self, keyword: &str, cond: &Spanned<Expr>) {
-        let multiline_cond = self.is_pretty() && self.is_multiline(&cond.value);
+        let has_leading = !cond.comments.is_empty();
+        let multiline_cond =
+            self.is_pretty() && (self.is_multiline(&cond.value) || has_leading);
         if multiline_cond {
             self.write(keyword);
             self.indent();
             self.newline_indent();
+            self.write_leading_comments(&cond.comments);
             self.write_spanned_expr(&cond);
             self.dedent();
             self.newline_indent();
@@ -2916,6 +2959,7 @@ impl Printer {
         } else {
             self.write(keyword);
             self.write_char(' ');
+            self.write_leading_comments(&cond.comments);
             self.write_spanned_expr(&cond);
             self.write(" then");
         }
