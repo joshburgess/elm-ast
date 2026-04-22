@@ -10,6 +10,21 @@ Inspired by [`syn`](https://github.com/dtolnay/syn), `elm-ast` is a Rust library
 
 ## Quick start
 
+Add the crate to your project:
+
+```sh
+cargo add elm-ast
+```
+
+Or add it to `Cargo.toml` directly:
+
+```toml
+[dependencies]
+elm-ast = "0.2"
+```
+
+Then:
+
 ```rust
 use elm_ast::{parse, print};
 
@@ -36,7 +51,7 @@ All features are enabled by default via `full`. Disable `default-features` and p
 
 ```toml
 [dependencies]
-elm-ast = "0.1"
+elm-ast = "0.2"
 ```
 
 | Feature | Description |
@@ -54,7 +69,7 @@ elm-ast = "0.1"
 
 ```toml
 [dependencies]
-elm-ast = { version = "0.1", default-features = false }
+elm-ast = { version = "0.2", default-features = false }
 ```
 
 ## AST types
