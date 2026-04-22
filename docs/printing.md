@@ -16,7 +16,7 @@ pub enum PrintStyle {
 
 The modes sit on a spectrum from "minimal changes to the source" (`Compact`) to "maximal agreement with elm-format" (`ElmFormat` / `ElmFormatConverged`).
 
-### `Compact` — round-trip-safe minimal breaking
+### `Compact`: round-trip-safe minimal breaking
 
 - **Convenience fn**: `print(&module)`. Also what `Display` uses.
 - **What it breaks**: only expressions that are *inherently* multi-line. `case`, `if`, `let`, and lambdas with multi-line bodies produce multiple lines. Everything else stays as compact as possible.
@@ -24,7 +24,7 @@ The modes sit on a spectrum from "minimal changes to the source" (`Compact`) to 
 - **Guarantee**: `print(parse(print(parse(src)))) == print(parse(src))` (full round-trip idempotency) on all elm-format-compliant input. Verified across 291 integration-test fixtures.
 - **When to use**: round-tripping ASTs, codegen where you want compact output, or storing a canonical form that's stable under re-parse.
 
-### `ElmFormat` — match elm-format byte-for-byte
+### `ElmFormat`: match elm-format byte-for-byte
 
 - **Convenience fn**: `pretty_print(&module)`.
 - **What it breaks**: everything elm-format breaks. Pipelines (`|>`, `|.`, `|=`) are always vertical. Records and lists with 2+ entries are always multi-line. `if`-`else` is always multi-line. Type annotations break the same way elm-format breaks them.
@@ -32,7 +32,7 @@ The modes sit on a spectrum from "minimal changes to the source" (`Compact`) to 
 - **Goal**: `pretty_print(source) == elm-format(source)` on real-world packages.
 - **When to use**: you want elm-format's output but without shelling out to a Haskell binary, or you're integrating with tooling that expects elm-format formatting.
 
-### `ElmFormatConverged` — elm-format style, pre-converged to a stable form
+### `ElmFormatConverged`: elm-format style, pre-converged to a stable form
 
 - **Convenience fn**: `pretty_print_converged(&module)`.
 - **What it does**: everything `ElmFormat` does, plus it pre-applies the mutations elm-format would make on a *second* pass over its own output.
@@ -52,7 +52,7 @@ On that shape, elm-format's first pass keeps 1 blank line. A second pass inserts
 
 #### What "converged" means in practice
 
-- `pretty_print_converged(src) == elm-format(pretty_print_converged(src))` — re-running elm-format over the output is a no-op.
+- `pretty_print_converged(src) == elm-format(pretty_print_converged(src))`: re-running elm-format over the output is a no-op.
 - On every input *except* the 1-blank doc-comment shape, the output is identical to `ElmFormat`.
 - On the 1-blank shape, the output differs from `elm-format(source)` on the *first* pass (agreeing with the second pass instead).
 
