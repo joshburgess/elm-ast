@@ -88,16 +88,39 @@ let (maybe_module, errors) = elm_ast::parse_recovering(source);
 
 ## Printing
 
+Three printer modes are available, trading off between minimal-change output and full elm-format agreement:
+
+| Function | `PrintStyle` | What it does |
+|---|---|---|
+| `print(&module)` | `Compact` (default) | Round-trip-safe minimal line breaking. Only breaks lines for structurally multi-line sub-expressions (`case`/`if`/`let`/lambda). Guarantees `print(parse(print(parse(src)))) == print(parse(src))` on elm-format-compliant input. |
+| `pretty_print(&module)` | `ElmFormat` | elm-format's style: pipelines always vertical, records and lists with 2+ entries multi-line, if-else always multi-line. Byte-for-byte matches `elm-format(source)` on real-world packages. |
+| `pretty_print_converged(&module)` | `ElmFormatConverged` | elm-format's style, but pre-converged to a stable formatting. elm-format is not fully idempotent on every input (see [docs/printing.md](docs/printing.md)); this mode emits the form elm-format would settle on after repeated passes, so re-running elm-format over the output is a no-op. |
+
 ```rust
-use elm_ast::print;
+use elm_ast::{parse, print, pretty_print, pretty_print_converged};
 
-let output = print(&module);
+let module = parse(source)?;
 
-// Or use Display
+let compact   = print(&module);                    // Compact: minimal breaking
+let formatted = pretty_print(&module);             // ElmFormat: elm-format style
+let stable    = pretty_print_converged(&module);   // ElmFormatConverged: stable under re-formatting
+
+// Or use Display for Compact output:
 println!("{module}");
 ```
 
-The printer produces idempotent output: `print(parse(print(parse(src)))) == print(parse(src))`.
+For custom indent width or reusable printers, construct one explicitly:
+
+```rust
+use elm_ast::print::{PrintConfig, PrintStyle, Printer};
+
+let output = Printer::new(PrintConfig {
+    indent_width: 2,
+    style: PrintStyle::ElmFormat,
+}).print_module(&module);
+```
+
+See [docs/printing.md](docs/printing.md) for the full breakdown of each mode, idempotency guarantees, and when to pick which.
 
 ### Comment preservation
 
