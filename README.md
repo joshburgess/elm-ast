@@ -225,19 +225,7 @@ None of this was actually necessary. A simple depth limit would have sufficed, b
 
 ## Test coverage
 
-379 tests (366 native + 13 WASM):
-
-| Suite | Tests |
-|---|---|
-| Lexer | 59 |
-| Parser | 109 |
-| Printer | 55 |
-| Visitors | 29 |
-| Edge cases + serde + builders + comments | 104 |
-| Property-based (proptest) | 5 |
-| Integration (291 real files, 50 packages) | 3 |
-| Doc-tests | 2 |
-| WASM bindings (wasm-pack) | 13 |
+381 tests across lexer, parser, printer, visitors, property-based checks, and 291 real-world files from 50 packages. See [TEST_COVERAGE.md](TEST_COVERAGE.md) for the full breakdown.
 
 ## License
 
